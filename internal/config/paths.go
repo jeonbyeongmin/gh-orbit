@@ -1,0 +1,46 @@
+// Package config resolves XDG paths and opens the debug log file used by the TUI.
+package config
+
+import (
+	"os"
+	"path/filepath"
+)
+
+const appName = "gh-orbit"
+
+// StateDir returns the directory where gh-orbit stores per-user runtime state
+// (logs, caches that survive runs). It follows the XDG Base Directory spec:
+// $XDG_STATE_HOME/gh-orbit, falling back to ~/.local/state/gh-orbit.
+func StateDir() (string, error) {
+	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
+		return filepath.Join(dir, appName), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "state", appName), nil
+}
+
+// LogPath returns the absolute path of the debug log file.
+func LogPath() (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "log"), nil
+}
+
+// OpenLog ensures the state directory exists and opens the log file for
+// append. The TUI owns stdout/stderr while running, so all log output must
+// go through this file.
+func OpenLog() (*os.File, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(filepath.Join(dir, "log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+}

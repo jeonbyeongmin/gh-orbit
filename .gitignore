@@ -1,0 +1,13 @@
+# Build output (binary name fixed for `gh extension install`)
+/gh-orbit
+
+# Go workspace / vendor
+/vendor/
+*.test
+*.out
+coverage.txt
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

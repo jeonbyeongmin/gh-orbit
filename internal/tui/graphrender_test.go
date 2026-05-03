@@ -26,7 +26,9 @@ func TestRenderGraphRowLinear(t *testing.T) {
 	}
 }
 
-func TestRenderGraphRowMergeFromRight(t *testing.T) {
+// Merge / fork diagonals are rendered blank — verify no slash glyphs leak
+// into the output and the column reservation is unchanged.
+func TestRenderGraphRowMergeIsBlank(t *testing.T) {
 	row := lanes.Row{
 		Cells: []lanes.Cell{
 			{Kind: lanes.CellCommit, Lane: 0},
@@ -34,17 +36,17 @@ func TestRenderGraphRowMergeFromRight(t *testing.T) {
 		},
 		CommitLane: 0,
 	}
-	text, _ := renderGraphRow(row)
-	stripped := ansi.Strip(text)
-	if !strings.Contains(stripped, "*") || !strings.Contains(stripped, "/") {
-		t.Errorf("stripped = %q, want * and /", stripped)
+	text, w := renderGraphRow(row)
+	if w != 2*cellWidth {
+		t.Errorf("visualWidth = %d, want %d", w, 2*cellWidth)
 	}
-	if strings.Index(stripped, "*") >= strings.Index(stripped, "/") {
-		t.Errorf("* should come before / in %q", stripped)
+	stripped := ansi.Strip(text)
+	if strings.ContainsAny(stripped, `/\`) {
+		t.Errorf("merge cell should render blank, got %q", stripped)
 	}
 }
 
-func TestRenderGraphRowOctopusFork(t *testing.T) {
+func TestRenderGraphRowOctopusForkIsBlank(t *testing.T) {
 	row := lanes.Row{
 		Cells: []lanes.Cell{
 			{Kind: lanes.CellCommit, Lane: 0},
@@ -58,8 +60,8 @@ func TestRenderGraphRowOctopusFork(t *testing.T) {
 		t.Errorf("visualWidth = %d, want %d", w, 3*cellWidth)
 	}
 	stripped := ansi.Strip(text)
-	if strings.Count(stripped, "\\") != 2 {
-		t.Errorf("expected 2 fork glyphs (\\) in %q", stripped)
+	if strings.ContainsAny(stripped, `/\`) {
+		t.Errorf("fork cells should render blank, got %q", stripped)
 	}
 }
 

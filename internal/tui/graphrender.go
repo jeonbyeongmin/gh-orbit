@@ -28,11 +28,10 @@ func glyphFor(k lanes.CellKind) string {
 		return "|"
 	case lanes.CellCommit:
 		return "*"
-	case lanes.CellMergeLeft, lanes.CellForkRight:
-		return "\\"
-	case lanes.CellMergeRight, lanes.CellForkLeft:
-		return "/"
 	default:
+		// Merge / fork diagonals are rendered blank: the slash glyphs read
+		// as visual noise, and the row above / below already shows where
+		// the lane comes from or goes to.
 		return " "
 	}
 }

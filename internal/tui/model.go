@@ -21,8 +21,9 @@ func (p pane) title() string {
 	return [...]string{"refs", "commit graph", "diff"}[p]
 }
 
-// refsAllSentinel is the git revision spec that means "every ref". Passed to
-// loadCommitsCmd when the user hits 'a' on the refs pane.
+// refsAllSentinel is the git revision spec that means "every ref". Used as the
+// default base for the unified graph: Init seeds currentRefs with this so the
+// commit list shows every local/remote/tag from the start, Fork-style.
 const refsAllSentinel = "--all"
 
 type Model struct {
@@ -31,9 +32,10 @@ type Model struct {
 	refs          refModel
 	graph         graphModel
 	// currentRefs is the last commit-query argument dispatched to
-	// loadCommitsCmd. nil means "default branch" (matches Init's nil). Reload
-	// (r) replays git.Log with this exact value, so every dispatch site that
-	// changes the visible commit set must update it.
+	// loadCommitsCmd. New() seeds it with [refsAllSentinel] so the unified
+	// graph is the default base. Reload (r) replays git.Log with this exact
+	// value, so every dispatch site that changes the visible commit set must
+	// update it.
 	currentRefs []string
 	// fetchInFlight gates the F key while a background fetch is running so a
 	// second F doesn't spawn a parallel git invocation.
@@ -47,15 +49,16 @@ type Model struct {
 
 func New() Model {
 	return Model{
-		focused: paneGraph,
-		refs:    newRefsModel(),
-		graph:   newGraphModel(),
+		focused:     paneGraph,
+		refs:        newRefsModel(),
+		graph:       newGraphModel(),
+		currentRefs: []string{refsAllSentinel},
 	}
 }
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		loadCommitsCmd("", nil, defaultLogMaxCount),
+		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
 		loadRefsCmd(""),
 	)
 }
@@ -80,9 +83,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case refSelectedMsg:
-		resetCmd := m.graph.ResetForReload()
-		m.currentRefs = []string{msg.ref.FullName}
-		return m, tea.Batch(resetCmd, loadCommitsCmd("", m.currentRefs, defaultLogMaxCount))
+		// Unified graph: Enter no longer reloads; it jumps the graph cursor
+		// to the row whose hash equals the ref tip. currentRefs stays at
+		// [refsAllSentinel] so reload(r) keeps the unified base. When the
+		// tip is outside the loaded MaxCount window we surface that through
+		// the status bar instead of failing silently.
+		if m.graph.JumpToHash(msg.ref.ObjectName) {
+			m.status = ""
+		} else {
+			m.status = "ref tip not in loaded window: " + msg.ref.ShortName
+			m.statusStyle = statusErrS
+		}
+		return m, nil
 
 	case fetchSucceededMsg:
 		m.fetchInFlight = false
@@ -127,11 +139,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch m.focused {
 		case paneRefs:
-			if msg.String() == "a" {
-				resetCmd := m.graph.ResetForReload()
-				m.currentRefs = []string{refsAllSentinel}
-				return m, tea.Batch(resetCmd, loadCommitsCmd("", m.currentRefs, defaultLogMaxCount))
-			}
 			var cmd tea.Cmd
 			m.refs, cmd = m.refs.Update(msg)
 			return m, cmd
@@ -197,7 +204,7 @@ var (
 	statusErrS  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 )
 
-const helpText = "h/l move focus · j/k navigate · enter select ref · a all · F fetch · r reload · q quit"
+const helpText = "h/l move focus · j/k navigate · enter jump to ref · F fetch · r reload · q quit"
 
 // helpRendered is the styled help line. helpText is const, so we render once
 // at package init instead of every View() frame.

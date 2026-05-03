@@ -313,3 +313,21 @@ func (g graphModel) Selected() (git.Commit, bool) {
 	}
 	return item.c, true
 }
+
+// JumpToHash moves the cursor to the row whose commit hash equals the given
+// hash. It returns true if a matching row was found. The first match wins, so
+// when multiple refs point at the same commit (e.g. main ≡ origin/main) the
+// cursor lands on the same row regardless of which ref was selected.
+func (g *graphModel) JumpToHash(hash string) bool {
+	for i, it := range g.list.Items() {
+		ci, ok := it.(commitItem)
+		if !ok {
+			continue
+		}
+		if ci.c.Hash == hash {
+			g.list.Select(i)
+			return true
+		}
+	}
+	return false
+}

@@ -23,7 +23,7 @@ func fetchCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 		defer cancel()
-		if err := git.Fetch(ctx, git.FetchOptions{Dir: dir, All: true}); err != nil {
+		if err := git.Fetch(ctx, dir); err != nil {
 			return fetchFailedMsg{err: err}
 		}
 		return fetchSucceededMsg{}

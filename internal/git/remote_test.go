@@ -14,7 +14,7 @@ func TestFetchReturnsErrorWithStderr(t *testing.T) {
 		t.Skip("git not available")
 	}
 	dir := t.TempDir()
-	err := Fetch(context.Background(), FetchOptions{Dir: dir, All: true})
+	err := Fetch(context.Background(), dir)
 	if err == nil {
 		t.Fatal("expected error running git fetch outside a repo")
 	}
@@ -34,33 +34,20 @@ func TestFetchIntegration(t *testing.T) {
 	bare := filepath.Join(root, "bare.git")
 	work := filepath.Join(root, "work")
 
-	run := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s in %s: %v: %s", strings.Join(args, " "), dir, err, out)
-		}
-	}
-
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		t.Fatalf("mkdir bare: %v", err)
 	}
-	run(bare, "init", "--bare", "-b", "main")
+	gitRun(t, bare, "init", "--bare", "-b", "main")
 
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		t.Fatalf("mkdir work: %v", err)
 	}
-	run(work, "init", "-b", "main")
-	run(work, "remote", "add", "origin", bare)
-	run(work, "commit", "--allow-empty", "-m", "first")
-	run(work, "push", "origin", "main")
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "remote", "add", "origin", bare)
+	gitRun(t, work, "commit", "--allow-empty", "-m", "first")
+	gitRun(t, work, "push", "origin", "main")
 
-	if err := Fetch(context.Background(), FetchOptions{Dir: work, All: true}); err != nil {
+	if err := Fetch(context.Background(), work); err != nil {
 		t.Fatalf("Fetch happy path: %v", err)
 	}
 }

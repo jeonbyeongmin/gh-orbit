@@ -5,6 +5,7 @@ package tui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 type pane int
@@ -39,18 +40,10 @@ type Model struct {
 	fetchInFlight bool
 	// status is the one-line message rendered next to the help line:
 	// "fetching…", "fetch: done", "fetch failed: …". Empty hides it.
-	status     string
-	statusKind statusKind
+	// statusStyle decides the color; zero value renders without color.
+	status      string
+	statusStyle lipgloss.Style
 }
-
-type statusKind int
-
-const (
-	statusNone statusKind = iota
-	statusBusy
-	statusOk
-	statusErr
-)
 
 func New() Model {
 	return Model{
@@ -92,24 +85,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(resetCmd, loadCommitsCmd("", m.currentRefs, defaultLogMaxCount))
 
 	case fetchSucceededMsg:
-		// Whatever the user did while fetch was running, the local view of
-		// remote refs is now stale — replay refs + log so origin/* and the
-		// graph reflect anything the fetch picked up.
 		m.fetchInFlight = false
 		m.status = "fetch: done"
-		m.statusKind = statusOk
-		resetCmd := m.graph.ResetForReload()
-		m.refs.ResetForReload()
-		return m, tea.Batch(
-			resetCmd,
-			loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
-			loadRefsCmd(""),
-		)
+		m.statusStyle = statusOkS
+		return m, m.reloadCmd()
 
 	case fetchFailedMsg:
 		m.fetchInFlight = false
 		m.status = "fetch failed: " + msg.err.Error()
-		m.statusKind = statusErr
+		m.statusStyle = statusErrS
 		return m, nil
 
 	case tea.KeyMsg:
@@ -132,23 +116,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.fetchInFlight = true
 			m.status = "fetching…"
-			m.statusKind = statusBusy
+			m.statusStyle = statusBusyS
 			return m, fetchCmd("")
 		case "r":
-			// Replay the last commit query and refetch refs. If the ref
-			// stored in m.currentRefs was deleted by another tool, git.Log
-			// surfaces that through the existing commitsLoadFailedMsg path —
-			// no special-case branch here.
-			resetCmd := m.graph.ResetForReload()
-			m.refs.ResetForReload()
-			return m, tea.Batch(
-				resetCmd,
-				loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
-				loadRefsCmd(""),
-			)
+			return m, m.reloadCmd()
 		case "R":
-			// Reserved for a future Rebase action; swallow so it doesn't
-			// fall through to the focused sub-model.
+			// Swallow so capital R doesn't fall through to the focused
+			// sub-model. Reserved for a future Rebase action.
 			return m, nil
 		}
 		switch m.focused {
@@ -168,6 +142,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// reloadCmd resets both panes to their loading state and dispatches fresh
+// log + refs queries. If the ref stored in m.currentRefs was deleted by
+// another tool, git.Log surfaces that through the existing commitsLoadFailedMsg
+// path.
+func (m *Model) reloadCmd() tea.Cmd {
+	resetCmd := m.graph.ResetForReload()
+	m.refs.ResetForReload()
+	return tea.Batch(
+		resetCmd,
+		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
+		loadRefsCmd(""),
+	)
 }
 
 type paneSizes struct {
@@ -211,6 +199,10 @@ var (
 
 const helpText = "h/l move focus · j/k navigate · enter select ref · a all · F fetch · r reload · q quit"
 
+// helpRendered is the styled help line. helpText is const, so we render once
+// at package init instead of every View() frame.
+var helpRendered = help.Render(helpText)
+
 func (m Model) View() string {
 	if m.width == 0 {
 		return "starting…"
@@ -244,37 +236,18 @@ func (m Model) View() string {
 // terminal is too narrow to fit both, status wins — the user just triggered
 // an action and seeing its outcome matters more than the help reminder.
 func (m Model) renderHelpStatus() string {
-	statusRendered := ""
-	if m.status != "" {
-		switch m.statusKind {
-		case statusBusy:
-			statusRendered = statusBusyS.Render(m.status)
-		case statusOk:
-			statusRendered = statusOkS.Render(m.status)
-		case statusErr:
-			statusRendered = statusErrS.Render(m.status)
-		default:
-			statusRendered = help.Render(m.status)
-		}
+	if m.status == "" {
+		return helpRendered
 	}
+	statusRendered := m.statusStyle.Render(m.status)
 
-	if statusRendered == "" {
-		return help.Render(helpText)
-	}
-
-	statusW := lipgloss.Width(statusRendered)
-	avail := m.width - statusW - 1 // 1 for the spacer
+	avail := m.width - lipgloss.Width(statusRendered) - 1 // 1 for the spacer
 	if avail < 1 {
-		// Status alone — drop help.
 		return statusRendered
 	}
-	helpClipped := help.Render(helpText)
-	if lipgloss.Width(helpClipped) > avail {
-		// Truncate the raw text and re-style; ansi-aware truncation on the
-		// styled string is unnecessary because helpText is plain ASCII.
-		if avail < len(helpText) {
-			helpClipped = help.Render(helpText[:avail])
-		}
+	helpPart := helpRendered
+	if lipgloss.Width(helpPart) > avail {
+		helpPart = help.Render(runewidth.Truncate(helpText, avail, "…"))
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, helpClipped, " ", statusRendered)
+	return lipgloss.JoinHorizontal(lipgloss.Top, helpPart, " ", statusRendered)
 }

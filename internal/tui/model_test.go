@@ -169,9 +169,6 @@ func TestModelFKeyDispatchesFetch(t *testing.T) {
 	if m.status != "fetching…" {
 		t.Errorf("status = %q, want fetching…", m.status)
 	}
-	if m.statusKind != statusBusy {
-		t.Errorf("statusKind = %v, want statusBusy", m.statusKind)
-	}
 
 	// Second F while in-flight is a no-op.
 	updated, cmd2 := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
@@ -209,9 +206,6 @@ func TestModelFetchSucceededReloadsBothPanes(t *testing.T) {
 	if m.status != "fetch: done" {
 		t.Errorf("status = %q, want fetch: done", m.status)
 	}
-	if m.statusKind != statusOk {
-		t.Errorf("statusKind = %v, want statusOk", m.statusKind)
-	}
 	if cmd == nil {
 		t.Fatal("fetchSucceededMsg should batch a refs+log reload cmd")
 	}
@@ -243,9 +237,6 @@ func TestModelFetchFailedSurfacesError(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "could not resolve host") {
 		t.Errorf("status %q should include stderr", m.status)
-	}
-	if m.statusKind != statusErr {
-		t.Errorf("statusKind = %v, want statusErr", m.statusKind)
 	}
 	if cmd != nil {
 		t.Error("fetch failure should not auto-reload")

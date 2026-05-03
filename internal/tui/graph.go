@@ -155,19 +155,24 @@ func newGraphModel() graphModel {
 type commitsLoadedMsg struct{ rows []graphRow }
 type commitsLoadFailedMsg struct{ err error }
 
-// loadCommitsCmd runs git.Log in a tea.Cmd. dir == "" uses the process cwd.
-// refs == nil falls back to HEAD; pass `[]string{"--all"}` for the all-refs view.
+// loadCommitsCmd runs git.LogGraph in a tea.Cmd. dir == "" uses the process
+// cwd. refs == nil falls back to HEAD; pass `[]string{"--all"}` for the
+// all-refs view. Connector-only rows are dropped so the list widget keeps a
+// 1:1 mapping between rows and commits.
 func loadCommitsCmd(dir string, refs []string, max int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		commits, err := git.Log(ctx, git.LogOptions{Dir: dir, Refs: refs, MaxCount: max})
+		gr, err := git.LogGraph(ctx, git.LogOptions{Dir: dir, Refs: refs, MaxCount: max})
 		if err != nil {
 			return commitsLoadFailedMsg{err: err}
 		}
-		rows := make([]graphRow, len(commits))
-		for i, c := range commits {
-			rows[i] = graphRow{commit: c}
+		rows := make([]graphRow, 0, len(gr))
+		for _, r := range gr {
+			if !r.IsCommit {
+				continue
+			}
+			rows = append(rows, graphRow{commit: r.Commit, graphPrefix: r.GraphPrefix})
 		}
 		return commitsLoadedMsg{rows: rows}
 	}

@@ -35,9 +35,9 @@ func (i commitItem) FilterValue() string { return i.c.Subject }
 // time + subject (with truncation when the row is too narrow).
 type commitDelegate struct{}
 
-func (commitDelegate) Height() int                              { return 1 }
-func (commitDelegate) Spacing() int                             { return 0 }
-func (commitDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd  { return nil }
+func (commitDelegate) Height() int                             { return 1 }
+func (commitDelegate) Spacing() int                            { return 0 }
+func (commitDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
 func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	ci, ok := item.(commitItem)

@@ -31,6 +31,10 @@ func newRefsModel() refModel { return refModel{} }
 type refsLoadedMsg struct{ refs []git.Ref }
 type refsLoadFailedMsg struct{ err error }
 
+// refSelectedMsg is emitted when the user picks a ref (enter). The root model
+// uses it to reload the graph pane against the chosen ref.
+type refSelectedMsg struct{ ref git.Ref }
+
 // loadRefsCmd runs git.ForEachRef in a tea.Cmd. dir == "" uses the process cwd.
 func loadRefsCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
@@ -59,6 +63,12 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 		r.err = m.err
 		return r, nil
 	case tea.KeyMsg:
+		if m.String() == "enter" {
+			if ref, ok := r.Selected(); ok {
+				return r, func() tea.Msg { return refSelectedMsg{ref: ref} }
+			}
+			return r, nil
+		}
 		return r.handleKey(m), nil
 	}
 	return r, nil

@@ -121,6 +121,36 @@ func TestRefModelCursorSkipsHeadersAndEmpty(t *testing.T) {
 	}
 }
 
+func TestRefModelEnterEmitsSelectedMsg(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 10)
+	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
+		{ShortName: "main", FullName: "refs/heads/main", Kind: git.RefKindLocal, IsHead: true},
+	}})
+	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on a ref should return a non-nil cmd")
+	}
+	msg := cmd()
+	sel, ok := msg.(refSelectedMsg)
+	if !ok {
+		t.Fatalf("cmd produced %T, want refSelectedMsg", msg)
+	}
+	if sel.ref.FullName != "refs/heads/main" {
+		t.Errorf("refSelectedMsg.ref.FullName = %q, want refs/heads/main", sel.ref.FullName)
+	}
+}
+
+func TestRefModelEnterOnEmptyDoesNothing(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 10)
+	r, _ = r.Update(refsLoadedMsg{refs: nil})
+	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Errorf("enter with no selectable ref should not emit a cmd, got %v", cmd())
+	}
+}
+
 // stripANSI removes ANSI escape sequences so tests can search rendered text
 // without worrying about lipgloss color codes.
 func stripANSI(s string) string {

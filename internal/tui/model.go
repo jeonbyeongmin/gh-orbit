@@ -37,7 +37,7 @@ func New() Model {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		loadCommitsCmd("", defaultLogMaxCount),
+		loadCommitsCmd("", nil, defaultLogMaxCount),
 		loadRefsCmd(""),
 	)
 }
@@ -61,6 +61,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refs, cmd = m.refs.Update(msg)
 		return m, cmd
 
+	case refSelectedMsg:
+		m.graph.ResetForReload()
+		return m, loadCommitsCmd("", []string{msg.ref.FullName}, defaultLogMaxCount)
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -78,6 +82,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch m.focused {
 		case paneRefs:
+			if msg.String() == "a" {
+				m.graph.ResetForReload()
+				return m, loadCommitsCmd("", []string{"--all"}, defaultLogMaxCount)
+			}
 			var cmd tea.Cmd
 			m.refs, cmd = m.refs.Update(msg)
 			return m, cmd

@@ -1,8 +1,5 @@
-// Package tui hosts the Bubble Tea models, panes, and key bindings.
-//
-// The MVP screen is a Fork-style 3-pane layout: refs on the left, commit
-// graph in the middle, diff on the right. Sub-panes live in dedicated
-// files (graph.go, refs.go, diff.go) and are composed in here.
+// Package tui hosts the Bubble Tea models, panes, and key bindings for the
+// Fork-style 3-pane layout (refs · commit graph · diff).
 package tui
 
 import (
@@ -23,15 +20,10 @@ func (p pane) title() string {
 	return [...]string{"refs", "commit graph", "diff"}[p]
 }
 
-// Model is the root Bubble Tea model. Sub-pane models compose in as fields.
 type Model struct {
 	width, height int
 	focused       pane
 	graph         graphModel
-
-	// selectedHash is updated whenever the graph pane's cursor moves.
-	// Reserved for the diff pane (separate backlog) to subscribe to.
-	selectedHash string
 }
 
 func New() Model {
@@ -56,7 +48,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case commitsLoadedMsg, commitsLoadFailedMsg:
 		var cmd tea.Cmd
 		m.graph, cmd = m.graph.Update(msg)
-		m.refreshSelection()
 		return m, cmd
 
 	case tea.KeyMsg:
@@ -74,23 +65,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// Forward unhandled keys to the focused pane.
 		if m.focused == paneGraph {
 			var cmd tea.Cmd
 			m.graph, cmd = m.graph.Update(msg)
-			m.refreshSelection()
 			return m, cmd
 		}
 	}
 	return m, nil
-}
-
-func (m *Model) refreshSelection() {
-	if c, ok := m.graph.Selected(); ok {
-		m.selectedHash = c.Hash
-	} else {
-		m.selectedHash = ""
-	}
 }
 
 type paneSizes struct {

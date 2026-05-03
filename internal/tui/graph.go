@@ -1,16 +1,11 @@
-// graph.go — middle-pane commit list backed by bubbles/list.
-//
-// Renders one commit per row (short hash · relative time · subject) and
-// loads commits asynchronously via tea.Cmd so the root Update never
-// blocks on git. Selection state is exposed via Selected() so the root
-// model can forward it to the upcoming diff pane.
+// Middle-pane commit list backed by bubbles/list. git is read off the Update
+// goroutine so the TUI stays responsive on large repos.
 package tui
 
 import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -25,6 +20,10 @@ const (
 	defaultLogMaxCount = 200
 	shortHashLen       = 7
 	timeColWidth       = 6
+
+	colorHash     = "214"
+	colorTime     = "245"
+	colorSelected = "205"
 )
 
 // commitItem wraps a Commit so it can be stored in bubbles/list.
@@ -51,11 +50,10 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 }
 
 var (
-	hashStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	timeStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	cursorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	subjectStyle   = lipgloss.NewStyle()
-	selectedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	hashStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorHash))
+	timeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime))
+	cursorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected))
+	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected)).Bold(true)
 )
 
 func renderCommitLine(c git.Commit, width int, selected bool) string {
@@ -65,11 +63,9 @@ func renderCommitLine(c git.Commit, width int, selected bool) string {
 	}
 	rel := relativeShort(c.AuthorTime)
 
-	var prefix string
+	prefix := "  "
 	if selected {
 		prefix = cursorStyle.Render("›") + " "
-	} else {
-		prefix = "  "
 	}
 	const prefixWidth = 2 // "› " or "  "
 
@@ -78,31 +74,18 @@ func renderCommitLine(c git.Commit, width int, selected bool) string {
 	remaining := width - used
 
 	if remaining < 1 {
-		// Too narrow — show only prefix + hash.
 		return prefix + hashStyle.Render(hash)
 	}
 
-	subject := c.Subject
-	if runewidth.StringWidth(subject) > remaining {
-		subject = runewidth.Truncate(subject, remaining, "…")
-	}
-
-	relPad := timeColWidth - runewidth.StringWidth(rel)
-	if relPad < 0 {
-		relPad = 0
-	}
-
+	subject := runewidth.Truncate(c.Subject, remaining, "…")
 	if selected {
 		subject = selectedStyle.Render(subject)
-	} else {
-		subject = subjectStyle.Render(subject)
 	}
 
-	return fmt.Sprintf("%s%s %s%s %s",
+	return fmt.Sprintf("%s%s %s %s",
 		prefix,
 		hashStyle.Render(hash),
-		strings.Repeat(" ", relPad),
-		timeStyle.Render(rel),
+		timeStyle.Render(runewidth.FillLeft(rel, timeColWidth)),
 		subject,
 	)
 }

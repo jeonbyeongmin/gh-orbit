@@ -151,4 +151,3 @@ func TestRefModelEnterOnEmptyDoesNothing(t *testing.T) {
 		t.Errorf("enter with no selectable ref should not emit a cmd, got %v", cmd())
 	}
 }
-

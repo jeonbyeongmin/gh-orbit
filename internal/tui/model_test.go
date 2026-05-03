@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -87,25 +88,25 @@ func TestModelRKeyReloadsBothPanes(t *testing.T) {
 	}})
 	m = updated.(Model)
 	if !m.graph.loaded || !m.refs.loaded {
-		t.Fatalf("both panes should be loaded before R")
+		t.Fatalf("both panes should be loaded before r")
 	}
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	m = updated.(Model)
 	if m.graph.loaded {
-		t.Errorf("R should reset graph.loaded")
+		t.Errorf("r should reset graph.loaded")
 	}
 	if m.refs.loaded {
-		t.Errorf("R should reset refs.loaded")
+		t.Errorf("r should reset refs.loaded")
 	}
 	if cmd == nil {
-		t.Fatal("R should return a batched load cmd")
+		t.Fatal("r should return a batched load cmd")
 	}
 	if !strings.Contains(m.graph.View(), "loading") {
-		t.Errorf("graph view should show loading after R, got %q", m.graph.View())
+		t.Errorf("graph view should show loading after r, got %q", m.graph.View())
 	}
 	if !strings.Contains(m.refs.View(), "loading") {
-		t.Errorf("refs view should show loading after R, got %q", m.refs.View())
+		t.Errorf("refs view should show loading after r, got %q", m.refs.View())
 	}
 }
 
@@ -121,9 +122,135 @@ func TestModelRKeyPreservesCurrentRefs(t *testing.T) {
 	}})
 	m = updated.(Model)
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	m = updated.(Model)
 	if got, want := m.currentRefs, []string{"refs/heads/feat"}; !slices.Equal(got, want) {
-		t.Errorf("R should preserve currentRefs: got %v want %v", got, want)
+		t.Errorf("r should preserve currentRefs: got %v want %v", got, want)
+	}
+}
+
+func TestModelCapitalRIsReservedAndIgnored(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+	updated, _ = m.Update(refsLoadedMsg{refs: []git.Ref{
+		{FullName: "refs/heads/main", ShortName: "main", Kind: git.RefKindLocal},
+	}})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Errorf("R is reserved for a future Rebase action and should not dispatch yet, got cmd=%v", cmd)
+	}
+	if !m.graph.loaded || !m.refs.loaded {
+		t.Errorf("R should not reset pane state")
+	}
+}
+
+func TestModelFKeyDispatchesFetch(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("F should return a fetchCmd")
+	}
+	if !m.fetchInFlight {
+		t.Error("F should set fetchInFlight=true")
+	}
+	if m.status != "fetching…" {
+		t.Errorf("status = %q, want fetching…", m.status)
+	}
+	if m.statusKind != statusBusy {
+		t.Errorf("statusKind = %v, want statusBusy", m.statusKind)
+	}
+
+	// Second F while in-flight is a no-op.
+	updated, cmd2 := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	m = updated.(Model)
+	if cmd2 != nil {
+		t.Error("second F should not dispatch a parallel fetch")
+	}
+	if m.status != "fetching…" {
+		t.Errorf("status should still be fetching…, got %q", m.status)
+	}
+}
+
+func TestModelFetchSucceededReloadsBothPanes(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+	updated, _ = m.Update(refsLoadedMsg{refs: []git.Ref{
+		{FullName: "refs/heads/main", ShortName: "main", Kind: git.RefKindLocal},
+	}})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(fetchSucceededMsg{})
+	m = updated.(Model)
+	if m.fetchInFlight {
+		t.Error("fetchInFlight should clear after success")
+	}
+	if m.status != "fetch: done" {
+		t.Errorf("status = %q, want fetch: done", m.status)
+	}
+	if m.statusKind != statusOk {
+		t.Errorf("statusKind = %v, want statusOk", m.statusKind)
+	}
+	if cmd == nil {
+		t.Fatal("fetchSucceededMsg should batch a refs+log reload cmd")
+	}
+	if m.graph.loaded {
+		t.Error("graph.loaded should reset on fetch success")
+	}
+	if m.refs.loaded {
+		t.Error("refs.loaded should reset on fetch success")
+	}
+}
+
+func TestModelFetchFailedSurfacesError(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(fetchFailedMsg{err: errors.New("git fetch: exit status 128: could not resolve host github.com")})
+	m = updated.(Model)
+	if m.fetchInFlight {
+		t.Error("fetchInFlight should clear on failure")
+	}
+	if !strings.Contains(m.status, "could not resolve host") {
+		t.Errorf("status %q should include stderr", m.status)
+	}
+	if m.statusKind != statusErr {
+		t.Errorf("statusKind = %v, want statusErr", m.statusKind)
+	}
+	if cmd != nil {
+		t.Error("fetch failure should not auto-reload")
+	}
+	if !m.graph.loaded {
+		t.Error("graph.loaded should remain on fetch failure")
 	}
 }

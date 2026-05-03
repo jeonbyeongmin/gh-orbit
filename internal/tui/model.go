@@ -31,10 +31,26 @@ type Model struct {
 	graph         graphModel
 	// currentRefs is the last commit-query argument dispatched to
 	// loadCommitsCmd. nil means "default branch" (matches Init's nil). Reload
-	// (R) replays git.Log with this exact value, so every dispatch site that
+	// (r) replays git.Log with this exact value, so every dispatch site that
 	// changes the visible commit set must update it.
 	currentRefs []string
+	// fetchInFlight gates the F key while a background fetch is running so a
+	// second F doesn't spawn a parallel git invocation.
+	fetchInFlight bool
+	// status is the one-line message rendered next to the help line:
+	// "fetching…", "fetch: done", "fetch failed: …". Empty hides it.
+	status     string
+	statusKind statusKind
 }
+
+type statusKind int
+
+const (
+	statusNone statusKind = iota
+	statusBusy
+	statusOk
+	statusErr
+)
 
 func New() Model {
 	return Model{
@@ -75,6 +91,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentRefs = []string{msg.ref.FullName}
 		return m, tea.Batch(resetCmd, loadCommitsCmd("", m.currentRefs, defaultLogMaxCount))
 
+	case fetchSucceededMsg:
+		// Whatever the user did while fetch was running, the local view of
+		// remote refs is now stale — replay refs + log so origin/* and the
+		// graph reflect anything the fetch picked up.
+		m.fetchInFlight = false
+		m.status = "fetch: done"
+		m.statusKind = statusOk
+		resetCmd := m.graph.ResetForReload()
+		m.refs.ResetForReload()
+		return m, tea.Batch(
+			resetCmd,
+			loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
+			loadRefsCmd(""),
+		)
+
+	case fetchFailedMsg:
+		m.fetchInFlight = false
+		m.status = "fetch failed: " + msg.err.Error()
+		m.statusKind = statusErr
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -89,7 +126,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focused++
 			}
 			return m, nil
-		case "R":
+		case "F":
+			if m.fetchInFlight {
+				return m, nil
+			}
+			m.fetchInFlight = true
+			m.status = "fetching…"
+			m.statusKind = statusBusy
+			return m, fetchCmd("")
+		case "r":
 			// Replay the last commit query and refetch refs. If the ref
 			// stored in m.currentRefs was deleted by another tool, git.Log
 			// surfaces that through the existing commitsLoadFailedMsg path —
@@ -101,6 +146,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
 				loadRefsCmd(""),
 			)
+		case "R":
+			// Reserved for a future Rebase action; swallow so it doesn't
+			// fall through to the focused sub-model.
+			return m, nil
 		}
 		switch m.focused {
 		case paneRefs:
@@ -154,8 +203,13 @@ var (
 	borderFocused = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("205"))
-	help = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	help        = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	statusBusyS = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	statusOkS   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	statusErrS  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 )
+
+const helpText = "h/l move focus · j/k navigate · enter select ref · a all · F fetch · r reload · q quit"
 
 func (m Model) View() string {
 	if m.width == 0 {
@@ -183,5 +237,44 @@ func (m Model) View() string {
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, boxes[paneRefs], boxes[paneGraph], boxes[paneDiff])
-	return lipgloss.JoinVertical(lipgloss.Left, row, help.Render("h/l move focus · j/k navigate · enter select ref · a all · R reload · q quit"))
+	return lipgloss.JoinVertical(lipgloss.Left, row, m.renderHelpStatus())
+}
+
+// renderHelpStatus lays out the bottom line as "help … status". When the
+// terminal is too narrow to fit both, status wins — the user just triggered
+// an action and seeing its outcome matters more than the help reminder.
+func (m Model) renderHelpStatus() string {
+	statusRendered := ""
+	if m.status != "" {
+		switch m.statusKind {
+		case statusBusy:
+			statusRendered = statusBusyS.Render(m.status)
+		case statusOk:
+			statusRendered = statusOkS.Render(m.status)
+		case statusErr:
+			statusRendered = statusErrS.Render(m.status)
+		default:
+			statusRendered = help.Render(m.status)
+		}
+	}
+
+	if statusRendered == "" {
+		return help.Render(helpText)
+	}
+
+	statusW := lipgloss.Width(statusRendered)
+	avail := m.width - statusW - 1 // 1 for the spacer
+	if avail < 1 {
+		// Status alone — drop help.
+		return statusRendered
+	}
+	helpClipped := help.Render(helpText)
+	if lipgloss.Width(helpClipped) > avail {
+		// Truncate the raw text and re-style; ansi-aware truncation on the
+		// styled string is unnecessary because helpText is plain ASCII.
+		if avail < len(helpText) {
+			helpClipped = help.Render(helpText[:avail])
+		}
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, helpClipped, " ", statusRendered)
 }

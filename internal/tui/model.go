@@ -21,8 +21,9 @@ func (p pane) title() string {
 	return [...]string{"refs", "commit graph", "diff"}[p]
 }
 
-// refsAllSentinel is the git revision spec that means "every ref". Passed to
-// loadCommitsCmd when the user hits 'a' on the refs pane.
+// refsAllSentinel is the git revision spec that means "every ref". Used as the
+// default base for the unified graph: Init seeds currentRefs with this so the
+// commit list shows every local/remote/tag from the start, Fork-style.
 const refsAllSentinel = "--all"
 
 type Model struct {
@@ -31,9 +32,10 @@ type Model struct {
 	refs          refModel
 	graph         graphModel
 	// currentRefs is the last commit-query argument dispatched to
-	// loadCommitsCmd. nil means "default branch" (matches Init's nil). Reload
-	// (r) replays git.Log with this exact value, so every dispatch site that
-	// changes the visible commit set must update it.
+	// loadCommitsCmd. New() seeds it with [refsAllSentinel] so the unified
+	// graph is the default base. Reload (r) replays git.Log with this exact
+	// value, so every dispatch site that changes the visible commit set must
+	// update it.
 	currentRefs []string
 	// fetchInFlight gates the F key while a background fetch is running so a
 	// second F doesn't spawn a parallel git invocation.
@@ -47,15 +49,16 @@ type Model struct {
 
 func New() Model {
 	return Model{
-		focused: paneGraph,
-		refs:    newRefsModel(),
-		graph:   newGraphModel(),
+		focused:     paneGraph,
+		refs:        newRefsModel(),
+		graph:       newGraphModel(),
+		currentRefs: []string{refsAllSentinel},
 	}
 }
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		loadCommitsCmd("", nil, defaultLogMaxCount),
+		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
 		loadRefsCmd(""),
 	)
 }

@@ -26,10 +26,23 @@ const (
 	colorSelected = "205"
 )
 
-// commitItem wraps a Commit so it can be stored in bubbles/list.
-type commitItem struct{ c git.Commit }
+// commitItem wraps a Commit so it can be stored in bubbles/list. graphPrefix
+// is the ASCII graph segment (e.g. "* ", "|\\ ") rendered to the left of the
+// commit row; empty when no graph data is available yet.
+type commitItem struct {
+	c           git.Commit
+	graphPrefix string
+}
 
 func (i commitItem) FilterValue() string { return i.c.Subject }
+
+// graphRow pairs a commit with its graph segment. The git wrapper returns
+// more general GraphRow values that also include connector-only rows; we keep
+// only commit rows here so the list widget's index↔commit mapping stays 1:1.
+type graphRow struct {
+	commit      git.Commit
+	graphPrefix string
+}
 
 // commitDelegate renders one commit per line: prefix + short hash + relative
 // time + subject (with truncation when the row is too narrow).
@@ -92,11 +105,12 @@ func renderCommitLine(c git.Commit, width int, selected bool) string {
 
 // graphModel is the middle-pane sub-model.
 type graphModel struct {
-	list   list.Model
-	width  int
-	height int
-	err    error
-	loaded bool
+	list       list.Model
+	width      int
+	height     int
+	err        error
+	loaded     bool
+	graphWidth int
 }
 
 func newGraphModel() graphModel {
@@ -112,7 +126,7 @@ func newGraphModel() graphModel {
 }
 
 // Messages emitted by loadCommitsCmd.
-type commitsLoadedMsg struct{ commits []git.Commit }
+type commitsLoadedMsg struct{ rows []graphRow }
 type commitsLoadFailedMsg struct{ err error }
 
 // loadCommitsCmd runs git.Log in a tea.Cmd. dir == "" uses the process cwd.
@@ -125,7 +139,11 @@ func loadCommitsCmd(dir string, refs []string, max int) tea.Cmd {
 		if err != nil {
 			return commitsLoadFailedMsg{err: err}
 		}
-		return commitsLoadedMsg{commits: commits}
+		rows := make([]graphRow, len(commits))
+		for i, c := range commits {
+			rows[i] = graphRow{commit: c}
+		}
+		return commitsLoadedMsg{rows: rows}
 	}
 }
 
@@ -134,10 +152,15 @@ func (g graphModel) Init() tea.Cmd { return nil }
 func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 	switch m := msg.(type) {
 	case commitsLoadedMsg:
-		items := make([]list.Item, len(m.commits))
-		for i, c := range m.commits {
-			items[i] = commitItem{c: c}
+		items := make([]list.Item, len(m.rows))
+		maxW := 0
+		for i, r := range m.rows {
+			items[i] = commitItem{c: r.commit, graphPrefix: r.graphPrefix}
+			if w := runewidth.StringWidth(r.graphPrefix); w > maxW {
+				maxW = w
+			}
 		}
+		g.graphWidth = maxW
 		cmd := g.list.SetItems(items)
 		g.loaded = true
 		g.err = nil
@@ -182,6 +205,7 @@ func (g *graphModel) SetSize(w, h int) {
 func (g *graphModel) ResetForReload() tea.Cmd {
 	g.loaded = false
 	g.err = nil
+	g.graphWidth = 0
 	return g.list.SetItems(nil)
 }
 

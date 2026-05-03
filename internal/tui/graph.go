@@ -19,7 +19,8 @@ import (
 const (
 	defaultLogMaxCount = 200
 	shortHashLen       = 7
-	timeColWidth       = 6
+	// 8 covers the widest relativeShort output ("just now").
+	timeColWidth = 8
 
 	colorHash     = "214"
 	colorTime     = "245"
@@ -105,15 +106,19 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphWidth, width int, s
 		graphCell = graphStyle.Render(gp)
 	}
 
-	// Layout: [cursor 2][graph N][hash 7] [rel 6 right-aligned] [subject]
-	used := cursorWidth + effectiveGraphWidth + shortHashLen + 1 + timeColWidth + 1
-	remaining := width - used
+	// Layout: [cursor 2][graph N][subject (gap)][hash 7][space][rel 6]
+	// — subject is left-aligned right after the graph; hash and rel sit at
+	// the row's right edge, mirroring Fork's commit list.
+	used := cursorWidth + effectiveGraphWidth + 1 + shortHashLen + 1 + timeColWidth
+	subjectWidth := width - used
 
-	if remaining < 1 {
+	if subjectWidth < 1 {
+		// Row is too narrow for the subject — drop it but keep hash visible.
 		return cursor + graphCell + hashStyle.Render(hash)
 	}
 
-	subject := runewidth.Truncate(c.Subject, remaining, "…")
+	subject := runewidth.Truncate(c.Subject, subjectWidth, "…")
+	subject = runewidth.FillRight(subject, subjectWidth)
 	if selected {
 		subject = selectedStyle.Render(subject)
 	}
@@ -121,9 +126,9 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphWidth, width int, s
 	return fmt.Sprintf("%s%s%s %s %s",
 		cursor,
 		graphCell,
+		subject,
 		hashStyle.Render(hash),
 		timeStyle.Render(runewidth.FillLeft(rel, timeColWidth)),
-		subject,
 	)
 }
 

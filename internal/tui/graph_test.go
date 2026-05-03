@@ -35,7 +35,7 @@ func TestRenderCommitLineHidesSubjectWhenTooNarrow(t *testing.T) {
 		Subject:    "should-not-appear",
 		AuthorTime: time.Now(),
 	}
-	// Width less than cursor(2)+hash(7)+space(1)+time(6)+space(1) = 17.
+	// Width less than cursor(2)+hash(7)+space(1)+time(8)+space(1) = 19.
 	line := renderCommitLine(c, "", 0, 10, false)
 	if strings.Contains(line, "should-not-appear") {
 		t.Errorf("subject should be hidden at narrow width, got %q", line)
@@ -62,20 +62,44 @@ func TestRenderCommitLineSelectedHasCursor(t *testing.T) {
 	}
 }
 
-func TestRenderCommitLineGraphPlacedBeforeHash(t *testing.T) {
+func TestRenderCommitLineSubjectBetweenGraphAndHash(t *testing.T) {
 	c := git.Commit{
 		Hash:       "abcdef1234567",
 		Subject:    "graph layout",
 		AuthorTime: time.Now(),
 	}
 	line := renderCommitLine(c, "* ", 2, 80, false)
-	hashIdx := strings.Index(line, "abcdef1")
-	starIdx := strings.Index(line, "*")
-	if hashIdx < 0 || starIdx < 0 {
-		t.Fatalf("expected both star and hash in %q", line)
+	stripped := ansi.Strip(line)
+	subjectIdx := strings.Index(stripped, "graph layout")
+	starIdx := strings.Index(stripped, "*")
+	hashIdx := strings.Index(stripped, "abcdef1")
+	if starIdx < 0 || subjectIdx < 0 || hashIdx < 0 {
+		t.Fatalf("expected star, subject, and hash in %q", stripped)
 	}
-	if starIdx >= hashIdx {
-		t.Errorf("graph segment should appear before hash, got %q", line)
+	if starIdx >= subjectIdx || subjectIdx >= hashIdx {
+		t.Errorf("expected order graph < subject < hash, got star=%d subject=%d hash=%d in %q",
+			starIdx, subjectIdx, hashIdx, stripped)
+	}
+}
+
+func TestRenderCommitLineHashAndTimeAtRightEdge(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "right edge",
+		AuthorTime: time.Now(),
+	}
+	line := renderCommitLine(c, "* ", 2, 80, false)
+	stripped := ansi.Strip(line)
+	// rel column sits at the very end with hash one space before it, so
+	// the visible width must equal the requested width and hash anchors
+	// at width - 7 (hash) - 1 (space) - timeColWidth.
+	if w := len(stripped); w != 80 {
+		t.Errorf("rendered width = %d, want 80 (full row)", w)
+	}
+	hashIdx := strings.Index(stripped, "abcdef1")
+	wantHashIdx := 80 - shortHashLen - 1 - timeColWidth
+	if hashIdx != wantHashIdx {
+		t.Errorf("hash starts at %d, want %d (anchored to right edge)", hashIdx, wantHashIdx)
 	}
 }
 
@@ -85,20 +109,14 @@ func TestRenderCommitLinePadsShortGraphPrefix(t *testing.T) {
 		Subject:    "padded",
 		AuthorTime: time.Now(),
 	}
-	// graphPrefix "*" is 1 column wide but graphWidth=4 — expect 3 padding
-	// columns between '*' and the hash so columns line up across rows.
+	// graphPrefix "*" is 1 column wide but graphWidth=4 — the graph cell
+	// must be left-aligned and padded out to the full 4-column width so
+	// columns line up across rows.
 	line := renderCommitLine(c, "*", 4, 80, false)
-	starIdx := strings.Index(line, "*")
-	hashIdx := strings.Index(line, "abcdef1")
-	if starIdx < 0 || hashIdx < 0 {
-		t.Fatalf("expected star and hash in %q", line)
-	}
-	between := line[starIdx+1 : hashIdx]
-	// `between` may include ANSI reset codes from lipgloss; only the
-	// rendered visual width matters here.
-	stripped := ansi.Strip(between)
-	if stripped != "   " {
-		t.Errorf("expected 3 spaces between '*' and hash, got %q (raw %q)", stripped, between)
+	stripped := ansi.Strip(line)
+	// cursor 2 + graph 4 = 6.
+	if got := stripped[2:6]; got != "*   " {
+		t.Errorf("graph cell = %q, want %q (left-aligned, right-padded)", got, "*   ")
 	}
 }
 

@@ -24,6 +24,7 @@ const (
 	colorHash     = "214"
 	colorTime     = "245"
 	colorSelected = "205"
+	colorGraph    = "244"
 )
 
 // commitItem wraps a Commit so it can be stored in bubbles/list. graphPrefix
@@ -59,7 +60,9 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	}
 	selected := index == m.Index()
 	width := m.Width()
-	_, _ = fmt.Fprint(w, renderCommitLine(ci.c, width, selected))
+	// graphWidth is plumbed in via the delegate in step 4; for now graph
+	// data is carried on commitItem but rendered with width 0 (invisible).
+	_, _ = fmt.Fprint(w, renderCommitLine(ci.c, ci.graphPrefix, 0, width, selected))
 }
 
 var (
@@ -67,27 +70,45 @@ var (
 	timeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime))
 	cursorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected))
 	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected)).Bold(true)
+	graphStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(colorGraph))
 )
 
-func renderCommitLine(c git.Commit, width int, selected bool) string {
+func renderCommitLine(c git.Commit, graphPrefix string, graphWidth, width int, selected bool) string {
 	hash := c.Hash
 	if len(hash) > shortHashLen {
 		hash = hash[:shortHashLen]
 	}
 	rel := relativeShort(c.AuthorTime)
 
-	prefix := "  "
+	cursor := "  "
 	if selected {
-		prefix = cursorStyle.Render("›") + " "
+		cursor = cursorStyle.Render("›") + " "
 	}
-	const prefixWidth = 2 // "› " or "  "
+	const cursorWidth = 2
 
-	// Layout: [prefix][hash] [right-aligned rel in timeColWidth] [subject]
-	used := prefixWidth + shortHashLen + 1 + timeColWidth + 1
+	// Cap graph so it never eats into the hash column on narrow terminals.
+	hashCap := width - cursorWidth - shortHashLen
+	if hashCap < 0 {
+		hashCap = 0
+	}
+	effectiveGraphWidth := graphWidth
+	if effectiveGraphWidth > hashCap {
+		effectiveGraphWidth = hashCap
+	}
+
+	graphCell := ""
+	if effectiveGraphWidth > 0 {
+		gp := runewidth.Truncate(graphPrefix, effectiveGraphWidth, "")
+		gp = runewidth.FillRight(gp, effectiveGraphWidth)
+		graphCell = graphStyle.Render(gp)
+	}
+
+	// Layout: [cursor 2][graph N][hash 7] [rel 6 right-aligned] [subject]
+	used := cursorWidth + effectiveGraphWidth + shortHashLen + 1 + timeColWidth + 1
 	remaining := width - used
 
 	if remaining < 1 {
-		return prefix + hashStyle.Render(hash)
+		return cursor + graphCell + hashStyle.Render(hash)
 	}
 
 	subject := runewidth.Truncate(c.Subject, remaining, "…")
@@ -95,8 +116,9 @@ func renderCommitLine(c git.Commit, width int, selected bool) string {
 		subject = selectedStyle.Render(subject)
 	}
 
-	return fmt.Sprintf("%s%s %s %s",
-		prefix,
+	return fmt.Sprintf("%s%s%s %s %s",
+		cursor,
+		graphCell,
 		hashStyle.Render(hash),
 		timeStyle.Render(runewidth.FillLeft(rel, timeColWidth)),
 		subject,

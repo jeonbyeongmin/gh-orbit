@@ -246,6 +246,50 @@ func TestBuildGraphCellEllipsisOnTruncate(t *testing.T) {
 	}
 }
 
+func TestGraphModelJumpToHashMovesCursor(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	now := time.Now()
+	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: now}},
+		{commit: git.Commit{Hash: "bbb2222", Subject: "second", AuthorTime: now}},
+		{commit: git.Commit{Hash: "ccc3333", Subject: "third", AuthorTime: now}},
+	}})
+
+	if !g.JumpToHash("ccc3333") {
+		t.Fatal("JumpToHash should report success when the hash matches a row")
+	}
+	if got := g.list.Index(); got != 2 {
+		t.Errorf("cursor index after jump = %d, want 2", got)
+	}
+}
+
+func TestGraphModelJumpToHashReturnsFalseWhenMissing(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: time.Now()}},
+	}})
+
+	if g.JumpToHash("deadbeef") {
+		t.Error("JumpToHash should report false when no row matches")
+	}
+	if got := g.list.Index(); got != 0 {
+		t.Errorf("cursor should not move on miss, got index %d", got)
+	}
+}
+
+func TestGraphModelJumpToHashEmptyHashIsFalse(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	if g.JumpToHash("") {
+		t.Error("JumpToHash on empty hash should not match a row")
+	}
+}
+
 type sentinelErr struct{}
 
 func (sentinelErr) Error() string { return "sentinel" }

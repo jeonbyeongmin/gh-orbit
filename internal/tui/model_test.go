@@ -12,65 +12,75 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
-func TestModelRefSelectedReloadsGraph(t *testing.T) {
+func TestModelInitSeedsCurrentRefsWithAllSentinel(t *testing.T) {
+	m := New()
+	if got, want := m.currentRefs, []string{refsAllSentinel}; !slices.Equal(got, want) {
+		t.Errorf("currentRefs at New = %v, want %v (unified graph default)", got, want)
+	}
+}
+
+func TestModelRefSelectedJumpsCursor(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
+	now := time.Now()
 	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
-		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: now}},
+		{commit: git.Commit{Hash: "bbb2222", Subject: "second", AuthorTime: now}},
+		{commit: git.Commit{Hash: "ccc3333", Subject: "third", AuthorTime: now}},
 	}})
 	m = updated.(Model)
 	if !m.graph.loaded {
 		t.Fatalf("graph should be loaded before refSelectedMsg")
 	}
 
-	updated, cmd := m.Update(refSelectedMsg{ref: git.Ref{FullName: "refs/heads/feat", Kind: git.RefKindLocal}})
+	updated, cmd := m.Update(refSelectedMsg{ref: git.Ref{
+		FullName:   "refs/heads/feat",
+		ShortName:  "feat",
+		Kind:       git.RefKindLocal,
+		ObjectName: "ccc3333",
+	}})
 	m = updated.(Model)
-	if m.graph.loaded {
-		t.Errorf("graph.loaded should reset to false after refSelectedMsg")
+	if !m.graph.loaded {
+		t.Errorf("graph.loaded should remain true after refSelectedMsg (no reload)")
 	}
-	if cmd == nil {
-		t.Fatal("refSelectedMsg should return a load cmd")
+	if cmd != nil {
+		t.Errorf("refSelectedMsg should not dispatch a load cmd, got %v", cmd)
 	}
-	if !strings.Contains(m.graph.View(), "loading") {
-		t.Errorf("graph view should show loading state, got %q", m.graph.View())
+	if got := m.graph.list.Index(); got != 2 {
+		t.Errorf("graph cursor index = %d, want 2 (row of ccc3333)", got)
 	}
-	if got, want := m.currentRefs, []string{"refs/heads/feat"}; !slices.Equal(got, want) {
-		t.Errorf("currentRefs should track selected ref: got %v want %v", got, want)
+	if got, want := m.currentRefs, []string{refsAllSentinel}; !slices.Equal(got, want) {
+		t.Errorf("currentRefs should stay at --all after Enter, got %v want %v", got, want)
+	}
+	if m.status != "" {
+		t.Errorf("status should be empty after successful jump, got %q", m.status)
 	}
 }
 
-func TestModelAllKeyOnRefsPaneReloadsGraph(t *testing.T) {
+func TestModelRefSelectedTipMissingShowsStatus(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	// Move focus to refs pane.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
-	m = updated.(Model)
-	if m.focused != paneRefs {
-		t.Fatalf("focus should be paneRefs after 'h', got %v", m.focused)
-	}
-
 	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
-		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: time.Now()}},
 	}})
 	m = updated.(Model)
-	if !m.graph.loaded {
-		t.Fatalf("graph should be loaded before 'a'")
-	}
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	updated, _ = m.Update(refSelectedMsg{ref: git.Ref{
+		FullName:   "refs/heads/old",
+		ShortName:  "old",
+		Kind:       git.RefKindLocal,
+		ObjectName: "deadbeef",
+	}})
 	m = updated.(Model)
-	if m.graph.loaded {
-		t.Errorf("'a' on refs pane should reset graph for reload")
+	if !strings.Contains(m.status, "ref tip not in loaded window") {
+		t.Errorf("status %q should mention loaded window", m.status)
 	}
-	if cmd == nil {
-		t.Error("'a' on refs pane should return a load cmd")
-	}
-	if got, want := m.currentRefs, []string{refsAllSentinel}; !slices.Equal(got, want) {
-		t.Errorf("currentRefs should track --all sentinel: got %v want %v", got, want)
+	if !strings.Contains(m.status, "old") {
+		t.Errorf("status %q should mention the ref short name", m.status)
 	}
 }
 
@@ -110,12 +120,19 @@ func TestModelRKeyReloadsBothPanes(t *testing.T) {
 	}
 }
 
-func TestModelRKeyPreservesCurrentRefs(t *testing.T) {
+func TestModelRKeyPreservesAllSentinel(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, _ = m.Update(refSelectedMsg{ref: git.Ref{FullName: "refs/heads/feat", Kind: git.RefKindLocal}})
+	// Selecting a ref no longer mutates currentRefs (unified graph keeps the
+	// --all base). r must preserve that invariant across reloads.
+	updated, _ = m.Update(refSelectedMsg{ref: git.Ref{
+		FullName:   "refs/heads/feat",
+		ShortName:  "feat",
+		Kind:       git.RefKindLocal,
+		ObjectName: "abc1234",
+	}})
 	m = updated.(Model)
 	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
 		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
@@ -124,8 +141,8 @@ func TestModelRKeyPreservesCurrentRefs(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	m = updated.(Model)
-	if got, want := m.currentRefs, []string{"refs/heads/feat"}; !slices.Equal(got, want) {
-		t.Errorf("r should preserve currentRefs: got %v want %v", got, want)
+	if got, want := m.currentRefs, []string{refsAllSentinel}; !slices.Equal(got, want) {
+		t.Errorf("r should preserve --all sentinel: got %v want %v", got, want)
 	}
 }
 

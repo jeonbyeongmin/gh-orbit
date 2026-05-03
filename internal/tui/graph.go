@@ -45,9 +45,13 @@ type graphRow struct {
 	graphPrefix string
 }
 
-// commitDelegate renders one commit per line: prefix + short hash + relative
-// time + subject (with truncation when the row is too narrow).
-type commitDelegate struct{}
+// commitDelegate renders one commit per line: cursor + graph + short hash +
+// relative time + subject (with truncation when the row is too narrow).
+// graphWidth is the column width every row should reserve for the graph
+// segment so columns stay aligned across the visible window.
+type commitDelegate struct {
+	graphWidth int
+}
 
 func (commitDelegate) Height() int                             { return 1 }
 func (commitDelegate) Spacing() int                            { return 0 }
@@ -60,9 +64,7 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	}
 	selected := index == m.Index()
 	width := m.Width()
-	// graphWidth is plumbed in via the delegate in step 4; for now graph
-	// data is carried on commitItem but rendered with width 0 (invisible).
-	_, _ = fmt.Fprint(w, renderCommitLine(ci.c, ci.graphPrefix, 0, width, selected))
+	_, _ = fmt.Fprint(w, renderCommitLine(ci.c, ci.graphPrefix, d.graphWidth, width, selected))
 }
 
 var (
@@ -128,6 +130,7 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphWidth, width int, s
 // graphModel is the middle-pane sub-model.
 type graphModel struct {
 	list       list.Model
+	delegate   commitDelegate
 	width      int
 	height     int
 	err        error
@@ -136,7 +139,8 @@ type graphModel struct {
 }
 
 func newGraphModel() graphModel {
-	l := list.New(nil, commitDelegate{}, 0, 0)
+	d := commitDelegate{}
+	l := list.New(nil, d, 0, 0)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
@@ -144,7 +148,7 @@ func newGraphModel() graphModel {
 	l.SetFilteringEnabled(false)
 	l.DisableQuitKeybindings()
 	l.SetShowFilter(false)
-	return graphModel{list: l}
+	return graphModel{list: l, delegate: d}
 }
 
 // Messages emitted by loadCommitsCmd.
@@ -183,6 +187,8 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 			}
 		}
 		g.graphWidth = maxW
+		g.delegate.graphWidth = maxW
+		g.list.SetDelegate(g.delegate)
 		cmd := g.list.SetItems(items)
 		g.loaded = true
 		g.err = nil
@@ -228,6 +234,8 @@ func (g *graphModel) ResetForReload() tea.Cmd {
 	g.loaded = false
 	g.err = nil
 	g.graphWidth = 0
+	g.delegate.graphWidth = 0
+	g.list.SetDelegate(g.delegate)
 	return g.list.SetItems(nil)
 }
 

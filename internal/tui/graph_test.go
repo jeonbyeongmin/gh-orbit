@@ -169,6 +169,9 @@ func TestGraphModelResetForReloadReturnsToLoading(t *testing.T) {
 	if g.graphWidth != 0 {
 		t.Errorf("ResetForReload should clear graphWidth, got %d", g.graphWidth)
 	}
+	if g.delegate.graphWidth != 0 {
+		t.Errorf("ResetForReload should clear delegate.graphWidth, got %d", g.delegate.graphWidth)
+	}
 	if got := g.View(); got != "loading…" {
 		t.Errorf("after reset, View = %q, want %q", got, "loading…")
 	}
@@ -185,6 +188,9 @@ func TestGraphModelComputesGraphWidthFromLongestPrefix(t *testing.T) {
 	}})
 	if g.graphWidth != 6 {
 		t.Errorf("graphWidth = %d, want 6 (width of '| | * ')", g.graphWidth)
+	}
+	if g.delegate.graphWidth != 6 {
+		t.Errorf("delegate.graphWidth = %d, want 6 (must match graphModel.graphWidth)", g.delegate.graphWidth)
 	}
 }
 

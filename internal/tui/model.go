@@ -1,9 +1,8 @@
 // Package tui hosts the Bubble Tea models, panes, and key bindings.
 //
 // The MVP screen is a Fork-style 3-pane layout: refs on the left, commit
-// graph in the middle, diff on the right. This file is a placeholder skeleton
-// — panes render their name and a focus indicator. Real data wiring lives in
-// follow-up files (refs.go, graph.go, diff.go).
+// graph in the middle, diff on the right. Sub-panes live in dedicated
+// files (graph.go, refs.go, diff.go) and are composed in here.
 package tui
 
 import (
@@ -24,24 +23,42 @@ func (p pane) title() string {
 	return [...]string{"refs", "commit graph", "diff"}[p]
 }
 
-// Model is the root Bubble Tea model. Sub-pane models will be composed in
-// later as fields here.
+// Model is the root Bubble Tea model. Sub-pane models compose in as fields.
 type Model struct {
 	width, height int
 	focused       pane
+	graph         graphModel
+
+	// selectedHash is updated whenever the graph pane's cursor moves.
+	// Reserved for the diff pane (separate backlog) to subscribe to.
+	selectedHash string
 }
 
 func New() Model {
-	return Model{focused: paneGraph}
+	return Model{
+		focused: paneGraph,
+		graph:   newGraphModel(),
+	}
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	return loadCommitsCmd("", defaultLogMaxCount)
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		s := m.paneSizes()
+		m.graph.SetSize(s.graphW, s.contentH)
 		return m, nil
+
+	case commitsLoadedMsg, commitsLoadFailedMsg:
+		var cmd tea.Cmd
+		m.graph, cmd = m.graph.Update(msg)
+		m.refreshSelection()
+		return m, cmd
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -50,13 +67,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focused > 0 {
 				m.focused--
 			}
+			return m, nil
 		case "l":
 			if m.focused < paneCount-1 {
 				m.focused++
 			}
+			return m, nil
+		}
+		// Forward unhandled keys to the focused pane.
+		if m.focused == paneGraph {
+			var cmd tea.Cmd
+			m.graph, cmd = m.graph.Update(msg)
+			m.refreshSelection()
+			return m, cmd
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) refreshSelection() {
+	if c, ok := m.graph.Selected(); ok {
+		m.selectedHash = c.Hash
+	} else {
+		m.selectedHash = ""
+	}
+}
+
+type paneSizes struct {
+	refsW, graphW, diffW int
+	contentH             int
+}
+
+func (m Model) paneSizes() paneSizes {
+	var s paneSizes
+	if m.width == 0 || m.height == 0 {
+		return s
+	}
+	// 3 panes × 2 border cols = 6 frame cols total.
+	avail := m.width - 6
+	if avail < 3 {
+		avail = 3
+	}
+	s.refsW = avail * 20 / 100
+	s.graphW = avail * 50 / 100
+	s.diffW = avail - s.refsW - s.graphW
+	// Reserve 1 row for the help line; subtract 2 for top/bottom border.
+	s.contentH = m.height - 1 - 2
+	if s.contentH < 1 {
+		s.contentH = 1
+	}
+	return s
 }
 
 var (
@@ -73,27 +133,14 @@ func (m Model) View() string {
 	if m.width == 0 {
 		return "starting…"
 	}
+	s := m.paneSizes()
+	widths := [paneCount]int{s.refsW, s.graphW, s.diffW}
 
-	// Reserve one row for the help line. Each pane gets a border on all
-	// four sides, so subtract 2 from the inner height.
-	inner := m.height - 1
-	contentH := inner - 2
-	if contentH < 1 {
-		contentH = 1
+	contents := [paneCount]string{
+		paneRefs.title(),
+		m.graph.View(),
+		paneDiff.title(),
 	}
-
-	// Naive width split: refs 20%, graph 50%, diff 30%. Borders eat 2 cols
-	// per pane, so subtract 6 total before splitting.
-	avail := m.width - 6
-	if avail < 3 {
-		avail = 3
-	}
-	widths := [paneCount]int{
-		avail * 20 / 100,
-		avail * 50 / 100,
-		0,
-	}
-	widths[paneDiff] = avail - widths[paneRefs] - widths[paneGraph]
 
 	boxes := make([]string, paneCount)
 	for p := paneRefs; p < paneCount; p++ {
@@ -103,10 +150,10 @@ func (m Model) View() string {
 		}
 		boxes[p] = style.
 			Width(widths[p]).
-			Height(contentH).
-			Render(p.title())
+			Height(s.contentH).
+			Render(contents[p])
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, boxes[paneRefs], boxes[paneGraph], boxes[paneDiff])
-	return lipgloss.JoinVertical(lipgloss.Left, row, help.Render("h/l move focus · q quit"))
+	return lipgloss.JoinVertical(lipgloss.Left, row, help.Render("h/l move focus · j/k navigate · q quit"))
 }

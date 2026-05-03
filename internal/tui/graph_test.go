@@ -204,6 +204,48 @@ func TestGraphModelGraphWidthZeroWhenNoPrefix(t *testing.T) {
 	}
 }
 
+func TestLaneColCapClampsAtMax(t *testing.T) {
+	// Very wide terminal — graph must not grow past maxLaneCap × cellWidth.
+	if got := laneColCap(500); got != maxLaneCap*cellWidth {
+		t.Errorf("laneColCap(500) = %d, want %d", got, maxLaneCap*cellWidth)
+	}
+}
+
+func TestLaneColCapClampsAtMin(t *testing.T) {
+	// Pathologically narrow — minimum 2 lanes still reserved so the graph
+	// stays meaningful even if subject is almost gone.
+	if got := laneColCap(20); got != minLaneCap*cellWidth {
+		t.Errorf("laneColCap(20) = %d, want %d", got, minLaneCap*cellWidth)
+	}
+}
+
+func TestApplyGraphCapTruncatesWhenWidthBelowMaxVisual(t *testing.T) {
+	g := newGraphModel()
+	// Pretend many rows produced a 20-column graph in total.
+	g.SetSize(40, 10)
+	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+		{commit: git.Commit{Hash: "a", Subject: "s", AuthorTime: time.Now()},
+			graphPrefix: strings.Repeat("│", 20), visualWidth: 20},
+	}})
+	if g.maxVisualWidth != 20 {
+		t.Fatalf("maxVisualWidth = %d, want 20", g.maxVisualWidth)
+	}
+	wantCap := laneColCap(40)
+	if g.graphWidth != wantCap {
+		t.Errorf("graphWidth = %d, want %d (cap for width 40)", g.graphWidth, wantCap)
+	}
+}
+
+func TestBuildGraphCellEllipsisOnTruncate(t *testing.T) {
+	cell, w := buildGraphCell(strings.Repeat("│", 12), 12, 6)
+	if w != 6 {
+		t.Errorf("width = %d, want 6", w)
+	}
+	if !strings.Contains(cell, "…") {
+		t.Errorf("expected ellipsis in truncated cell, got %q", cell)
+	}
+}
+
 type sentinelErr struct{}
 
 func (sentinelErr) Error() string { return "sentinel" }

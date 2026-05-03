@@ -25,10 +25,34 @@ const (
 	// 8 covers the widest relativeShort output ("just now").
 	timeColWidth = 8
 
+	cursorColWidth = 2
+	maxLaneCap     = 8
+	minLaneCap     = 2
+
 	colorHash     = "214"
 	colorTime     = "245"
 	colorSelected = "205"
 )
+
+// laneColCap is the visible column budget for the graph segment given the
+// commit pane's width. Lower bound (minLaneCap×cellWidth) keeps the graph
+// meaningful in narrow terminals; upper bound caps growth in very wide ones.
+func laneColCap(paneWidth int) int {
+	// reserve room for cursor + graph + space + hash + space + time, leave
+	// at least one column for the subject.
+	avail := paneWidth - cursorColWidth - shortHashLen - 1 - timeColWidth - 1
+	if avail < 0 {
+		avail = 0
+	}
+	c := avail / cellWidth
+	switch {
+	case c > maxLaneCap:
+		c = maxLaneCap
+	case c < minLaneCap:
+		c = minLaneCap
+	}
+	return c * cellWidth
+}
 
 // commitItem wraps a Commit so it can be stored in bubbles/list. graphPrefix
 // is the ANSI-styled graph segment for this row; graphWidth is its visible
@@ -133,29 +157,30 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 }
 
 // buildGraphCell returns the styled graph segment for one row plus the actual
-// visible column width consumed. ANSI-aware truncation keeps escapes intact
-// when the terminal is narrower than the column reservation.
+// visible column width consumed. When a row's prefix exceeds the column
+// budget (cap reached or narrow terminal), the tail is replaced with "…" so
+// the truncation is visible rather than silent.
 func buildGraphCell(graphPrefix string, graphRowWidth, effectiveCol int) (string, int) {
 	if effectiveCol <= 0 {
 		return "", 0
 	}
 	if graphRowWidth <= effectiveCol {
-		// Pad on the right so columns line up across rows.
 		pad := strings.Repeat(" ", effectiveCol-graphRowWidth)
 		return graphPrefix + pad, effectiveCol
 	}
-	return ansi.Truncate(graphPrefix, effectiveCol, ""), effectiveCol
+	return ansi.Truncate(graphPrefix, effectiveCol, "…"), effectiveCol
 }
 
 // graphModel is the middle-pane sub-model.
 type graphModel struct {
-	list       list.Model
-	delegate   commitDelegate
-	width      int
-	height     int
-	err        error
-	loaded     bool
-	graphWidth int
+	list           list.Model
+	delegate       commitDelegate
+	width          int
+	height         int
+	err            error
+	loaded         bool
+	graphWidth     int // graph column width currently in effect (after cap)
+	maxVisualWidth int // widest graphPrefix among loaded rows
 }
 
 func newGraphModel() graphModel {
@@ -208,9 +233,8 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 				maxW = r.visualWidth
 			}
 		}
-		g.graphWidth = maxW
-		g.delegate.graphWidth = maxW
-		g.list.SetDelegate(g.delegate)
+		g.maxVisualWidth = maxW
+		g.applyGraphCap()
 		cmd := g.list.SetItems(items)
 		g.loaded = true
 		g.err = nil
@@ -245,6 +269,25 @@ func (g *graphModel) SetSize(w, h int) {
 	g.width = w
 	g.height = h
 	g.list.SetSize(w, h)
+	g.applyGraphCap()
+}
+
+// applyGraphCap reconciles graphWidth with both the row data and the current
+// pane width: take the smaller of "widest row prefix" and "lane cap for this
+// width", then push the value down into the delegate.
+func (g *graphModel) applyGraphCap() {
+	cap := g.maxVisualWidth
+	if g.width > 0 {
+		if c := laneColCap(g.width); cap > c {
+			cap = c
+		}
+	}
+	if cap == g.graphWidth {
+		return
+	}
+	g.graphWidth = cap
+	g.delegate.graphWidth = cap
+	g.list.SetDelegate(g.delegate)
 }
 
 // ResetForReload clears state so View renders the "loading…" placeholder
@@ -255,6 +298,7 @@ func (g *graphModel) SetSize(w, h int) {
 func (g *graphModel) ResetForReload() tea.Cmd {
 	g.loaded = false
 	g.err = nil
+	g.maxVisualWidth = 0
 	g.graphWidth = 0
 	g.delegate.graphWidth = 0
 	g.list.SetDelegate(g.delegate)

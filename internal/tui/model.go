@@ -29,6 +29,11 @@ type Model struct {
 	focused       pane
 	refs          refModel
 	graph         graphModel
+	// currentRefs is the last commit-query argument dispatched to
+	// loadCommitsCmd. nil means "default branch" (matches Init's nil). Reload
+	// (R) replays git.Log with this exact value, so every dispatch site that
+	// changes the visible commit set must update it.
+	currentRefs []string
 }
 
 func New() Model {
@@ -67,7 +72,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refSelectedMsg:
 		resetCmd := m.graph.ResetForReload()
-		return m, tea.Batch(resetCmd, loadCommitsCmd("", []string{msg.ref.FullName}, defaultLogMaxCount))
+		m.currentRefs = []string{msg.ref.FullName}
+		return m, tea.Batch(resetCmd, loadCommitsCmd("", m.currentRefs, defaultLogMaxCount))
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -88,7 +94,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case paneRefs:
 			if msg.String() == "a" {
 				resetCmd := m.graph.ResetForReload()
-				return m, tea.Batch(resetCmd, loadCommitsCmd("", []string{refsAllSentinel}, defaultLogMaxCount))
+				m.currentRefs = []string{refsAllSentinel}
+				return m, tea.Batch(resetCmd, loadCommitsCmd("", m.currentRefs, defaultLogMaxCount))
 			}
 			var cmd tea.Cmd
 			m.refs, cmd = m.refs.Update(msg)

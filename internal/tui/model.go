@@ -29,6 +29,11 @@ type Model struct {
 	focused       pane
 	refs          refModel
 	graph         graphModel
+	// currentRefs is the last commit-query argument dispatched to
+	// loadCommitsCmd. nil means "default branch" (matches Init's nil). Reload
+	// (R) replays git.Log with this exact value, so every dispatch site that
+	// changes the visible commit set must update it.
+	currentRefs []string
 }
 
 func New() Model {
@@ -67,7 +72,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refSelectedMsg:
 		resetCmd := m.graph.ResetForReload()
-		return m, tea.Batch(resetCmd, loadCommitsCmd("", []string{msg.ref.FullName}, defaultLogMaxCount))
+		m.currentRefs = []string{msg.ref.FullName}
+		return m, tea.Batch(resetCmd, loadCommitsCmd("", m.currentRefs, defaultLogMaxCount))
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -83,12 +89,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focused++
 			}
 			return m, nil
+		case "R":
+			// Replay the last commit query and refetch refs. If the ref
+			// stored in m.currentRefs was deleted by another tool, git.Log
+			// surfaces that through the existing commitsLoadFailedMsg path —
+			// no special-case branch here.
+			resetCmd := m.graph.ResetForReload()
+			m.refs.ResetForReload()
+			return m, tea.Batch(
+				resetCmd,
+				loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
+				loadRefsCmd(""),
+			)
 		}
 		switch m.focused {
 		case paneRefs:
 			if msg.String() == "a" {
 				resetCmd := m.graph.ResetForReload()
-				return m, tea.Batch(resetCmd, loadCommitsCmd("", []string{refsAllSentinel}, defaultLogMaxCount))
+				m.currentRefs = []string{refsAllSentinel}
+				return m, tea.Batch(resetCmd, loadCommitsCmd("", m.currentRefs, defaultLogMaxCount))
 			}
 			var cmd tea.Cmd
 			m.refs, cmd = m.refs.Update(msg)
@@ -164,5 +183,5 @@ func (m Model) View() string {
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, boxes[paneRefs], boxes[paneGraph], boxes[paneDiff])
-	return lipgloss.JoinVertical(lipgloss.Left, row, help.Render("h/l move focus · j/k navigate · enter select ref · a all · q quit"))
+	return lipgloss.JoinVertical(lipgloss.Left, row, help.Render("h/l move focus · j/k navigate · enter select ref · a all · R reload · q quit"))
 }

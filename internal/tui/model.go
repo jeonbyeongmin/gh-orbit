@@ -89,6 +89,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focused++
 			}
 			return m, nil
+		case "R":
+			// Replay the last commit query and refetch refs. If the ref
+			// stored in m.currentRefs was deleted by another tool, git.Log
+			// surfaces that through the existing commitsLoadFailedMsg path —
+			// no special-case branch here.
+			resetCmd := m.graph.ResetForReload()
+			m.refs.ResetForReload()
+			return m, tea.Batch(
+				resetCmd,
+				loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
+				loadRefsCmd(""),
+			)
 		}
 		switch m.focused {
 		case paneRefs:
@@ -171,5 +183,5 @@ func (m Model) View() string {
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, boxes[paneRefs], boxes[paneGraph], boxes[paneDiff])
-	return lipgloss.JoinVertical(lipgloss.Left, row, help.Render("h/l move focus · j/k navigate · enter select ref · a all · q quit"))
+	return lipgloss.JoinVertical(lipgloss.Left, row, help.Render("h/l move focus · j/k navigate · enter select ref · a all · R reload · q quit"))
 }

@@ -23,7 +23,7 @@ func TestRenderCommitLineTruncatesLongSubject(t *testing.T) {
 		Subject:    "이것은 너비 검증을 위해 일부러 길게 적은 한국어 제목입니다",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "", 0, 40, false)
+	line := renderCommitLine(c, "", 0, 0, 40, false)
 	if !strings.Contains(line, "…") {
 		t.Errorf("expected ellipsis when subject overflows, got %q", line)
 	}
@@ -36,7 +36,7 @@ func TestRenderCommitLineHidesSubjectWhenTooNarrow(t *testing.T) {
 		AuthorTime: time.Now(),
 	}
 	// Width less than cursor(2)+hash(7)+space(1)+time(8)+space(1) = 19.
-	line := renderCommitLine(c, "", 0, 10, false)
+	line := renderCommitLine(c, "", 0, 0, 10, false)
 	if strings.Contains(line, "should-not-appear") {
 		t.Errorf("subject should be hidden at narrow width, got %q", line)
 	}
@@ -52,11 +52,11 @@ func TestRenderCommitLineSelectedHasCursor(t *testing.T) {
 		Subject:    "selected commit",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "", 0, 80, true)
+	line := renderCommitLine(c, "", 0, 0, 80, true)
 	if !strings.Contains(line, "›") {
 		t.Errorf("selected line should contain cursor marker, got %q", line)
 	}
-	unselected := renderCommitLine(c, "", 0, 80, false)
+	unselected := renderCommitLine(c, "", 0, 0, 80, false)
 	if strings.Contains(unselected, "›") {
 		t.Errorf("unselected line should not contain cursor marker, got %q", unselected)
 	}
@@ -68,7 +68,7 @@ func TestRenderCommitLineSubjectBetweenGraphAndHash(t *testing.T) {
 		Subject:    "graph layout",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "* ", 2, 80, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false)
 	stripped := ansi.Strip(line)
 	subjectIdx := strings.Index(stripped, "graph layout")
 	starIdx := strings.Index(stripped, "*")
@@ -88,7 +88,7 @@ func TestRenderCommitLineHashAndTimeAtRightEdge(t *testing.T) {
 		Subject:    "right edge",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "* ", 2, 80, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false)
 	stripped := ansi.Strip(line)
 	// rel column sits at the very end with hash one space before it, so
 	// the visible width must equal the requested width and hash anchors
@@ -109,10 +109,10 @@ func TestRenderCommitLinePadsShortGraphPrefix(t *testing.T) {
 		Subject:    "padded",
 		AuthorTime: time.Now(),
 	}
-	// graphPrefix "*" is 1 column wide but graphWidth=4 — the graph cell
-	// must be left-aligned and padded out to the full 4-column width so
-	// columns line up across rows.
-	line := renderCommitLine(c, "*", 4, 80, false)
+	// graphPrefix "*" is 1 column wide but graphColWidth=4 — the cell must
+	// be left-aligned and padded out to the full 4-column width so columns
+	// line up across rows.
+	line := renderCommitLine(c, "*", 1, 4, 80, false)
 	stripped := ansi.Strip(line)
 	// cursor 2 + graph 4 = 6.
 	if got := stripped[2:6]; got != "*   " {
@@ -127,7 +127,7 @@ func TestRenderCommitLineGraphTruncatedAtNarrowWidth(t *testing.T) {
 		AuthorTime: time.Now(),
 	}
 	// width 10, cursor 2 + hash 7 = 9 → at most 1 column for graph.
-	line := renderCommitLine(c, "| | * ", 6, 10, false)
+	line := renderCommitLine(c, "| | * ", 6, 6, 10, false)
 	if !strings.Contains(line, "abcdef1") {
 		t.Errorf("hash must remain visible even when graph is wider than budget, got %q", line)
 	}
@@ -153,7 +153,7 @@ func TestGraphModelResetForReloadReturnsToLoading(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(40, 10)
 	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
-		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}, graphPrefix: "* "},
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}, graphPrefix: "* ", visualWidth: 2},
 	}})
 	if !g.loaded {
 		t.Fatalf("graph should be loaded after commitsLoadedMsg")
@@ -181,9 +181,9 @@ func TestGraphModelComputesGraphWidthFromLongestPrefix(t *testing.T) {
 	g.SetSize(80, 10)
 	now := time.Now()
 	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
-		{commit: git.Commit{Hash: "a", Subject: "s1", AuthorTime: now}, graphPrefix: "* "},
-		{commit: git.Commit{Hash: "b", Subject: "s2", AuthorTime: now}, graphPrefix: "| | * "},
-		{commit: git.Commit{Hash: "c", Subject: "s3", AuthorTime: now}, graphPrefix: "|/ "},
+		{commit: git.Commit{Hash: "a", Subject: "s1", AuthorTime: now}, graphPrefix: "* ", visualWidth: 2},
+		{commit: git.Commit{Hash: "b", Subject: "s2", AuthorTime: now}, graphPrefix: "| | * ", visualWidth: 6},
+		{commit: git.Commit{Hash: "c", Subject: "s3", AuthorTime: now}, graphPrefix: "|/ ", visualWidth: 3},
 	}})
 	if g.graphWidth != 6 {
 		t.Errorf("graphWidth = %d, want 6 (width of '| | * ')", g.graphWidth)
@@ -201,6 +201,48 @@ func TestGraphModelGraphWidthZeroWhenNoPrefix(t *testing.T) {
 	}})
 	if g.graphWidth != 0 {
 		t.Errorf("graphWidth = %d, want 0", g.graphWidth)
+	}
+}
+
+func TestLaneColCapClampsAtMax(t *testing.T) {
+	// Very wide terminal — graph must not grow past maxLaneCap × cellWidth.
+	if got := laneColCap(500); got != maxLaneCap*cellWidth {
+		t.Errorf("laneColCap(500) = %d, want %d", got, maxLaneCap*cellWidth)
+	}
+}
+
+func TestLaneColCapClampsAtMin(t *testing.T) {
+	// Pathologically narrow — minimum 2 lanes still reserved so the graph
+	// stays meaningful even if subject is almost gone.
+	if got := laneColCap(20); got != minLaneCap*cellWidth {
+		t.Errorf("laneColCap(20) = %d, want %d", got, minLaneCap*cellWidth)
+	}
+}
+
+func TestApplyGraphCapTruncatesWhenWidthBelowMaxVisual(t *testing.T) {
+	g := newGraphModel()
+	// Pretend many rows produced a 20-column graph in total.
+	g.SetSize(40, 10)
+	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+		{commit: git.Commit{Hash: "a", Subject: "s", AuthorTime: time.Now()},
+			graphPrefix: strings.Repeat("│", 20), visualWidth: 20},
+	}})
+	if g.maxVisualWidth != 20 {
+		t.Fatalf("maxVisualWidth = %d, want 20", g.maxVisualWidth)
+	}
+	wantCap := laneColCap(40)
+	if g.graphWidth != wantCap {
+		t.Errorf("graphWidth = %d, want %d (cap for width 40)", g.graphWidth, wantCap)
+	}
+}
+
+func TestBuildGraphCellEllipsisOnTruncate(t *testing.T) {
+	cell, w := buildGraphCell(strings.Repeat("│", 12), 12, 6)
+	if w != 6 {
+		t.Errorf("width = %d, want 6", w)
+	}
+	if !strings.Contains(cell, "…") {
+		t.Errorf("expected ellipsis in truncated cell, got %q", cell)
 	}
 }
 

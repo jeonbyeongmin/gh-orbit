@@ -15,8 +15,8 @@ func TestModelRefSelectedReloadsGraph(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, _ = m.Update(commitsLoadedMsg{commits: []git.Commit{
-		{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()},
+	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
 	}})
 	m = updated.(Model)
 	if !m.graph.loaded {
@@ -48,8 +48,8 @@ func TestModelAllKeyOnRefsPaneReloadsGraph(t *testing.T) {
 		t.Fatalf("focus should be paneRefs after 'h', got %v", m.focused)
 	}
 
-	updated, _ = m.Update(commitsLoadedMsg{commits: []git.Commit{
-		{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()},
+	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
 	}})
 	m = updated.(Model)
 	if !m.graph.loaded {

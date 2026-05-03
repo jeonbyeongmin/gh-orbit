@@ -19,21 +19,40 @@ import (
 const (
 	defaultLogMaxCount = 200
 	shortHashLen       = 7
-	timeColWidth       = 6
+	// 8 covers the widest relativeShort output ("just now").
+	timeColWidth = 8
 
 	colorHash     = "214"
 	colorTime     = "245"
 	colorSelected = "205"
+	colorGraph    = "244"
 )
 
-// commitItem wraps a Commit so it can be stored in bubbles/list.
-type commitItem struct{ c git.Commit }
+// commitItem wraps a Commit so it can be stored in bubbles/list. graphPrefix
+// is the ASCII graph segment (e.g. "* ", "|\\ ") rendered to the left of the
+// commit row; empty when no graph data is available yet.
+type commitItem struct {
+	c           git.Commit
+	graphPrefix string
+}
 
 func (i commitItem) FilterValue() string { return i.c.Subject }
 
-// commitDelegate renders one commit per line: prefix + short hash + relative
-// time + subject (with truncation when the row is too narrow).
-type commitDelegate struct{}
+// graphRow pairs a commit with its graph segment. The git wrapper returns
+// more general GraphRow values that also include connector-only rows; we keep
+// only commit rows here so the list widget's index↔commit mapping stays 1:1.
+type graphRow struct {
+	commit      git.Commit
+	graphPrefix string
+}
+
+// commitDelegate renders one commit per line: cursor + graph + short hash +
+// relative time + subject (with truncation when the row is too narrow).
+// graphWidth is the column width every row should reserve for the graph
+// segment so columns stay aligned across the visible window.
+type commitDelegate struct {
+	graphWidth int
+}
 
 func (commitDelegate) Height() int                             { return 1 }
 func (commitDelegate) Spacing() int                            { return 0 }
@@ -46,7 +65,7 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	}
 	selected := index == m.Index()
 	width := m.Width()
-	_, _ = fmt.Fprint(w, renderCommitLine(ci.c, width, selected))
+	_, _ = fmt.Fprint(w, renderCommitLine(ci.c, ci.graphPrefix, d.graphWidth, width, selected))
 }
 
 var (
@@ -54,53 +73,79 @@ var (
 	timeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime))
 	cursorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected))
 	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected)).Bold(true)
+	graphStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(colorGraph))
 )
 
-func renderCommitLine(c git.Commit, width int, selected bool) string {
+func renderCommitLine(c git.Commit, graphPrefix string, graphWidth, width int, selected bool) string {
 	hash := c.Hash
 	if len(hash) > shortHashLen {
 		hash = hash[:shortHashLen]
 	}
 	rel := relativeShort(c.AuthorTime)
 
-	prefix := "  "
+	cursor := "  "
 	if selected {
-		prefix = cursorStyle.Render("›") + " "
+		cursor = cursorStyle.Render("›") + " "
 	}
-	const prefixWidth = 2 // "› " or "  "
+	const cursorWidth = 2
 
-	// Layout: [prefix][hash] [right-aligned rel in timeColWidth] [subject]
-	used := prefixWidth + shortHashLen + 1 + timeColWidth + 1
-	remaining := width - used
-
-	if remaining < 1 {
-		return prefix + hashStyle.Render(hash)
+	// Cap graph so it never eats into the hash column on narrow terminals.
+	hashCap := width - cursorWidth - shortHashLen
+	if hashCap < 0 {
+		hashCap = 0
+	}
+	effectiveGraphWidth := graphWidth
+	if effectiveGraphWidth > hashCap {
+		effectiveGraphWidth = hashCap
 	}
 
-	subject := runewidth.Truncate(c.Subject, remaining, "…")
+	graphCell := ""
+	if effectiveGraphWidth > 0 {
+		gp := runewidth.Truncate(graphPrefix, effectiveGraphWidth, "")
+		gp = runewidth.FillRight(gp, effectiveGraphWidth)
+		graphCell = graphStyle.Render(gp)
+	}
+
+	// Layout: [cursor 2][graph N][subject (gap)][hash 7][space][rel 6]
+	// — subject is left-aligned right after the graph; hash and rel sit at
+	// the row's right edge, mirroring Fork's commit list.
+	used := cursorWidth + effectiveGraphWidth + 1 + shortHashLen + 1 + timeColWidth
+	subjectWidth := width - used
+
+	if subjectWidth < 1 {
+		// Row is too narrow for the subject — drop it but keep hash visible.
+		return cursor + graphCell + hashStyle.Render(hash)
+	}
+
+	subject := runewidth.Truncate(c.Subject, subjectWidth, "…")
+	subject = runewidth.FillRight(subject, subjectWidth)
 	if selected {
 		subject = selectedStyle.Render(subject)
 	}
 
-	return fmt.Sprintf("%s%s %s %s",
-		prefix,
+	return fmt.Sprintf("%s%s%s %s %s",
+		cursor,
+		graphCell,
+		subject,
 		hashStyle.Render(hash),
 		timeStyle.Render(runewidth.FillLeft(rel, timeColWidth)),
-		subject,
 	)
 }
 
 // graphModel is the middle-pane sub-model.
 type graphModel struct {
-	list   list.Model
-	width  int
-	height int
-	err    error
-	loaded bool
+	list       list.Model
+	delegate   commitDelegate
+	width      int
+	height     int
+	err        error
+	loaded     bool
+	graphWidth int
 }
 
 func newGraphModel() graphModel {
-	l := list.New(nil, commitDelegate{}, 0, 0)
+	d := commitDelegate{}
+	l := list.New(nil, d, 0, 0)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
@@ -108,24 +153,32 @@ func newGraphModel() graphModel {
 	l.SetFilteringEnabled(false)
 	l.DisableQuitKeybindings()
 	l.SetShowFilter(false)
-	return graphModel{list: l}
+	return graphModel{list: l, delegate: d}
 }
 
-// Messages emitted by loadCommitsCmd.
-type commitsLoadedMsg struct{ commits []git.Commit }
+type commitsLoadedMsg struct{ rows []graphRow }
 type commitsLoadFailedMsg struct{ err error }
 
-// loadCommitsCmd runs git.Log in a tea.Cmd. dir == "" uses the process cwd.
-// refs == nil falls back to HEAD; pass `[]string{"--all"}` for the all-refs view.
+// loadCommitsCmd runs git.LogGraph in a tea.Cmd. dir == "" uses the process
+// cwd. refs == nil falls back to HEAD; pass `[]string{"--all"}` for the
+// all-refs view. Connector-only rows are dropped so the list widget keeps a
+// 1:1 mapping between rows and commits.
 func loadCommitsCmd(dir string, refs []string, max int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		commits, err := git.Log(ctx, git.LogOptions{Dir: dir, Refs: refs, MaxCount: max})
+		gr, err := git.LogGraph(ctx, git.LogOptions{Dir: dir, Refs: refs, MaxCount: max})
 		if err != nil {
 			return commitsLoadFailedMsg{err: err}
 		}
-		return commitsLoadedMsg{commits: commits}
+		rows := make([]graphRow, 0, len(gr))
+		for _, r := range gr {
+			if !r.IsCommit {
+				continue
+			}
+			rows = append(rows, graphRow{commit: r.Commit, graphPrefix: r.GraphPrefix})
+		}
+		return commitsLoadedMsg{rows: rows}
 	}
 }
 
@@ -134,10 +187,19 @@ func (g graphModel) Init() tea.Cmd { return nil }
 func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 	switch m := msg.(type) {
 	case commitsLoadedMsg:
-		items := make([]list.Item, len(m.commits))
-		for i, c := range m.commits {
-			items[i] = commitItem{c: c}
+		items := make([]list.Item, len(m.rows))
+		maxW := 0
+		for i, r := range m.rows {
+			items[i] = commitItem{c: r.commit, graphPrefix: r.graphPrefix}
+			// graphPrefix is ASCII-only ('*', '|', '/', '\\', '_', '-', ' ')
+			// so byte length equals visual width.
+			if w := len(r.graphPrefix); w > maxW {
+				maxW = w
+			}
 		}
+		g.graphWidth = maxW
+		g.delegate.graphWidth = maxW
+		g.list.SetDelegate(g.delegate)
 		cmd := g.list.SetItems(items)
 		g.loaded = true
 		g.err = nil
@@ -182,6 +244,9 @@ func (g *graphModel) SetSize(w, h int) {
 func (g *graphModel) ResetForReload() tea.Cmd {
 	g.loaded = false
 	g.err = nil
+	g.graphWidth = 0
+	g.delegate.graphWidth = 0
+	g.list.SetDelegate(g.delegate)
 	return g.list.SetItems(nil)
 }
 

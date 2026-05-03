@@ -67,24 +67,25 @@ func TestAllocateRootClearsLane(t *testing.T) {
 	}
 }
 
-// TestAllocateLaneColorsStableAcrossBranch — once a branch's color is
-// assigned, it stays the same for every row of that branch's lifetime.
-func TestAllocateLaneColorsStableAcrossBranch(t *testing.T) {
+// TestAllocateLaneEqualsColumnIndex — every cell's Lane equals its column,
+// so the renderer can color by column and the same vertical track keeps
+// the same color even after a freed column is reused.
+func TestAllocateLaneEqualsColumnIndex(t *testing.T) {
 	a := New()
-	rM := a.Push(git.Commit{Hash: "m", Parents: []string{"c", "b"}})
-	rB := a.Push(git.Commit{Hash: "b", Parents: []string{"a"}})
-	rC := a.Push(git.Commit{Hash: "c", Parents: []string{"a"}})
-
-	mainColor := rM.Cells[0].Lane
-	featColor := rM.Cells[1].Lane
-	if mainColor == featColor {
-		t.Errorf("main and feat lanes share color %d — must differ", mainColor)
+	rows := []Row{
+		a.Push(git.Commit{Hash: "m", Parents: []string{"c", "b"}}),
+		a.Push(git.Commit{Hash: "b", Parents: []string{"a"}}),
+		a.Push(git.Commit{Hash: "c", Parents: []string{"a"}}),
 	}
-	if rC.Cells[0].Lane != mainColor {
-		t.Errorf("rC lane 0 color = %d, want %d (main lane)", rC.Cells[0].Lane, mainColor)
-	}
-	if rB.Cells[1].Lane != featColor {
-		t.Errorf("rB lane 1 color = %d, want %d (feat lane)", rB.Cells[1].Lane, featColor)
+	for ri, r := range rows {
+		for ci, cell := range r.Cells {
+			if cell.Kind == CellEmpty {
+				continue
+			}
+			if cell.Lane != ci {
+				t.Errorf("rows[%d].Cells[%d].Lane = %d, want %d (column index)", ri, ci, cell.Lane, ci)
+			}
+		}
 	}
 }
 

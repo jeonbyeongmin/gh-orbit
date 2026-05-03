@@ -35,10 +35,9 @@ const (
 // Cell is one column of one row.
 type Cell struct {
 	Kind CellKind
-	// Lane is a stable per-branch identifier used as the color rotation
-	// key. It differs from the column index — when a branch is freed and
-	// a new branch later reuses the same column, Lane changes so colors
-	// don't bleed across branches.
+	// Lane is the column index; the renderer uses it as the color rotation
+	// key so every cell on the same vertical track shares a color, even
+	// when a freed column is later reused by a different branch.
 	Lane int
 }
 
@@ -55,11 +54,6 @@ type Row struct {
 type Allocator struct {
 	// slots[i] = next-expected commit hash on column i, "" if free.
 	slots []string
-	// colors[i] = color rotation key of whatever branch currently
-	// occupies column i. Meaningful only when slots[i] != "".
-	colors []int
-	// nextColor is incremented every time a brand-new branch is opened.
-	nextColor int
 }
 
 // New returns a fresh allocator.
@@ -68,15 +62,10 @@ func New() *Allocator { return &Allocator{} }
 // Push lays out one commit and returns its row.
 func (a *Allocator) Push(c git.Commit) Row {
 	merging := a.findMergingCols(c.Hash)
-
-	commitCol, commitColor := a.placeCommit(merging)
-
-	cells := a.buildRow(commitCol, commitColor, merging)
-
-	a.advanceState(commitCol, commitColor, merging, c.Parents)
-
+	commitCol := a.placeCommit(merging)
+	cells := a.buildRow(commitCol, merging)
+	a.advanceState(commitCol, merging, c.Parents)
 	cells = a.appendForkCells(cells, commitCol, c.Parents)
-
 	return Row{Cells: cells, CommitLane: commitCol}
 }
 
@@ -90,19 +79,14 @@ func (a *Allocator) findMergingCols(hash string) []int {
 	return out
 }
 
-func (a *Allocator) placeCommit(merging []int) (col, color int) {
+func (a *Allocator) placeCommit(merging []int) int {
 	if len(merging) == 0 {
-		col = a.firstFree()
-		color = a.nextColor
-		a.nextColor++
-		return col, color
+		return a.firstFree()
 	}
-	col = merging[0]
-	color = a.colors[col]
-	return col, color
+	return merging[0]
 }
 
-func (a *Allocator) buildRow(commitCol, commitColor int, merging []int) []Cell {
+func (a *Allocator) buildRow(commitCol int, merging []int) []Cell {
 	width := len(a.slots)
 	if commitCol >= width {
 		width = commitCol + 1
@@ -111,15 +95,15 @@ func (a *Allocator) buildRow(commitCol, commitColor int, merging []int) []Cell {
 	for i := 0; i < width; i++ {
 		switch {
 		case i == commitCol:
-			cells[i] = Cell{Kind: CellCommit, Lane: commitColor}
+			cells[i] = Cell{Kind: CellCommit, Lane: i}
 		case slices.Contains(merging, i):
 			kind := CellMergeRight
 			if i < commitCol {
 				kind = CellMergeLeft
 			}
-			cells[i] = Cell{Kind: kind, Lane: a.colors[i]}
+			cells[i] = Cell{Kind: kind, Lane: i}
 		case i < len(a.slots) && a.slots[i] != "":
-			cells[i] = Cell{Kind: CellPipe, Lane: a.colors[i]}
+			cells[i] = Cell{Kind: CellPipe, Lane: i}
 		default:
 			cells[i] = Cell{Kind: CellEmpty}
 		}
@@ -127,20 +111,17 @@ func (a *Allocator) buildRow(commitCol, commitColor int, merging []int) []Cell {
 	return cells
 }
 
-func (a *Allocator) advanceState(commitCol, commitColor int, merging []int, parents []string) {
+func (a *Allocator) advanceState(commitCol int, merging []int, parents []string) {
 	if len(merging) > 1 {
 		for _, s := range merging[1:] {
 			a.slots[s] = ""
-			a.colors[s] = 0
 		}
 	}
 	a.growSlotsTo(commitCol + 1)
 	if len(parents) >= 1 {
 		a.slots[commitCol] = parents[0]
-		a.colors[commitCol] = commitColor
 	} else {
 		a.slots[commitCol] = ""
-		a.colors[commitCol] = 0
 	}
 }
 
@@ -152,8 +133,6 @@ func (a *Allocator) appendForkCells(cells []Cell, commitCol int, parents []strin
 		s := a.firstFree()
 		a.growSlotsTo(s + 1)
 		a.slots[s] = p
-		a.colors[s] = a.nextColor
-		a.nextColor++
 
 		for len(cells) <= s {
 			cells = append(cells, Cell{Kind: CellEmpty})
@@ -162,7 +141,7 @@ func (a *Allocator) appendForkCells(cells []Cell, commitCol int, parents []strin
 		if s < commitCol {
 			kind = CellForkLeft
 		}
-		cells[s] = Cell{Kind: kind, Lane: a.colors[s]}
+		cells[s] = Cell{Kind: kind, Lane: s}
 	}
 	return cells
 }
@@ -179,6 +158,5 @@ func (a *Allocator) firstFree() int {
 func (a *Allocator) growSlotsTo(n int) {
 	for len(a.slots) < n {
 		a.slots = append(a.slots, "")
-		a.colors = append(a.colors, 0)
 	}
 }

@@ -13,7 +13,11 @@
 // 1:1 mapping between rows and commits.
 package lanes
 
-import "github.com/jeonbyeongmin/gh-orbit/internal/git"
+import (
+	"slices"
+
+	"github.com/jeonbyeongmin/gh-orbit/internal/git"
+)
 
 // CellKind names every shape the renderer needs to know about.
 type CellKind uint8
@@ -108,7 +112,7 @@ func (a *Allocator) buildRow(commitCol, commitColor int, merging []int) []Cell {
 		switch {
 		case i == commitCol:
 			cells[i] = Cell{Kind: CellCommit, Lane: commitColor}
-		case containsInt(merging, i):
+		case slices.Contains(merging, i):
 			kind := CellMergeRight
 			if i < commitCol {
 				kind = CellMergeLeft
@@ -177,13 +181,4 @@ func (a *Allocator) growSlotsTo(n int) {
 		a.slots = append(a.slots, "")
 		a.colors = append(a.colors, 0)
 	}
-}
-
-func containsInt(s []int, v int) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }

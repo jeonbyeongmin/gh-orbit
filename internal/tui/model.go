@@ -204,7 +204,7 @@ var (
 	statusErrS  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 )
 
-const helpText = "h/l move focus · j/k navigate · enter select ref · a all · F fetch · r reload · q quit"
+const helpText = "h/l move focus · j/k navigate · enter jump to ref · F fetch · r reload · q quit"
 
 // helpRendered is the styled help line. helpText is const, so we render once
 // at package init instead of every View() frame.

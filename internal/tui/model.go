@@ -23,18 +23,23 @@ func (p pane) title() string {
 type Model struct {
 	width, height int
 	focused       pane
+	refs          refModel
 	graph         graphModel
 }
 
 func New() Model {
 	return Model{
 		focused: paneGraph,
+		refs:    newRefsModel(),
 		graph:   newGraphModel(),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return loadCommitsCmd("", defaultLogMaxCount)
+	return tea.Batch(
+		loadCommitsCmd("", defaultLogMaxCount),
+		loadRefsCmd(""),
+	)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -42,12 +47,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		s := m.paneSizes()
+		m.refs.SetSize(s.refsW, s.contentH)
 		m.graph.SetSize(s.graphW, s.contentH)
 		return m, nil
 
 	case commitsLoadedMsg, commitsLoadFailedMsg:
 		var cmd tea.Cmd
 		m.graph, cmd = m.graph.Update(msg)
+		return m, cmd
+
+	case refsLoadedMsg, refsLoadFailedMsg:
+		var cmd tea.Cmd
+		m.refs, cmd = m.refs.Update(msg)
 		return m, cmd
 
 	case tea.KeyMsg:
@@ -65,7 +76,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.focused == paneGraph {
+		switch m.focused {
+		case paneRefs:
+			var cmd tea.Cmd
+			m.refs, cmd = m.refs.Update(msg)
+			return m, cmd
+		case paneGraph:
 			var cmd tea.Cmd
 			m.graph, cmd = m.graph.Update(msg)
 			return m, cmd
@@ -118,7 +134,7 @@ func (m Model) View() string {
 	widths := [paneCount]int{s.refsW, s.graphW, s.diffW}
 
 	contents := [paneCount]string{
-		paneRefs.title(),
+		m.refs.View(),
 		m.graph.View(),
 		paneDiff.title(),
 	}

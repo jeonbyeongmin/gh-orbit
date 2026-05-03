@@ -18,8 +18,17 @@ commit-graph-first workflow with PR review sitting next to it.
 PR review/merge is a follow-up milestone. Right now the build wires up:
 
 - 3-pane Fork-style layout (refs / commit graph / diff) — placeholder content
-- vim-style key bindings: `h` / `l` move pane focus, `q` quits
-- `internal/git.Log()` reading the user's `git` binary
+- vim-style key bindings:
+  - `h` / `l` — move pane focus
+  - `j` / `k` — navigate within pane
+  - `enter` — select ref (refs pane)
+  - `a` — show every ref's commits (refs pane)
+  - `F` — `git fetch --all` in the background
+  - `r` — reload refs + log
+  - `q` / `ctrl+c` — quit
+  - `R` is reserved for a future Rebase action.
+- a status line next to the help row surfaces fetch progress and errors
+- `internal/git.Log()` / `git.Fetch()` shelling out to the user's `git` binary
 
 ## Install
 

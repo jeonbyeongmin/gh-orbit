@@ -69,25 +69,13 @@ func TestLogIntegration(t *testing.T) {
 	}
 	dir := t.TempDir()
 
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
-		}
-	}
-	run("init", "-b", "main")
-	run("commit", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "commit", "--allow-empty", "-m", "first")
 	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	run("add", "f")
-	run("commit", "-m", "second")
+	gitRun(t, dir, "add", "f")
+	gitRun(t, dir, "commit", "-m", "second")
 
 	commits, err := Log(context.Background(), LogOptions{Dir: dir})
 	if err != nil {

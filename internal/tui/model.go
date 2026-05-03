@@ -139,11 +139,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch m.focused {
 		case paneRefs:
-			if msg.String() == "a" {
-				resetCmd := m.graph.ResetForReload()
-				m.currentRefs = []string{refsAllSentinel}
-				return m, tea.Batch(resetCmd, loadCommitsCmd("", m.currentRefs, defaultLogMaxCount))
-			}
 			var cmd tea.Cmd
 			m.refs, cmd = m.refs.Update(msg)
 			return m, cmd

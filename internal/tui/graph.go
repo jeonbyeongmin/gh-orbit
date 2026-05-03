@@ -116,11 +116,12 @@ type commitsLoadedMsg struct{ commits []git.Commit }
 type commitsLoadFailedMsg struct{ err error }
 
 // loadCommitsCmd runs git.Log in a tea.Cmd. dir == "" uses the process cwd.
-func loadCommitsCmd(dir string, max int) tea.Cmd {
+// refs == nil falls back to HEAD; pass `[]string{"--all"}` for the all-refs view.
+func loadCommitsCmd(dir string, refs []string, max int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		commits, err := git.Log(ctx, git.LogOptions{Dir: dir, MaxCount: max})
+		commits, err := git.Log(ctx, git.LogOptions{Dir: dir, Refs: refs, MaxCount: max})
 		if err != nil {
 			return commitsLoadFailedMsg{err: err}
 		}
@@ -171,6 +172,17 @@ func (g *graphModel) SetSize(w, h int) {
 	g.width = w
 	g.height = h
 	g.list.SetSize(w, h)
+}
+
+// ResetForReload clears state so View renders the "loading…" placeholder
+// again. Use this before dispatching a fresh loadCommitsCmd so the UI
+// reflects that the visible commits no longer match the requested ref. The
+// returned cmd is non-nil only when a list filter is active (filter rebuild) —
+// callers should batch it with the new load cmd.
+func (g *graphModel) ResetForReload() tea.Cmd {
+	g.loaded = false
+	g.err = nil
+	return g.list.SetItems(nil)
 }
 
 // Selected returns the commit currently under the cursor, if any.

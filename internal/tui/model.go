@@ -20,21 +20,30 @@ func (p pane) title() string {
 	return [...]string{"refs", "commit graph", "diff"}[p]
 }
 
+// refsAllSentinel is the git revision spec that means "every ref". Passed to
+// loadCommitsCmd when the user hits 'a' on the refs pane.
+const refsAllSentinel = "--all"
+
 type Model struct {
 	width, height int
 	focused       pane
+	refs          refModel
 	graph         graphModel
 }
 
 func New() Model {
 	return Model{
 		focused: paneGraph,
+		refs:    newRefsModel(),
 		graph:   newGraphModel(),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return loadCommitsCmd("", defaultLogMaxCount)
+	return tea.Batch(
+		loadCommitsCmd("", nil, defaultLogMaxCount),
+		loadRefsCmd(""),
+	)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -42,6 +51,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		s := m.paneSizes()
+		m.refs.SetSize(s.refsW, s.contentH)
 		m.graph.SetSize(s.graphW, s.contentH)
 		return m, nil
 
@@ -49,6 +59,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.graph, cmd = m.graph.Update(msg)
 		return m, cmd
+
+	case refsLoadedMsg, refsLoadFailedMsg:
+		var cmd tea.Cmd
+		m.refs, cmd = m.refs.Update(msg)
+		return m, cmd
+
+	case refSelectedMsg:
+		resetCmd := m.graph.ResetForReload()
+		return m, tea.Batch(resetCmd, loadCommitsCmd("", []string{msg.ref.FullName}, defaultLogMaxCount))
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -65,7 +84,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.focused == paneGraph {
+		switch m.focused {
+		case paneRefs:
+			if msg.String() == "a" {
+				resetCmd := m.graph.ResetForReload()
+				return m, tea.Batch(resetCmd, loadCommitsCmd("", []string{refsAllSentinel}, defaultLogMaxCount))
+			}
+			var cmd tea.Cmd
+			m.refs, cmd = m.refs.Update(msg)
+			return m, cmd
+		case paneGraph:
 			var cmd tea.Cmd
 			m.graph, cmd = m.graph.Update(msg)
 			return m, cmd
@@ -118,7 +146,7 @@ func (m Model) View() string {
 	widths := [paneCount]int{s.refsW, s.graphW, s.diffW}
 
 	contents := [paneCount]string{
-		paneRefs.title(),
+		m.refs.View(),
 		m.graph.View(),
 		paneDiff.title(),
 	}
@@ -136,5 +164,5 @@ func (m Model) View() string {
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, boxes[paneRefs], boxes[paneGraph], boxes[paneDiff])
-	return lipgloss.JoinVertical(lipgloss.Left, row, help.Render("h/l move focus · j/k navigate · q quit"))
+	return lipgloss.JoinVertical(lipgloss.Left, row, help.Render("h/l move focus · j/k navigate · enter select ref · a all · q quit"))
 }

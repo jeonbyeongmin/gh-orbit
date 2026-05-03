@@ -76,6 +76,24 @@ func TestGraphModelHandlesLoadFailure(t *testing.T) {
 	}
 }
 
+func TestGraphModelResetForReloadReturnsToLoading(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(40, 10)
+	g, _ = g.Update(commitsLoadedMsg{commits: []git.Commit{
+		{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()},
+	}})
+	if !g.loaded {
+		t.Fatalf("graph should be loaded after commitsLoadedMsg")
+	}
+	g.ResetForReload()
+	if g.loaded {
+		t.Errorf("ResetForReload should clear loaded flag")
+	}
+	if got := g.View(); got != "loading…" {
+		t.Errorf("after reset, View = %q, want %q", got, "loading…")
+	}
+}
+
 type sentinelErr struct{}
 
 func (sentinelErr) Error() string { return "sentinel" }

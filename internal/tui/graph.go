@@ -151,7 +151,6 @@ func newGraphModel() graphModel {
 	return graphModel{list: l, delegate: d}
 }
 
-// Messages emitted by loadCommitsCmd.
 type commitsLoadedMsg struct{ rows []graphRow }
 type commitsLoadFailedMsg struct{ err error }
 
@@ -187,7 +186,9 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 		maxW := 0
 		for i, r := range m.rows {
 			items[i] = commitItem{c: r.commit, graphPrefix: r.graphPrefix}
-			if w := runewidth.StringWidth(r.graphPrefix); w > maxW {
+			// graphPrefix is ASCII-only ('*', '|', '/', '\\', '_', '-', ' ')
+			// so byte length equals visual width.
+			if w := len(r.graphPrefix); w > maxW {
 				maxW = w
 			}
 		}

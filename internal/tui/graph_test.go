@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
@@ -92,10 +94,9 @@ func TestRenderCommitLinePadsShortGraphPrefix(t *testing.T) {
 		t.Fatalf("expected star and hash in %q", line)
 	}
 	between := line[starIdx+1 : hashIdx]
-	// `between` may include ANSI reset codes from lipgloss; we only care
-	// that the rendered visual width is 3 spaces, so check via runewidth on
-	// the stripped form.
-	stripped := stripANSI(between)
+	// `between` may include ANSI reset codes from lipgloss; only the
+	// rendered visual width matters here.
+	stripped := ansi.Strip(between)
 	if stripped != "   " {
 		t.Errorf("expected 3 spaces between '*' and hash, got %q (raw %q)", stripped, between)
 	}
@@ -112,26 +113,6 @@ func TestRenderCommitLineGraphTruncatedAtNarrowWidth(t *testing.T) {
 	if !strings.Contains(line, "abcdef1") {
 		t.Errorf("hash must remain visible even when graph is wider than budget, got %q", line)
 	}
-}
-
-// stripANSI removes the most common SGR escape sequences so width assertions
-// don't trip on lipgloss styling output.
-func stripANSI(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
-			j := i + 2
-			for j < len(s) && s[j] != 'm' {
-				j++
-			}
-			if j < len(s) {
-				i = j
-			}
-			continue
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
 }
 
 func TestGraphModelInitialView(t *testing.T) {

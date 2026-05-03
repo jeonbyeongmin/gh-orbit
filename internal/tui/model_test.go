@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ func TestModelRefSelectedReloadsGraph(t *testing.T) {
 	if !strings.Contains(m.graph.View(), "loading") {
 		t.Errorf("graph view should show loading state, got %q", m.graph.View())
 	}
-	if got, want := m.currentRefs, []string{"refs/heads/feat"}; !equalStrings(got, want) {
+	if got, want := m.currentRefs, []string{"refs/heads/feat"}; !slices.Equal(got, want) {
 		t.Errorf("currentRefs should track selected ref: got %v want %v", got, want)
 	}
 }
@@ -67,7 +68,7 @@ func TestModelAllKeyOnRefsPaneReloadsGraph(t *testing.T) {
 	if cmd == nil {
 		t.Error("'a' on refs pane should return a load cmd")
 	}
-	if got, want := m.currentRefs, []string{refsAllSentinel}; !equalStrings(got, want) {
+	if got, want := m.currentRefs, []string{refsAllSentinel}; !slices.Equal(got, want) {
 		t.Errorf("currentRefs should track --all sentinel: got %v want %v", got, want)
 	}
 }
@@ -122,19 +123,7 @@ func TestModelRKeyPreservesCurrentRefs(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	m = updated.(Model)
-	if got, want := m.currentRefs, []string{"refs/heads/feat"}; !equalStrings(got, want) {
+	if got, want := m.currentRefs, []string{"refs/heads/feat"}; !slices.Equal(got, want) {
 		t.Errorf("R should preserve currentRefs: got %v want %v", got, want)
 	}
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

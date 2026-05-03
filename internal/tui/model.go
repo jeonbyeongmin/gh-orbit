@@ -85,8 +85,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refSelectedMsg:
 		// Unified graph: Enter no longer reloads; it jumps the graph cursor
 		// to the row whose hash equals the ref tip. currentRefs stays at
-		// [refsAllSentinel] so reload(r) keeps the unified base.
-		m.graph.JumpToHash(msg.ref.ObjectName)
+		// [refsAllSentinel] so reload(r) keeps the unified base. When the
+		// tip is outside the loaded MaxCount window we surface that through
+		// the status bar instead of failing silently.
+		if m.graph.JumpToHash(msg.ref.ObjectName) {
+			m.status = ""
+		} else {
+			m.status = "ref tip not in loaded window: " + msg.ref.ShortName
+			m.statusStyle = statusErrS
+		}
 		return m, nil
 
 	case fetchSucceededMsg:

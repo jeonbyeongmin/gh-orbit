@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -31,7 +32,7 @@ func TestRefModelRendersAllSectionHeaders(t *testing.T) {
 	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
 		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
 	}})
-	view := stripANSI(r.View())
+	view := ansi.Strip(r.View())
 	for _, header := range []string{"Local branches", "Remote branches", "Tags"} {
 		if !strings.Contains(view, header) {
 			t.Errorf("view should contain %q, got %q", header, view)
@@ -43,7 +44,7 @@ func TestRefModelEmptySectionsShowPlaceholder(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 20)
 	r, _ = r.Update(refsLoadedMsg{refs: nil})
-	view := stripANSI(r.View())
+	view := ansi.Strip(r.View())
 	if !strings.Contains(view, "(empty)") {
 		t.Errorf("empty sections should render '(empty)' placeholder, got %q", view)
 	}
@@ -62,7 +63,7 @@ func TestRefModelHEADHasStarMarker(t *testing.T) {
 		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
 		{ShortName: "feat/x", Kind: git.RefKindLocal},
 	}})
-	view := stripANSI(r.View())
+	view := ansi.Strip(r.View())
 	// Find the line for `main` and verify it has the `*` prefix.
 	for _, line := range strings.Split(view, "\n") {
 		if strings.Contains(line, "main") && !strings.Contains(line, "Local") {
@@ -82,7 +83,7 @@ func TestRefModelTruncatesLongName(t *testing.T) {
 	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
 		{ShortName: "feat/very-long-branch-name-that-overflows", Kind: git.RefKindLocal},
 	}})
-	view := stripANSI(r.View())
+	view := ansi.Strip(r.View())
 	if !strings.Contains(view, "…") {
 		t.Errorf("long name should be truncated with '…', got %q", view)
 	}
@@ -151,23 +152,3 @@ func TestRefModelEnterOnEmptyDoesNothing(t *testing.T) {
 	}
 }
 
-// stripANSI removes ANSI escape sequences so tests can search rendered text
-// without worrying about lipgloss color codes.
-func stripANSI(s string) string {
-	var b strings.Builder
-	in := false
-	for _, c := range s {
-		if c == 0x1b {
-			in = true
-			continue
-		}
-		if in {
-			if c == 'm' {
-				in = false
-			}
-			continue
-		}
-		b.WriteRune(c)
-	}
-	return b.String()
-}

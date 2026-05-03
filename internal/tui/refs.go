@@ -18,9 +18,11 @@ import (
 const refLoadTimeout = 30 * time.Second
 
 type refModel struct {
-	refs   []git.Ref
+	// byKind caches refs partitioned in render order so View / Selected /
+	// keypress bounds checks don't re-walk r.refs on every frame. Index
+	// matches refSections.
+	byKind [3][]git.Ref
 	width  int
-	height int
 	cursor int
 	loaded bool
 	err    error
@@ -35,7 +37,6 @@ type refsLoadFailedMsg struct{ err error }
 // uses it to reload the graph pane against the chosen ref.
 type refSelectedMsg struct{ ref git.Ref }
 
-// loadRefsCmd runs git.ForEachRef in a tea.Cmd. dir == "" uses the process cwd.
 func loadRefsCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), refLoadTimeout)
@@ -53,7 +54,7 @@ func (r refModel) Init() tea.Cmd { return nil }
 func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	switch m := msg.(type) {
 	case refsLoadedMsg:
-		r.refs = m.refs
+		r.byKind = partitionByKind(m.refs)
 		r.cursor = 0
 		r.loaded = true
 		r.err = nil
@@ -75,10 +76,10 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 }
 
 func (r refModel) handleKey(msg tea.KeyMsg) refModel {
-	sel := r.selectable()
+	total := r.selectableCount()
 	switch msg.String() {
 	case "j", "down":
-		if r.cursor < len(sel)-1 {
+		if r.cursor < total-1 {
 			r.cursor++
 		}
 	case "k", "up":
@@ -88,8 +89,8 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 	case "g":
 		r.cursor = 0
 	case "G":
-		if len(sel) > 0 {
-			r.cursor = len(sel) - 1
+		if total > 0 {
+			r.cursor = total - 1
 		}
 	}
 	return r
@@ -98,39 +99,43 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 // Selected returns the ref under the cursor, if any. Headers and empty-section
 // placeholders are not counted by the cursor — only refs are selectable.
 func (r refModel) Selected() (git.Ref, bool) {
-	sel := r.selectable()
-	if r.cursor < 0 || r.cursor >= len(sel) {
+	idx := r.cursor
+	if idx < 0 {
 		return git.Ref{}, false
 	}
-	return sel[r.cursor], true
+	for _, items := range r.byKind {
+		if idx < len(items) {
+			return items[idx], true
+		}
+		idx -= len(items)
+	}
+	return git.Ref{}, false
 }
 
-// selectable returns refs in render order (Local → Remote → Tags). The cursor
-// indexes into this slice.
-func (r refModel) selectable() []git.Ref {
-	out := make([]git.Ref, 0, len(r.refs))
-	for _, k := range []git.RefKind{git.RefKindLocal, git.RefKindRemote, git.RefKindTag} {
-		for _, ref := range r.refs {
-			if ref.Kind == k {
-				out = append(out, ref)
+func (r refModel) selectableCount() int {
+	return len(r.byKind[0]) + len(r.byKind[1]) + len(r.byKind[2])
+}
+
+func partitionByKind(refs []git.Ref) [3][]git.Ref {
+	var out [3][]git.Ref
+	for i, sec := range refSections {
+		for _, ref := range refs {
+			if ref.Kind == sec.kind {
+				out[i] = append(out[i], ref)
 			}
 		}
 	}
 	return out
 }
 
-var (
-	refHeaderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime)).Bold(true)
-	refEmptyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime))
-	refHeadStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected))
-)
+var refHeaderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime)).Bold(true)
 
 type refSection struct {
 	title string
 	kind  git.RefKind
 }
 
-var refSections = []refSection{
+var refSections = [3]refSection{
 	{"Local branches", git.RefKindLocal},
 	{"Remote branches", git.RefKindRemote},
 	{"Tags", git.RefKindTag},
@@ -149,38 +154,26 @@ func (r refModel) View() string {
 	}
 
 	var b strings.Builder
-	cursorIdx := -1
-	first := true
-	for _, sec := range refSections {
-		if !first {
+	cursorIdx := 0
+	for i, sec := range refSections {
+		if i > 0 {
 			b.WriteByte('\n')
 		}
-		first = false
 		b.WriteString(refHeaderStyle.Render(runewidth.Truncate(sec.title, width, "…")))
 
-		items := refsOfKind(r.refs, sec.kind)
+		items := r.byKind[i]
 		if len(items) == 0 {
 			b.WriteByte('\n')
-			b.WriteString(refEmptyStyle.Render(runewidth.Truncate("  (empty)", width, "…")))
+			b.WriteString(timeStyle.Render(runewidth.Truncate("  (empty)", width, "…")))
 			continue
 		}
 		for _, ref := range items {
-			cursorIdx++
 			b.WriteByte('\n')
 			b.WriteString(renderRefLine(ref, width, cursorIdx == r.cursor))
+			cursorIdx++
 		}
 	}
 	return b.String()
-}
-
-func refsOfKind(refs []git.Ref, kind git.RefKind) []git.Ref {
-	var out []git.Ref
-	for _, r := range refs {
-		if r.Kind == kind {
-			out = append(out, r)
-		}
-	}
-	return out
 }
 
 func renderRefLine(ref git.Ref, width int, selected bool) string {
@@ -191,7 +184,7 @@ func renderRefLine(ref git.Ref, width int, selected bool) string {
 	// name itself.
 	prefix := "  "
 	if ref.IsHead {
-		prefix = refHeadStyle.Render("*") + " "
+		prefix = cursorStyle.Render("*") + " "
 	}
 
 	avail := width - prefixWidth
@@ -203,13 +196,11 @@ func renderRefLine(ref git.Ref, width int, selected bool) string {
 	case selected:
 		name = selectedStyle.Render(name)
 	case ref.IsHead:
-		name = refHeadStyle.Render(name)
+		name = cursorStyle.Render(name)
 	}
 	return prefix + name
 }
 
-// SetSize must be called when the parent pane's inner content area changes.
-func (r *refModel) SetSize(w, h int) {
+func (r *refModel) SetSize(w, _ int) {
 	r.width = w
-	r.height = h
 }

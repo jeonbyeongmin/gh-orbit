@@ -176,11 +176,13 @@ func (g *graphModel) SetSize(w, h int) {
 
 // ResetForReload clears state so View renders the "loading…" placeholder
 // again. Use this before dispatching a fresh loadCommitsCmd so the UI
-// reflects that the visible commits no longer match the requested ref.
-func (g *graphModel) ResetForReload() {
+// reflects that the visible commits no longer match the requested ref. The
+// returned cmd is non-nil only when a list filter is active (filter rebuild) —
+// callers should batch it with the new load cmd.
+func (g *graphModel) ResetForReload() tea.Cmd {
 	g.loaded = false
 	g.err = nil
-	_ = g.list.SetItems(nil)
+	return g.list.SetItems(nil)
 }
 
 // Selected returns the commit currently under the cursor, if any.

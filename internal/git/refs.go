@@ -54,9 +54,15 @@ type ForEachRefOptions struct {
 
 const refFormat = "%(refname)%00%(refname:short)%00%(objecttype)%00%(objectname)%00%(*objectname)%00%(HEAD)%00%(upstream:short)"
 
+const (
+	refsHeadsPrefix   = "refs/heads/"
+	refsRemotesPrefix = "refs/remotes/"
+	refsTagsPrefix    = "refs/tags/"
+)
+
 // defaultRefPatterns intentionally excludes refs/stash, refs/notes, refs/pull,
 // etc. — those have separate UX and would clutter the Local/Remote/Tags split.
-var defaultRefPatterns = []string{"refs/heads/", "refs/remotes/", "refs/tags/"}
+var defaultRefPatterns = []string{refsHeadsPrefix, refsRemotesPrefix, refsTagsPrefix}
 
 // ForEachRef runs `git for-each-ref` and returns one Ref per matching entry.
 // Symbolic remote HEADs (refs/remotes/origin/HEAD) and refs that don't
@@ -165,11 +171,11 @@ func parseRefLine(line string) (Ref, bool, error) {
 
 func refKindFromName(fullName string) RefKind {
 	switch {
-	case strings.HasPrefix(fullName, "refs/heads/"):
+	case strings.HasPrefix(fullName, refsHeadsPrefix):
 		return RefKindLocal
-	case strings.HasPrefix(fullName, "refs/remotes/"):
+	case strings.HasPrefix(fullName, refsRemotesPrefix):
 		return RefKindRemote
-	case strings.HasPrefix(fullName, "refs/tags/"):
+	case strings.HasPrefix(fullName, refsTagsPrefix):
 		return RefKindTag
 	default:
 		return RefKindUnknown

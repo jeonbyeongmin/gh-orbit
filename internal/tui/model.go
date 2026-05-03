@@ -20,6 +20,10 @@ func (p pane) title() string {
 	return [...]string{"refs", "commit graph", "diff"}[p]
 }
 
+// refsAllSentinel is the git revision spec that means "every ref". Passed to
+// loadCommitsCmd when the user hits 'a' on the refs pane.
+const refsAllSentinel = "--all"
+
 type Model struct {
 	width, height int
 	focused       pane
@@ -62,8 +66,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case refSelectedMsg:
-		m.graph.ResetForReload()
-		return m, loadCommitsCmd("", []string{msg.ref.FullName}, defaultLogMaxCount)
+		resetCmd := m.graph.ResetForReload()
+		return m, tea.Batch(resetCmd, loadCommitsCmd("", []string{msg.ref.FullName}, defaultLogMaxCount))
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -83,8 +87,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.focused {
 		case paneRefs:
 			if msg.String() == "a" {
-				m.graph.ResetForReload()
-				return m, loadCommitsCmd("", []string{"--all"}, defaultLogMaxCount)
+				resetCmd := m.graph.ResetForReload()
+				return m, tea.Batch(resetCmd, loadCommitsCmd("", []string{refsAllSentinel}, defaultLogMaxCount))
 			}
 			var cmd tea.Cmd
 			m.refs, cmd = m.refs.Update(msg)

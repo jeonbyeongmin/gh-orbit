@@ -319,9 +319,6 @@ func (g graphModel) Selected() (git.Commit, bool) {
 // when multiple refs point at the same commit (e.g. main ≡ origin/main) the
 // cursor lands on the same row regardless of which ref was selected.
 func (g *graphModel) JumpToHash(hash string) bool {
-	if hash == "" {
-		return false
-	}
 	for i, it := range g.list.Items() {
 		ci, ok := it.(commitItem)
 		if !ok {

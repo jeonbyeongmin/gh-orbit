@@ -83,9 +83,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case refSelectedMsg:
-		resetCmd := m.graph.ResetForReload()
-		m.currentRefs = []string{msg.ref.FullName}
-		return m, tea.Batch(resetCmd, loadCommitsCmd("", m.currentRefs, defaultLogMaxCount))
+		// Unified graph: Enter no longer reloads; it jumps the graph cursor
+		// to the row whose hash equals the ref tip. currentRefs stays at
+		// [refsAllSentinel] so reload(r) keeps the unified base.
+		m.graph.JumpToHash(msg.ref.ObjectName)
+		return m, nil
 
 	case fetchSucceededMsg:
 		m.fetchInFlight = false

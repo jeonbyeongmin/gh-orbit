@@ -51,6 +51,15 @@ func loadRefsCmd(dir string) tea.Cmd {
 
 func (r refModel) Init() tea.Cmd { return nil }
 
+// ResetForReload clears loaded/err so View renders the "loading…" placeholder
+// while a fresh loadRefsCmd is in flight. cursor is intentionally left alone
+// here — refsLoadedMsg already resets it to 0 on arrival, which doubles as a
+// safe fallback when the previously selected ref was deleted by another tool.
+func (r *refModel) ResetForReload() {
+	r.loaded = false
+	r.err = nil
+}
+
 func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	switch m := msg.(type) {
 	case refsLoadedMsg:

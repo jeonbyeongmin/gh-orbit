@@ -246,71 +246,18 @@ func TestRefModelGGoesToTopAndResetsOffset(t *testing.T) {
 	}
 }
 
-func TestRefModelFoldHidesSection(t *testing.T) {
+func TestRefModelYOffsetResetsAfterReload(t *testing.T) {
 	r := newRefsModel()
-	r.SetSize(40, 30)
-	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 2, 1)})
-	// Cursor starts at local-0 (cursor=0, section 0).
-	r = pressKey(t, r, "z")
-	if !r.folded[0] {
-		t.Fatal("z on Local should fold section 0")
-	}
-	sel, ok := r.Selected()
-	if !ok || sel.ShortName != "remote-0" {
-		t.Errorf("after folding Local, cursor should jump to remote-0 (down first); got %+v ok=%v", sel, ok)
-	}
-	view := ansi.Strip(r.View())
-	if strings.Contains(view, "local-0") {
-		t.Errorf("folded section should not show its refs, got %q", view)
-	}
-}
-
-func TestRefModelFoldFromLastSectionFallsBackUp(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 30)
-	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(2, 0, 1)})
-	// Move cursor to tag-0 (selectable index 2 = local-0, local-1, tag-0).
+	r.SetSize(40, 6)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
 	r = pressKey(t, r, "G")
-	r = pressKey(t, r, "z")
-	if !r.folded[2] {
-		t.Fatal("z on Tags should fold section 2")
+	if r.yOffset == 0 {
+		t.Fatal("G should advance yOffset above 0 when there are enough refs")
 	}
-	sel, ok := r.Selected()
-	if !ok || sel.ShortName != "local-0" {
-		// down has no expanded section past 2 — falls back to local-0 (up).
-		t.Errorf("after folding Tags, expected fall-back to local-0; got %+v ok=%v", sel, ok)
-	}
-}
-
-func TestRefModelFoldStateSurvivesReload(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 30)
-	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 2, 0)})
-	r = pressKey(t, r, "z")
-	if !r.folded[0] {
-		t.Fatal("z should have folded section 0")
-	}
-	// Simulate a reload: ResetForReload then a fresh refsLoadedMsg.
 	r.ResetForReload()
-	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 2, 0)})
-	if !r.folded[0] {
-		t.Errorf("folded state should survive reload, got folded[0]=%v", r.folded[0])
-	}
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
 	if r.yOffset != 0 {
 		t.Errorf("yOffset should reset to 0 after reload, got %d", r.yOffset)
-	}
-}
-
-func TestRefModelSelectableCountIgnoresFoldedRefs(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 30)
-	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 2, 1)})
-	if got := r.selectableCount(); got != 6 {
-		t.Fatalf("initial selectableCount = %d, want 6", got)
-	}
-	r = pressKey(t, r, "z") // fold Local (3 refs)
-	if got := r.selectableCount(); got != 3 {
-		t.Errorf("after folding Local, selectableCount = %d, want 3", got)
 	}
 }
 

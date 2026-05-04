@@ -285,7 +285,7 @@ var (
 )
 
 const (
-	helpTextNormal     = "h/l move focus · j/k navigate · enter jump to ref · z fold · d diff · F fetch · r reload · q quit"
+	helpTextNormal     = "h/l move focus · j/k navigate · enter jump to ref · d diff · F fetch · r reload · q quit"
 	helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
 )
 

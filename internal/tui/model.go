@@ -158,21 +158,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// d-window guard MUST come before the global ctrl+c/q quit branch:
-		// otherwise pressing q to close the overlay would terminate the app.
+		// The viewMode guard runs before the global ctrl+c/q quit branch so
+		// `q` inside the overlay closes the overlay instead of killing the app.
 		if m.mode == viewModeDiffWindow {
 			switch msg.String() {
 			case "esc", "q":
 				m.mode = viewModeNormal
+				m.diff.ClosePatch()
 				return m, nil
 			case "ctrl+c":
 				return m, tea.Quit
 			case "j", "k", "down", "up", "pgdown", "pgup":
-				m.diff.ScrollViewport(msg)
-				return m, nil
+				return m, m.diff.ScrollPatch(msg)
 			}
-			// Swallow everything else inside the overlay so stray keys
-			// don't leak to the focused sub-model.
 			return m, nil
 		}
 		switch msg.String() {

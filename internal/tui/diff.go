@@ -1,7 +1,3 @@
-// Right-pane diff sub-model. Stat is rendered inline (short text — no
-// viewport needed); patch is rendered through bubbles/viewport in the d-window
-// overlay. All git invocations go through tea.Cmd → tea.Msg with a request id
-// so cursor moves that race past in-flight git show calls drop stale results.
 package tui
 
 import (
@@ -21,34 +17,20 @@ const (
 	diffDebounceWindow = 200 * time.Millisecond
 )
 
-// diffMode tracks which payload is currently rendered. Stat lives in the
-// right pane; patch lives in the full-screen overlay opened by `d`.
-type diffMode int
-
-const (
-	diffModeStat diffMode = iota
-	diffModePatch
-)
-
 type diffModel struct {
 	viewport     viewport.Model
-	mode         diffMode
 	currentHash  string
 	statText     string
 	patchText    string
 	loadingStat  bool
 	loadingPatch bool
 	err          error
-	// reqID is the latest dispatch token. Update keeps it in sync with the
-	// root model so stale msg's can drop themselves.
-	reqID uint64
+	reqID        uint64
 	// patchViewportInit guards the one-shot SetSize on first patch load —
 	// before that, viewport has zero dims and SetContent's truncation gives
 	// nothing back.
 	patchViewportInit bool
-	// width/height of the *right pane* (stat view). The d-window uses the
-	// full terminal so it sets the viewport directly.
-	width, height int
+	width, height     int
 }
 
 func newDiffModel() diffModel {
@@ -57,16 +39,11 @@ func newDiffModel() diffModel {
 	}
 }
 
-// SetSize is called when the parent's right-pane content area changes. The
-// viewport gets the same dims so when we flip to diffWindow it inherits them
-// before being resized to full screen.
 func (d *diffModel) SetSize(w, h int) {
 	d.width = w
 	d.height = h
 }
 
-// SetPatchViewportSize is the d-window's full-screen size. Called when entering
-// diffWindow mode and on subsequent WindowSizeMsg's while the overlay is up.
 func (d *diffModel) SetPatchViewportSize(w, h int) {
 	d.viewport.Width = w
 	d.viewport.Height = h
@@ -76,11 +53,7 @@ func (d *diffModel) SetPatchViewportSize(w, h int) {
 	}
 }
 
-// MarkLoadingStat stamps "we're about to load stat for hash" before the
-// debounce tick fires. Done eagerly so View() can show "loading…" right away
-// instead of stale text from the previous commit.
 func (d *diffModel) MarkLoadingStat(hash string, reqID uint64) {
-	d.mode = diffModeStat
 	d.currentHash = hash
 	d.statText = ""
 	d.loadingStat = true
@@ -88,10 +61,7 @@ func (d *diffModel) MarkLoadingStat(hash string, reqID uint64) {
 	d.reqID = reqID
 }
 
-// BeginPatchLoad transitions to patch mode for d-window. patchText is cleared
-// so the overlay shows "loading…" until the cmd resolves.
 func (d *diffModel) BeginPatchLoad(hash string, reqID uint64) {
-	d.mode = diffModePatch
 	d.currentHash = hash
 	d.patchText = ""
 	d.loadingPatch = true
@@ -101,10 +71,22 @@ func (d *diffModel) BeginPatchLoad(hash string, reqID uint64) {
 	d.viewport.GotoTop()
 }
 
-// ApplyStatLoaded merges a stat result if it matches the current reqID. Stale
-// responses (older reqID) are silently dropped — the caller already moved on.
+// ClosePatch releases the patch text and clears the viewport so a 10MB
+// vendor diff doesn't sit in memory after the user closes the overlay.
+func (d *diffModel) ClosePatch() {
+	d.patchText = ""
+	d.viewport.SetContent("")
+}
+
+// accepts gates Apply* against stale dispatches. reqID rejects responses from
+// a previous cursor position; the hash check catches the rare same-reqID
+// mismatch (re-dispatch on the same id with a new hash).
+func (d *diffModel) accepts(reqID uint64, hash string) bool {
+	return reqID == d.reqID && hash == d.currentHash
+}
+
 func (d *diffModel) ApplyStatLoaded(reqID uint64, hash, text string) {
-	if reqID != d.reqID || hash != d.currentHash {
+	if !d.accepts(reqID, hash) {
 		return
 	}
 	d.loadingStat = false
@@ -112,18 +94,16 @@ func (d *diffModel) ApplyStatLoaded(reqID uint64, hash, text string) {
 	d.err = nil
 }
 
-// ApplyStatFailed mirrors ApplyStatLoaded for the error path.
 func (d *diffModel) ApplyStatFailed(reqID uint64, hash string, err error) {
-	if reqID != d.reqID || hash != d.currentHash {
+	if !d.accepts(reqID, hash) {
 		return
 	}
 	d.loadingStat = false
 	d.err = err
 }
 
-// ApplyPatchLoaded merges a patch result for the d-window.
 func (d *diffModel) ApplyPatchLoaded(reqID uint64, hash, text string) {
-	if reqID != d.reqID || hash != d.currentHash {
+	if !d.accepts(reqID, hash) {
 		return
 	}
 	d.loadingPatch = false
@@ -135,23 +115,22 @@ func (d *diffModel) ApplyPatchLoaded(reqID uint64, hash, text string) {
 	}
 }
 
-// ApplyPatchFailed mirrors ApplyPatchLoaded for the error path.
 func (d *diffModel) ApplyPatchFailed(reqID uint64, hash string, err error) {
-	if reqID != d.reqID || hash != d.currentHash {
+	if !d.accepts(reqID, hash) {
 		return
 	}
 	d.loadingPatch = false
 	d.err = err
 }
 
-// ScrollViewport forwards a key to the patch viewport. Used by the d-window
-// key handler to delegate j/k/pgup/pgdown without exposing the viewport field.
-func (d *diffModel) ScrollViewport(msg tea.Msg) {
-	d.viewport, _ = d.viewport.Update(msg)
+// ScrollPatch forwards a scroll key to the patch viewport and returns any cmd
+// the viewport produced (mouse-wheel handling, etc.) so the caller can batch it.
+func (d *diffModel) ScrollPatch(msg tea.KeyMsg) tea.Cmd {
+	var cmd tea.Cmd
+	d.viewport, cmd = d.viewport.Update(msg)
+	return cmd
 }
 
-// StatView is what the right pane renders in normal mode. Short text → plain
-// string is enough; ANSI escapes pass through lipgloss border untouched.
 func (d diffModel) StatView() string {
 	if d.currentHash == "" {
 		return "(no commit selected)"
@@ -168,8 +147,6 @@ func (d diffModel) StatView() string {
 	return d.statText
 }
 
-// PatchView is the d-window's body. The viewport handles ANSI-aware truncation
-// per line; we just need to surface loading/error states first.
 func (d diffModel) PatchView() string {
 	if d.err != nil {
 		return "error: " + firstLine(d.err.Error())
@@ -189,8 +166,6 @@ func firstLine(s string) string {
 	}
 	return s
 }
-
-// --- messages and commands ---------------------------------------------------
 
 type diffStatLoadedMsg struct {
 	reqID uint64
@@ -216,23 +191,18 @@ type diffPatchFailedMsg struct {
 	err   error
 }
 
-// diffDebounceMsg fires diffDebounceWindow after a cursor change. The root
-// model checks reqID against its own counter and drops the message if the
-// cursor moved again in the meantime.
 type diffDebounceMsg struct {
 	reqID uint64
 	hash  string
 }
 
-// commitSelectedMsg is emitted by graphModel whenever the cursor lands on a
-// new commit. The root model uses it to start the debounce timer for stat.
 type commitSelectedMsg struct {
 	hash string
 }
 
-// scheduleDiffStatCmd returns a tea.Tick that delivers diffDebounceMsg after
-// diffDebounceWindow. Pending ticks aren't cancellable, but the reqID guard
-// in Update drops everything but the freshest one.
+// scheduleDiffStatCmd uses tea.Tick (not time.AfterFunc) because pending ticks
+// can't be cancelled mid-flight; the reqID guard in Update drops all but the
+// freshest one when the user keeps moving the cursor inside the window.
 func scheduleDiffStatCmd(reqID uint64, hash string) tea.Cmd {
 	return tea.Tick(diffDebounceWindow, func(time.Time) tea.Msg {
 		return diffDebounceMsg{reqID: reqID, hash: hash}

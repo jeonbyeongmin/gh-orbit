@@ -18,18 +18,14 @@ import (
 const refLoadTimeout = 30 * time.Second
 
 type refModel struct {
-	// byKind caches refs partitioned in render order so View / Selected /
-	// keypress bounds checks don't re-walk r.refs on every frame. Index
-	// matches refSections.
-	byKind [3][]git.Ref
-	width  int
-	height int
-	cursor int
-	// yOffset is the first flat-row index visible inside the pane. Lazy
-	// scroll moves it ±1 only when cursor reaches the visible window edge.
+	// byKind index matches refSections.
+	byKind  [3][]git.Ref
+	width   int
+	height  int
+	cursor  int
 	yOffset int
 	// folded[i] toggles section i (Local/Remote/Tags) between expanded and
-	// collapsed. Zero value = all expanded, matching the previous behaviour.
+	// collapsed. Zero value leaves every section expanded.
 	folded [3]bool
 	loaded bool
 	err    error
@@ -98,12 +94,12 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 	case "j", "down":
 		if r.cursor < total-1 {
 			r.cursor++
-			r = r.ensureCursorVisible(false)
+			r = r.nudgeOffsetOnEdge()
 		}
 	case "k", "up":
 		if r.cursor > 0 {
 			r.cursor--
-			r = r.ensureCursorVisible(false)
+			r = r.nudgeOffsetOnEdge()
 		}
 	case "g":
 		r.cursor = 0
@@ -111,35 +107,30 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 	case "G":
 		if total > 0 {
 			r.cursor = total - 1
-			r = r.ensureCursorVisible(true)
+			r = r.scrollCursorIntoView()
 		}
 	case "z":
 		r = r.toggleFoldAtCursor()
-		r = r.ensureCursorVisible(true)
+		r = r.scrollCursorIntoView()
 	}
 	return r
 }
 
-// toggleFoldAtCursor flips the fold state of the section the cursor is in. If
-// the cursor was on a ref inside the section we just folded, it jumps to the
-// nearest expanded ref (down first, then up); when no other section has refs,
-// cursor stays at 0 and Selected() returns false on its own.
+// toggleFoldAtCursor flips the fold state of the cursor's section. When that
+// just-folded section was the cursor's home, the cursor jumps to the first
+// expanded, non-empty section below; failing that, the first one above.
 func (r refModel) toggleFoldAtCursor() refModel {
 	sec, onRef := r.cursorSection()
 	if !onRef {
-		// Cursor isn't on a real ref (everything empty / all folded). Toggle
-		// the first section as a sane default — pick whichever section the
-		// flat-row pass landed on.
+		// Cursor isn't on a real ref (everything empty / all folded). Pick
+		// section 0 so a fresh repo's first `z` still toggles something.
 		sec = 0
 	}
 	r.folded[sec] = !r.folded[sec]
 	if !r.folded[sec] {
-		// Just expanded — cursor mapping shifted but the cursor's logical
-		// position is still valid in the new (larger) selectable count.
+		// Expanding never invalidates a previously valid cursor index.
 		return r
 	}
-	// Just folded the section the cursor was in — relocate the cursor to the
-	// nearest expanded, non-empty section (down, then up).
 	if !onRef {
 		return r
 	}
@@ -155,21 +146,15 @@ func (r refModel) toggleFoldAtCursor() refModel {
 	return r
 }
 
-// cursorSection reports which section index the cursor currently sits in. The
-// second return is true only when the cursor lands on a real ref row — false
-// means there is no selectable ref at all.
+// cursorSection reports which section the cursor sits in. The second return
+// is false when there is no selectable ref at all (everything empty/folded).
 func (r refModel) cursorSection() (int, bool) {
-	idx := r.cursor
-	for i, items := range r.byKind {
-		if r.folded[i] {
-			continue
-		}
-		if idx < len(items) {
-			return i, true
-		}
-		idx -= len(items)
+	rows := r.flatRows()
+	i, ok := r.cursorFlatRow(rows)
+	if !ok {
+		return 0, false
 	}
-	return 0, false
+	return rows[i].sectionIdx, true
 }
 
 // firstRefIndexInExpandedSection scans sections in direction dir (+1 down,
@@ -194,11 +179,10 @@ func (r refModel) firstRefIndexInExpandedSection(from, dir int) (int, bool) {
 	return 0, false
 }
 
-// visibleHeight is how many flat-rows fit under the sticky header. We always
-// reserve 1 row for the sticky line when height >= 2, even when the sticky is
-// suppressed (cursor sits on the row right after its section header) — the
-// reserved row stays empty in that frame, which is fine and keeps the scroll
-// math frame-independent.
+// visibleHeight is the number of body rows that fit beside the sticky header.
+// height >= 2 always reserves one row for the sticky line (even on frames
+// where it is suppressed, so scroll math doesn't depend on visibility); below
+// that, sticky is disabled and the full pane height is body.
 func (r refModel) visibleHeight() int {
 	if r.height <= 0 {
 		return 0
@@ -209,12 +193,10 @@ func (r refModel) visibleHeight() int {
 	return r.height - 1
 }
 
-// ensureCursorVisible nudges yOffset so the cursor row stays inside the
-// visible window. step (jump=false) follows the lazy rule from the plan: only
-// shift by 1 when the cursor has moved exactly to the row above/below the
-// window. jump (jump=true) does a one-shot correction so the cursor lands
-// inside the window after g/G/z, even if it was far away.
-func (r refModel) ensureCursorVisible(jump bool) refModel {
+// scrollCursorIntoView pulls yOffset so the cursor row is inside the window
+// in one shot. Used by g/G/z and SetSize, where the cursor may have jumped
+// far from the previous offset.
+func (r refModel) scrollCursorIntoView() refModel {
 	rows := r.flatRows()
 	cursorRow, ok := r.cursorFlatRow(rows)
 	if !ok {
@@ -224,50 +206,59 @@ func (r refModel) ensureCursorVisible(jump bool) refModel {
 	if vh <= 0 {
 		return r
 	}
-	if jump {
-		if cursorRow < r.yOffset {
-			r.yOffset = cursorRow
-		} else if cursorRow >= r.yOffset+vh {
-			r.yOffset = cursorRow - vh + 1
-		}
-	} else {
-		if cursorRow == r.yOffset-1 {
-			r.yOffset--
-		} else if cursorRow == r.yOffset+vh {
-			r.yOffset++
-		}
+	if cursorRow < r.yOffset {
+		r.yOffset = cursorRow
+	} else if cursorRow >= r.yOffset+vh {
+		r.yOffset = cursorRow - vh + 1
 	}
+	return r.clampOffset(len(rows), vh)
+}
+
+// nudgeOffsetOnEdge shifts yOffset by ±1 only when the cursor moved exactly
+// to the row immediately above or below the visible window. Used by j/k so
+// cursor and viewport advance together at the edges but otherwise stay put.
+func (r refModel) nudgeOffsetOnEdge() refModel {
+	rows := r.flatRows()
+	cursorRow, ok := r.cursorFlatRow(rows)
+	if !ok {
+		return r
+	}
+	vh := r.visibleHeight()
+	if vh <= 0 {
+		return r
+	}
+	if cursorRow == r.yOffset-1 {
+		r.yOffset--
+	} else if cursorRow == r.yOffset+vh {
+		r.yOffset++
+	}
+	return r.clampOffset(len(rows), vh)
+}
+
+func (r refModel) clampOffset(rowsLen, vh int) refModel {
 	if r.yOffset < 0 {
 		r.yOffset = 0
 	}
-	max := len(rows) - vh
-	if max < 0 {
-		max = 0
+	maxOffset := rowsLen - vh
+	if maxOffset < 0 {
+		maxOffset = 0
 	}
-	if r.yOffset > max {
-		r.yOffset = max
+	if r.yOffset > maxOffset {
+		r.yOffset = maxOffset
 	}
 	return r
 }
 
-// Selected returns the ref under the cursor, if any. Headers, gaps, and
-// empty-section placeholders are not selectable — and refs in folded sections
-// drop out of the count entirely so the cursor only ever lands on visible refs.
+// Selected returns the ref under the cursor, if any. Refs in folded sections
+// are excluded — the cursor only ever lands on visible refs.
 func (r refModel) Selected() (git.Ref, bool) {
-	idx := r.cursor
-	if idx < 0 {
+	rows := r.flatRows()
+	i, ok := r.cursorFlatRow(rows)
+	if !ok {
 		return git.Ref{}, false
 	}
-	for i, items := range r.byKind {
-		if r.folded[i] {
-			continue
-		}
-		if idx < len(items) {
-			return items[idx], true
-		}
-		idx -= len(items)
-	}
-	return git.Ref{}, false
+	row := rows[i]
+	return r.byKind[row.sectionIdx][row.refIdx], true
 }
 
 func (r refModel) selectableCount() int {
@@ -306,8 +297,8 @@ var refSections = [3]refSection{
 	{"Tags", git.RefKindTag},
 }
 
-// refRowKind tags every visible line so View can slice by yOffset and so the
-// sticky-header pass (later step) can find headers without re-walking byKind.
+// refRowKind tags every visible line so View can slice by yOffset and the
+// sticky-header pass can find headers without re-walking byKind.
 type refRowKind int
 
 const (
@@ -417,12 +408,12 @@ func (r refModel) View() string {
 		if start > end {
 			start = end
 		}
-		max := start + r.height
+		bodyRows := r.height
 		if stickyIdx >= 0 {
-			max = start + r.height - 1
+			bodyRows = r.visibleHeight()
 		}
-		if max < end {
-			end = max
+		if bodyEnd := start + bodyRows; bodyEnd < end {
+			end = bodyEnd
 		}
 	}
 
@@ -480,9 +471,12 @@ func renderRefLine(ref git.Ref, width int, selected bool) string {
 }
 
 func (r *refModel) SetSize(w, h int) {
+	if r.width == w && r.height == h {
+		return
+	}
 	r.width = w
 	r.height = h
 	if r.loaded {
-		*r = r.ensureCursorVisible(true)
+		*r = r.scrollCursorIntoView()
 	}
 }

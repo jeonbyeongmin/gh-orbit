@@ -63,7 +63,7 @@ func TestRenderCommitLineSelectedHasCursor(t *testing.T) {
 	}
 }
 
-func TestRenderCommitLineSubjectBetweenGraphAndHash(t *testing.T) {
+func TestRenderCommitLineOrderingGraphHashSubject(t *testing.T) {
 	c := git.Commit{
 		Hash:       "abcdef1234567",
 		Subject:    "graph layout",
@@ -77,13 +77,15 @@ func TestRenderCommitLineSubjectBetweenGraphAndHash(t *testing.T) {
 	if starIdx < 0 || subjectIdx < 0 || hashIdx < 0 {
 		t.Fatalf("expected star, subject, and hash in %q", stripped)
 	}
-	if starIdx >= subjectIdx || subjectIdx >= hashIdx {
-		t.Errorf("expected order graph < subject < hash, got star=%d subject=%d hash=%d in %q",
-			starIdx, subjectIdx, hashIdx, stripped)
+	// New layout: graph < hash < subject. Subject anchors to the right edge
+	// so it absorbs truncation when the row is narrow.
+	if starIdx >= hashIdx || hashIdx >= subjectIdx {
+		t.Errorf("expected order graph < hash < subject, got star=%d hash=%d subject=%d in %q",
+			starIdx, hashIdx, subjectIdx, stripped)
 	}
 }
 
-func TestRenderCommitLineHashAndTimeAtRightEdge(t *testing.T) {
+func TestRenderCommitLineHashAnchoredAfterGraph(t *testing.T) {
 	c := git.Commit{
 		Hash:       "abcdef1234567",
 		Subject:    "right edge",
@@ -91,16 +93,21 @@ func TestRenderCommitLineHashAndTimeAtRightEdge(t *testing.T) {
 	}
 	line := renderCommitLine(c, "* ", 2, 2, 80, false)
 	stripped := ansi.Strip(line)
-	// rel column sits at the very end with hash one space before it, so
-	// the visible width must equal the requested width and hash anchors
-	// at width - 7 (hash) - 1 (space) - timeColWidth.
+	// The visible width must still equal the requested width.
 	if w := len(stripped); w != 80 {
 		t.Errorf("rendered width = %d, want 80 (full row)", w)
 	}
+	// Hash now sits immediately after the graph cell (cursor 2 + graph 2 = 4).
 	hashIdx := strings.Index(stripped, "abcdef1")
-	wantHashIdx := 80 - shortHashLen - 1 - timeColWidth
+	wantHashIdx := 2 + 2
 	if hashIdx != wantHashIdx {
-		t.Errorf("hash starts at %d, want %d (anchored to right edge)", hashIdx, wantHashIdx)
+		t.Errorf("hash starts at %d, want %d (anchored after graph)", hashIdx, wantHashIdx)
+	}
+	// Subject ends at the right edge — last visible character is part of
+	// the subject (or its trailing pad), never the hash or time column.
+	subjectIdx := strings.Index(stripped, "right edge")
+	if subjectIdx < hashIdx+shortHashLen+1+timeColWidth+1 {
+		t.Errorf("subject too close to hash; subjectIdx=%d hashIdx=%d", subjectIdx, hashIdx)
 	}
 }
 
@@ -118,6 +125,145 @@ func TestRenderCommitLinePadsShortGraphPrefix(t *testing.T) {
 	// cursor 2 + graph 4 = 6.
 	if got := stripped[2:6]; got != "*   " {
 		t.Errorf("graph cell = %q, want %q (left-aligned, right-padded)", got, "*   ")
+	}
+}
+
+func TestRenderCommitLineNoChipAreaWhenNoRefs(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "no refs",
+		AuthorTime: time.Now(),
+	}
+	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	stripped := ansi.Strip(line)
+	// With no refs, no chip cluster appears. The substring " no refs" should
+	// follow the time column directly with one separator space.
+	if !strings.Contains(stripped, "no refs") {
+		t.Fatalf("subject missing from %q", stripped)
+	}
+}
+
+func TestRenderCommitLineWithLocalChip(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "with chip",
+		AuthorTime: time.Now(),
+		RefNames:   []string{"main"},
+	}
+	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	stripped := ansi.Strip(line)
+	// Chip "main" sits between the time column and the subject.
+	mainIdx := strings.Index(stripped, "main")
+	subjectIdx := strings.Index(stripped, "with chip")
+	hashIdx := strings.Index(stripped, "abcdef1")
+	if mainIdx < 0 || subjectIdx < 0 || hashIdx < 0 {
+		t.Fatalf("expected hash, chip, subject in %q", stripped)
+	}
+	if !(hashIdx < mainIdx && mainIdx < subjectIdx) {
+		t.Errorf("expected order hash < chip < subject; got hash=%d chip=%d subject=%d in %q",
+			hashIdx, mainIdx, subjectIdx, stripped)
+	}
+}
+
+func TestRenderCommitLineWithPairedChip(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "paired",
+		AuthorTime: time.Now(),
+		RefNames:   []string{"HEAD -> main", "origin/main"},
+	}
+	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	stripped := ansi.Strip(line)
+	if strings.Count(stripped, "main") != 1 {
+		t.Errorf("paired chip should render 'main' exactly once, got %q", stripped)
+	}
+	if !strings.Contains(stripped, "↑") {
+		t.Errorf("paired chip should carry ↑ marker, got %q", stripped)
+	}
+	if !strings.Contains(stripped, "HEAD") {
+		t.Errorf("HEAD chip should appear, got %q", stripped)
+	}
+}
+
+func TestRenderCommitLineWithDetachedHead(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "detached",
+		AuthorTime: time.Now(),
+		RefNames:   []string{"HEAD"},
+	}
+	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	stripped := ansi.Strip(line)
+	if !strings.Contains(stripped, "HEAD") {
+		t.Errorf("detached head should render standalone HEAD chip, got %q", stripped)
+	}
+}
+
+func TestRenderCommitLineWithTagChipStripsPrefix(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "tag commit",
+		AuthorTime: time.Now(),
+		RefNames:   []string{"tag: v0.0.1"},
+	}
+	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	stripped := ansi.Strip(line)
+	if !strings.Contains(stripped, "v0.0.1") {
+		t.Errorf("tag chip should display version, got %q", stripped)
+	}
+	if strings.Contains(stripped, "tag:") {
+		t.Errorf("tag prefix should not appear in chip text, got %q", stripped)
+	}
+}
+
+func TestRenderCommitLineChipOverflowShowsPlusN(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "many",
+		AuthorTime: time.Now(),
+		RefNames:   []string{"a", "b", "c", "d", "e"},
+	}
+	line := renderCommitLine(c, "* ", 2, 2, 100, false)
+	stripped := ansi.Strip(line)
+	if !strings.Contains(stripped, "+3") {
+		t.Errorf("overflow indicator '+3' missing from %q", stripped)
+	}
+}
+
+func TestRenderCommitLineChipDroppedWhenSubjectWouldStarve(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "x",
+		AuthorTime: time.Now(),
+		// Pile up a long ref name so the chip cluster can't coexist with
+		// even a 1-cell subject at narrow widths.
+		RefNames: []string{"this-is-a-very-long-branch-name-that-cannot-fit"},
+	}
+	// width = cursor 2 + graph 2 + hash 7 + space 1 + time 8 + space 1 + subject 2 = 23
+	line := renderCommitLine(c, "* ", 2, 2, 23, false)
+	stripped := ansi.Strip(line)
+	if strings.Contains(stripped, "this-is-a-very-long") {
+		t.Errorf("chip should be dropped when subject can't fit alongside it, got %q", stripped)
+	}
+	if !strings.Contains(stripped, "abcdef1") {
+		t.Errorf("hash must remain visible, got %q", stripped)
+	}
+}
+
+func TestRenderCommitLineSelectedRecolorsChipBackground(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "sel",
+		AuthorTime: time.Now(),
+		RefNames:   []string{"main"},
+	}
+	unselected := renderCommitLine(c, "* ", 2, 2, 80, false)
+	selected := renderCommitLine(c, "* ", 2, 2, 80, true)
+	if unselected == selected {
+		t.Fatalf("selected line should differ from unselected")
+	}
+	if !strings.Contains(selected, "48;5;205") {
+		t.Errorf("selected line should set chip background to colorSelected (205), got %q", selected)
 	}
 }
 

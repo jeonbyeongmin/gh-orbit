@@ -237,6 +237,150 @@ func TestModelFetchSucceededReloadsBothPanes(t *testing.T) {
 	}
 }
 
+func TestModelCommitSelectedDispatchesDebounce(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	priorReqID := m.diffReqID
+	updated, cmd := m.Update(commitSelectedMsg{hash: "aaa1111"})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("commitSelectedMsg should return a debounce tick cmd")
+	}
+	if m.diffReqID != priorReqID+1 {
+		t.Errorf("diffReqID should advance by 1, got %d (was %d)", m.diffReqID, priorReqID)
+	}
+	if !m.diff.loadingStat {
+		t.Error("diff sub-model should be marked loading after commitSelectedMsg")
+	}
+	if m.diff.currentHash != "aaa1111" {
+		t.Errorf("diff.currentHash = %q, want aaa1111", m.diff.currentHash)
+	}
+}
+
+func TestModelDebounceMsgStaleReqIDIsDropped(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	// Simulate that two cursor moves happened before the first tick fires.
+	m.diffReqID = 5
+
+	_, cmd := m.Update(diffDebounceMsg{reqID: 3, hash: "stale"})
+	if cmd != nil {
+		t.Errorf("stale debounce tick should return no cmd, got %v", cmd)
+	}
+}
+
+func TestModelDebounceMsgFreshReqIDDispatches(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.diffReqID = 5
+
+	_, cmd := m.Update(diffDebounceMsg{reqID: 5, hash: "abc1234"})
+	if cmd == nil {
+		t.Fatal("fresh debounce tick should dispatch loadDiffStatCmd")
+	}
+}
+
+func TestModelDKeyOpensDiffWindow(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.mode != viewModeDiffWindow {
+		t.Errorf("mode after d = %v, want viewModeDiffWindow", m.mode)
+	}
+	if cmd == nil {
+		t.Fatal("d should dispatch loadDiffPatchCmd")
+	}
+	if !m.diff.loadingPatch {
+		t.Error("d should mark patch loading")
+	}
+	if m.diff.currentHash != "aaa1111" {
+		t.Errorf("diff.currentHash = %q, want aaa1111", m.diff.currentHash)
+	}
+}
+
+func TestModelDKeyWithoutSelectionIsNoop(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	// No commits loaded — Selected() returns false.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Errorf("d without selection should not flip viewMode, got %v", m.mode)
+	}
+	if cmd != nil {
+		t.Error("d without selection should not dispatch a cmd")
+	}
+}
+
+func TestModelEscClosesDiffWindow(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeDiffWindow
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Errorf("esc should return to normal mode, got %v", m.mode)
+	}
+	if cmd != nil {
+		t.Errorf("esc should not dispatch a cmd, got %v", cmd)
+	}
+}
+
+func TestModelQClosesDiffWindowWithoutQuitting(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeDiffWindow
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Errorf("q in diff window should return to normal mode, got %v", m.mode)
+	}
+	if cmd != nil {
+		// tea.Quit is a non-nil cmd — its presence here would mean the app
+		// quits when the user just wanted to close the overlay.
+		t.Errorf("q in diff window must not dispatch tea.Quit, got cmd=%v", cmd)
+	}
+}
+
+func TestModelStaleStatLoadedIsIgnored(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	// Pretend we dispatched two cursor moves; the latest reqID is 7 and the
+	// diff sub-model is loading for hash "current".
+	m.diffReqID = 7
+	m.diff.MarkLoadingStat("current", 7)
+
+	// A stale response from reqID=3 must not overwrite the current state.
+	updated, _ = m.Update(diffStatLoadedMsg{reqID: 3, hash: "old", text: "stale stat"})
+	m = updated.(Model)
+	if m.diff.statText == "stale stat" {
+		t.Error("stale diffStatLoadedMsg must not overwrite current statText")
+	}
+	if !m.diff.loadingStat {
+		t.Error("stale response should leave loadingStat=true since the in-flight call is still pending")
+	}
+}
+
 func TestModelFetchFailedSurfacesError(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

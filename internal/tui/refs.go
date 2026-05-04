@@ -317,7 +317,19 @@ func (r refModel) View() string {
 	}
 
 	rows := r.flatRows()
-	cursorRow, _ := r.cursorFlatRow(rows)
+	cursorRow, hasCursor := r.cursorFlatRow(rows)
+
+	// stickyIdx is the index of the section-header row that should be pinned
+	// to the first line, or -1 when no sticky is needed (no cursor, height
+	// too small, or the section's real header is already the top visible
+	// row — drawing it twice would just duplicate the line).
+	stickyIdx := -1
+	if hasCursor && r.height >= 2 {
+		stickyIdx = sectionHeaderRowOf(rows, rows[cursorRow].sectionIdx)
+		if stickyIdx >= 0 && stickyIdx == r.yOffset {
+			stickyIdx = -1
+		}
+	}
 
 	start, end := 0, len(rows)
 	if r.height > 0 {
@@ -328,19 +340,41 @@ func (r refModel) View() string {
 		if start > end {
 			start = end
 		}
-		if max := start + r.height; max < end {
+		max := start + r.height
+		if stickyIdx >= 0 {
+			max = start + r.height - 1
+		}
+		if max < end {
 			end = max
 		}
 	}
 
 	var b strings.Builder
+	wroteAny := false
+	if stickyIdx >= 0 {
+		b.WriteString(r.renderRow(rows[stickyIdx], width, false))
+		wroteAny = true
+	}
 	for i := start; i < end; i++ {
-		if i > start {
+		if wroteAny {
 			b.WriteByte('\n')
 		}
 		b.WriteString(r.renderRow(rows[i], width, i == cursorRow))
+		wroteAny = true
 	}
 	return b.String()
+}
+
+// sectionHeaderRowOf returns the flatRows index of section sectionIdx's header,
+// or -1 when the row list does not contain that header (shouldn't happen for
+// valid sectionIdx in 0..2).
+func sectionHeaderRowOf(rows []refRow, sectionIdx int) int {
+	for i, row := range rows {
+		if row.kind == refRowHeader && row.sectionIdx == sectionIdx {
+			return i
+		}
+	}
+	return -1
 }
 
 func renderRefLine(ref git.Ref, width int, selected bool) string {

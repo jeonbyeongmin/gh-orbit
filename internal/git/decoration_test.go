@@ -34,8 +34,8 @@ func TestParseDecorationDetachedHead(t *testing.T) {
 	if !det {
 		t.Errorf("headDetached=false, want true")
 	}
-	if refs != nil {
-		t.Errorf("refs=%v, want nil", refs)
+	if len(refs) != 0 {
+		t.Errorf("refs=%v, want empty", refs)
 	}
 }
 

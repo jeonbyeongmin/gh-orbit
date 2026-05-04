@@ -106,6 +106,28 @@ func TestBuildChipsDropsSymbolicRemoteHead(t *testing.T) {
 	}
 }
 
+func TestBuildChipsTruncatesLongBranchName(t *testing.T) {
+	long := strings.Repeat("a", maxChipTextWidth+10)
+	s, _ := buildChips([]string{long}, false)
+	plain := ansi.Strip(s)
+	if !strings.Contains(plain, "…") {
+		t.Errorf("long branch name should be truncated with ellipsis; got %q", plain)
+	}
+	if strings.Contains(plain, long) {
+		t.Errorf("untruncated long name should not appear; got %q", plain)
+	}
+}
+
+func TestBuildChipsTruncatedNameKeepsPairMarker(t *testing.T) {
+	long := strings.Repeat("a", maxChipTextWidth+5)
+	// pair: HEAD -> <long>, origin/<long>
+	s, _ := buildChips([]string{"HEAD -> " + long, "origin/" + long}, false)
+	plain := ansi.Strip(s)
+	if !strings.Contains(plain, "…↑") {
+		t.Errorf("paired chip with truncated name should end with '…↑'; got %q", plain)
+	}
+}
+
 func TestBuildChipsSelectedOverridesBackground(t *testing.T) {
 	unselected, _ := buildChips([]string{"main"}, false)
 	selected, _ := buildChips([]string{"main"}, true)

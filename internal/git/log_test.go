@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -118,22 +119,13 @@ func TestLogIntegration(t *testing.T) {
 		t.Errorf("root should have no parents, got %v", commits[1].Parents)
 	}
 	// HEAD 는 second 를 가리키므로 commits[0] 에 "HEAD -> main" 이 들어 있어야 한다.
-	if !containsToken(commits[0].RefNames, "HEAD -> main") {
+	if !slices.Contains(commits[0].RefNames, "HEAD -> main") {
 		t.Errorf("commits[0].RefNames = %v, want token %q", commits[0].RefNames, "HEAD -> main")
 	}
 	// v0.0.1 tag 는 first 에만 붙였으므로 commits[1] 에 "tag: v0.0.1" 이 들어 있어야 한다.
-	if !containsToken(commits[1].RefNames, "tag: v0.0.1") {
+	if !slices.Contains(commits[1].RefNames, "tag: v0.0.1") {
 		t.Errorf("commits[1].RefNames = %v, want token %q", commits[1].RefNames, "tag: v0.0.1")
 	}
-}
-
-func containsToken(tokens []string, want string) bool {
-	for _, t := range tokens {
-		if t == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestLogReturnsErrorWithStderr(t *testing.T) {

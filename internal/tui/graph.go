@@ -150,9 +150,8 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	chipSegment := ""
 	chipSegmentWidth := 0
 	if chipW > 0 {
-		// Chip segment = leading space (1) + chip cluster. Drop the cluster
-		// entirely if including it would push the subject below 1 cell —
-		// the interview answer was explicit that subject wins over chips.
+		// Drop the chip cluster entirely if it would leave subject below 1
+		// cell. Subject wins over chips when the row is narrow.
 		candidate := 1 + chipW
 		if width-fixedUsed-candidate-1 >= 1 {
 			chipSegment = " " + chipText

@@ -2,13 +2,9 @@ package git
 
 import "strings"
 
-// commonRemotePrefixes is the set of remote names we recognize when classifying
-// "%D" tokens. A token like "origin/main" matches and is classified as remote;
-// an unknown prefix like "myremote/main" falls through and is classified as
-// local. This deliberately avoids a second `git for-each-ref` invocation just
-// to know remote names — the trade-off is that non-default remotes won't pair
-// with their local counterpart until graph-color-config makes this list
-// configurable.
+// commonRemotePrefixes avoids a second `git for-each-ref` for remote names.
+// graph-color-config will make this configurable; until then, non-default
+// remotes won't pair-merge with their local counterpart.
 var commonRemotePrefixes = []string{"origin/", "upstream/", "fork/"}
 
 // DecoratedRef is one classified token from a Commit.RefNames slice.
@@ -54,7 +50,7 @@ func ParseDecoration(tokens []string) (refs []DecoratedRef, headDetached bool) {
 			name := strings.TrimPrefix(t, "HEAD -> ")
 			refs = append(refs, DecoratedRef{
 				Kind:      classifyRefName(name),
-				ShortName: stripTagPrefix(name),
+				ShortName: name,
 				IsHead:    true,
 			})
 		case strings.HasPrefix(t, "tag: "):
@@ -72,9 +68,6 @@ func ParseDecoration(tokens []string) (refs []DecoratedRef, headDetached bool) {
 			})
 		}
 	}
-	if len(refs) == 0 {
-		refs = nil
-	}
 	return refs, headDetached
 }
 
@@ -86,7 +79,25 @@ func MergeLocalRemotePairs(refs []DecoratedRef) []ChipRef {
 	if len(refs) == 0 {
 		return nil
 	}
-	// Index local short-names so the remote pass can look them up in O(1).
+	// Pairing only matters when both kinds coexist — most rows are 1 ref tip,
+	// so skip the map allocations on the common path.
+	hasLocal, hasRemote := false, false
+	for _, r := range refs {
+		switch r.Kind {
+		case RefKindLocal:
+			hasLocal = true
+		case RefKindRemote:
+			hasRemote = true
+		}
+	}
+	if !hasLocal || !hasRemote {
+		out := make([]ChipRef, len(refs))
+		for i, r := range refs {
+			out[i] = ChipRef{Kind: r.Kind, DisplayName: r.ShortName, IsHead: r.IsHead}
+		}
+		return out
+	}
+
 	localIdx := make(map[string]int, len(refs))
 	for i, r := range refs {
 		if r.Kind == RefKindLocal {
@@ -130,8 +141,6 @@ func classifyRefName(name string) RefKind {
 	return RefKindLocal
 }
 
-// stripRemotePrefix returns the short name with its remote prefix removed
-// when name starts with one of commonRemotePrefixes.
 func stripRemotePrefix(name string) (string, bool) {
 	for _, p := range commonRemotePrefixes {
 		if strings.HasPrefix(name, p) {
@@ -148,8 +157,4 @@ func isSymbolicRemoteHead(token string) bool {
 		}
 	}
 	return false
-}
-
-func stripTagPrefix(name string) string {
-	return strings.TrimPrefix(name, "tag: ")
 }

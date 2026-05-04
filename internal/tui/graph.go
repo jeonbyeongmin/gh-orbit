@@ -238,17 +238,35 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 		cmd := g.list.SetItems(items)
 		g.loaded = true
 		g.err = nil
+		if c, ok := g.Selected(); ok {
+			return g, tea.Batch(cmd, emitCommitSelected(c.Hash))
+		}
 		return g, cmd
 	case commitsLoadFailedMsg:
 		g.loaded = true
 		g.err = m.err
 		return g, nil
 	case tea.KeyMsg:
+		prevHash := ""
+		if c, ok := g.Selected(); ok {
+			prevHash = c.Hash
+		}
 		var cmd tea.Cmd
 		g.list, cmd = g.list.Update(msg)
+		newHash := ""
+		if c, ok := g.Selected(); ok {
+			newHash = c.Hash
+		}
+		if newHash != "" && newHash != prevHash {
+			return g, tea.Batch(cmd, emitCommitSelected(newHash))
+		}
 		return g, cmd
 	}
 	return g, nil
+}
+
+func emitCommitSelected(hash string) tea.Cmd {
+	return func() tea.Msg { return commitSelectedMsg{hash: hash} }
 }
 
 func (g graphModel) View() string {

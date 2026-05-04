@@ -98,17 +98,77 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 	case "j", "down":
 		if r.cursor < total-1 {
 			r.cursor++
+			r = r.ensureCursorVisible(false)
 		}
 	case "k", "up":
 		if r.cursor > 0 {
 			r.cursor--
+			r = r.ensureCursorVisible(false)
 		}
 	case "g":
 		r.cursor = 0
+		r.yOffset = 0
 	case "G":
 		if total > 0 {
 			r.cursor = total - 1
+			r = r.ensureCursorVisible(true)
 		}
+	}
+	return r
+}
+
+// visibleHeight is how many flat-rows fit under the sticky header. We always
+// reserve 1 row for the sticky line when height >= 2, even when the sticky is
+// suppressed (cursor sits on the row right after its section header) — the
+// reserved row stays empty in that frame, which is fine and keeps the scroll
+// math frame-independent.
+func (r refModel) visibleHeight() int {
+	if r.height <= 0 {
+		return 0
+	}
+	if r.height < 2 {
+		return r.height
+	}
+	return r.height - 1
+}
+
+// ensureCursorVisible nudges yOffset so the cursor row stays inside the
+// visible window. step (jump=false) follows the lazy rule from the plan: only
+// shift by 1 when the cursor has moved exactly to the row above/below the
+// window. jump (jump=true) does a one-shot correction so the cursor lands
+// inside the window after g/G/z, even if it was far away.
+func (r refModel) ensureCursorVisible(jump bool) refModel {
+	rows := r.flatRows()
+	cursorRow, ok := r.cursorFlatRow(rows)
+	if !ok {
+		return r
+	}
+	vh := r.visibleHeight()
+	if vh <= 0 {
+		return r
+	}
+	if jump {
+		if cursorRow < r.yOffset {
+			r.yOffset = cursorRow
+		} else if cursorRow >= r.yOffset+vh {
+			r.yOffset = cursorRow - vh + 1
+		}
+	} else {
+		if cursorRow == r.yOffset-1 {
+			r.yOffset--
+		} else if cursorRow == r.yOffset+vh {
+			r.yOffset++
+		}
+	}
+	if r.yOffset < 0 {
+		r.yOffset = 0
+	}
+	max := len(rows) - vh
+	if max < 0 {
+		max = 0
+	}
+	if r.yOffset > max {
+		r.yOffset = max
 	}
 	return r
 }

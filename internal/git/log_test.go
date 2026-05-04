@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,8 +13,8 @@ import (
 
 func TestParseLog(t *testing.T) {
 	in := strings.Join([]string{
-		"abc123\x00def456\x00Alice\x00alice@example.com\x001700000000\x00add feature",
-		"def456\x00\x00Bob\x00bob@example.com\x001699999999\x00initial commit",
+		"abc123\x00def456\x00Alice\x00alice@example.com\x001700000000\x00add feature\x00HEAD -> main, origin/main, tag: v0.0.1",
+		"def456\x00\x00Bob\x00bob@example.com\x001699999999\x00initial commit\x00",
 	}, "\n") + "\n"
 
 	got, err := parseLog(strings.NewReader(in))
@@ -34,14 +35,37 @@ func TestParseLog(t *testing.T) {
 	if !c0.AuthorTime.Equal(time.Unix(1700000000, 0)) {
 		t.Errorf("commit[0].AuthorTime = %v", c0.AuthorTime)
 	}
+	wantRefs := []string{"HEAD -> main", "origin/main", "tag: v0.0.1"}
+	if len(c0.RefNames) != len(wantRefs) {
+		t.Fatalf("commit[0].RefNames = %v, want %v", c0.RefNames, wantRefs)
+	}
+	for i, r := range wantRefs {
+		if c0.RefNames[i] != r {
+			t.Errorf("commit[0].RefNames[%d] = %q, want %q", i, c0.RefNames[i], r)
+		}
+	}
 
 	if got[1].Parents != nil {
 		t.Errorf("root commit should have no parents, got %v", got[1].Parents)
 	}
+	if got[1].RefNames != nil {
+		t.Errorf("root commit RefNames = %v, want nil", got[1].RefNames)
+	}
+}
+
+func TestParseLogEmptyDecorationYieldsNilRefNames(t *testing.T) {
+	in := "abc\x00def\x00A\x00a@x\x001700000000\x00sub\x00\n"
+	got, err := parseLog(strings.NewReader(in))
+	if err != nil {
+		t.Fatalf("parseLog: %v", err)
+	}
+	if len(got) != 1 || got[0].RefNames != nil {
+		t.Errorf("RefNames = %v, want nil", got[0].RefNames)
+	}
 }
 
 func TestParseLogMergeCommitHasMultipleParents(t *testing.T) {
-	in := "merge1\x00p1 p2\x00Carol\x00carol@example.com\x001700000100\x00merge branch 'feat'\n"
+	in := "merge1\x00p1 p2\x00Carol\x00carol@example.com\x001700000100\x00merge branch 'feat'\x00\n"
 	got, err := parseLog(strings.NewReader(in))
 	if err != nil {
 		t.Fatalf("parseLog: %v", err)
@@ -71,6 +95,7 @@ func TestLogIntegration(t *testing.T) {
 
 	gitRun(t, dir, "init", "-b", "main")
 	gitRun(t, dir, "commit", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "tag", "v0.0.1")
 	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -92,6 +117,14 @@ func TestLogIntegration(t *testing.T) {
 	}
 	if len(commits[1].Parents) != 0 {
 		t.Errorf("root should have no parents, got %v", commits[1].Parents)
+	}
+	// HEAD 는 second 를 가리키므로 commits[0] 에 "HEAD -> main" 이 들어 있어야 한다.
+	if !slices.Contains(commits[0].RefNames, "HEAD -> main") {
+		t.Errorf("commits[0].RefNames = %v, want token %q", commits[0].RefNames, "HEAD -> main")
+	}
+	// v0.0.1 tag 는 first 에만 붙였으므로 commits[1] 에 "tag: v0.0.1" 이 들어 있어야 한다.
+	if !slices.Contains(commits[1].RefNames, "tag: v0.0.1") {
+		t.Errorf("commits[1].RefNames = %v, want token %q", commits[1].RefNames, "tag: v0.0.1")
 	}
 }
 

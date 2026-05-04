@@ -107,6 +107,11 @@ var (
 // column count of *this* row's graph (so we can pad it out without re-parsing
 // ANSI), graphColWidth is the column count to reserve so every visible row
 // aligns at the same boundary, and width is the overall row width.
+//
+// Layout: [cursor 2][graph][hash 7][space][rel 6][space][chips][space][subject].
+// Subject sits at the right edge so it absorbs the truncation when the row is
+// too narrow; chips are between time and subject, dropped wholesale rather
+// than partially when there isn't room for both chip and subject.
 func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColWidth, width int, selected bool) string {
 	hash := c.Hash
 	if len(hash) > shortHashLen {
@@ -132,27 +137,42 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 
 	graphCell, graphCellW := buildGraphCell(graphPrefix, graphRowWidth, effectiveCol)
 
-	// Layout: [cursor 2][graph][subject (gap)][hash 7][space][rel 6]
-	used := cursorWidth + graphCellW + 1 + shortHashLen + 1 + timeColWidth
-	subjectWidth := width - used
+	// Fixed-position prefix: cursor + graph + hash + space + relative-time.
+	fixedUsed := cursorWidth + graphCellW + shortHashLen + 1 + timeColWidth
 
-	if subjectWidth < 1 {
+	// At least one cell for the subject (after a single separator space).
+	if width-fixedUsed-1 < 1 {
 		// Row is too narrow for the subject — drop it but keep hash visible.
 		return cursor + graphCell + hashStyle.Render(hash)
 	}
 
+	chipText, chipW := buildChips(c.RefNames, selected)
+	chipSegment := ""
+	chipSegmentWidth := 0
+	if chipW > 0 {
+		// Drop the chip cluster entirely if it would leave subject below 1
+		// cell. Subject wins over chips when the row is narrow.
+		candidate := 1 + chipW
+		if width-fixedUsed-candidate-1 >= 1 {
+			chipSegment = " " + chipText
+			chipSegmentWidth = candidate
+		}
+	}
+
+	subjectWidth := width - fixedUsed - chipSegmentWidth - 1
 	subject := runewidth.Truncate(c.Subject, subjectWidth, "…")
 	subject = runewidth.FillRight(subject, subjectWidth)
 	if selected {
 		subject = selectedStyle.Render(subject)
 	}
 
-	return fmt.Sprintf("%s%s%s %s %s",
+	return fmt.Sprintf("%s%s%s %s%s %s",
 		cursor,
 		graphCell,
-		subject,
 		hashStyle.Render(hash),
 		timeStyle.Render(runewidth.FillLeft(rel, timeColWidth)),
+		chipSegment,
+		subject,
 	)
 }
 

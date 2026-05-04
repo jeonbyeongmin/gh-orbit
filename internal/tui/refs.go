@@ -179,20 +179,6 @@ func (r refModel) firstRefIndexInExpandedSection(from, dir int) (int, bool) {
 	return 0, false
 }
 
-// visibleHeight is the number of body rows that fit beside the sticky header.
-// height >= 2 always reserves one row for the sticky line (even on frames
-// where it is suppressed, so scroll math doesn't depend on visibility); below
-// that, sticky is disabled and the full pane height is body.
-func (r refModel) visibleHeight() int {
-	if r.height <= 0 {
-		return 0
-	}
-	if r.height < 2 {
-		return r.height
-	}
-	return r.height - 1
-}
-
 // scrollCursorIntoView pulls yOffset so the cursor row is inside the window
 // in one shot. Used by g/G/z and SetSize, where the cursor may have jumped
 // far from the previous offset.
@@ -202,16 +188,15 @@ func (r refModel) scrollCursorIntoView() refModel {
 	if !ok {
 		return r
 	}
-	vh := r.visibleHeight()
-	if vh <= 0 {
+	if r.height <= 0 {
 		return r
 	}
 	if cursorRow < r.yOffset {
 		r.yOffset = cursorRow
-	} else if cursorRow >= r.yOffset+vh {
-		r.yOffset = cursorRow - vh + 1
+	} else if cursorRow >= r.yOffset+r.height {
+		r.yOffset = cursorRow - r.height + 1
 	}
-	return r.clampOffset(len(rows), vh)
+	return r.clampOffset(len(rows), r.height)
 }
 
 // nudgeOffsetOnEdge shifts yOffset by ±1 only when the cursor moved exactly
@@ -223,17 +208,16 @@ func (r refModel) nudgeOffsetOnEdge() refModel {
 	if !ok {
 		return r
 	}
-	vh := r.visibleHeight()
-	if vh <= 0 {
+	if r.height <= 0 {
 		return r
 	}
 	switch cursorRow {
 	case r.yOffset - 1:
 		r.yOffset--
-	case r.yOffset + vh:
+	case r.yOffset + r.height:
 		r.yOffset++
 	}
-	return r.clampOffset(len(rows), vh)
+	return r.clampOffset(len(rows), r.height)
 }
 
 func (r refModel) clampOffset(rowsLen, vh int) refModel {
@@ -386,19 +370,7 @@ func (r refModel) View() string {
 	}
 
 	rows := r.flatRows()
-	cursorRow, hasCursor := r.cursorFlatRow(rows)
-
-	// stickyIdx is the index of the section-header row that should be pinned
-	// to the first line, or -1 when no sticky is needed (no cursor, height
-	// too small, or the section's real header is already the top visible
-	// row — drawing it twice would just duplicate the line).
-	stickyIdx := -1
-	if hasCursor && r.height >= 2 {
-		stickyIdx = sectionHeaderRowOf(rows, rows[cursorRow].sectionIdx)
-		if stickyIdx >= 0 && stickyIdx == r.yOffset {
-			stickyIdx = -1
-		}
-	}
+	cursorRow, _ := r.cursorFlatRow(rows)
 
 	start, end := 0, len(rows)
 	if r.height > 0 {
@@ -409,41 +381,19 @@ func (r refModel) View() string {
 		if start > end {
 			start = end
 		}
-		bodyRows := r.height
-		if stickyIdx >= 0 {
-			bodyRows = r.visibleHeight()
-		}
-		if bodyEnd := start + bodyRows; bodyEnd < end {
+		if bodyEnd := start + r.height; bodyEnd < end {
 			end = bodyEnd
 		}
 	}
 
 	var b strings.Builder
-	wroteAny := false
-	if stickyIdx >= 0 {
-		b.WriteString(r.renderRow(rows[stickyIdx], width, false))
-		wroteAny = true
-	}
 	for i := start; i < end; i++ {
-		if wroteAny {
+		if i > start {
 			b.WriteByte('\n')
 		}
 		b.WriteString(r.renderRow(rows[i], width, i == cursorRow))
-		wroteAny = true
 	}
 	return b.String()
-}
-
-// sectionHeaderRowOf returns the flatRows index of section sectionIdx's header,
-// or -1 when the row list does not contain that header (shouldn't happen for
-// valid sectionIdx in 0..2).
-func sectionHeaderRowOf(rows []refRow, sectionIdx int) int {
-	for i, row := range rows {
-		if row.kind == refRowHeader && row.sectionIdx == sectionIdx {
-			return i
-		}
-	}
-	return -1
 }
 
 func renderRefLine(ref git.Ref, width int, selected bool) string {

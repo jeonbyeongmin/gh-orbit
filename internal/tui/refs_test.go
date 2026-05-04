@@ -185,64 +185,24 @@ func TestRefModelClipsToHeight(t *testing.T) {
 	}
 }
 
-func TestRefModelStickyHeaderAtTop(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 8)
-	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
-	r = pressKey(t, r, "G")
-	view := ansi.Strip(r.View())
-	lines := strings.Split(view, "\n")
-	if !strings.Contains(lines[0], "Local branches") {
-		t.Errorf("after G, first line should be sticky 'Local branches', got %q", lines[0])
-	}
-	// Real header at flat-row 0 should have scrolled out of the visible
-	// window — i.e. it doesn't appear past line 0 in the visible slice.
-	bodyHeaderCount := 0
-	for _, ln := range lines {
-		if strings.Contains(ln, "Local branches") {
-			bodyHeaderCount++
-		}
-	}
-	if bodyHeaderCount != 1 {
-		t.Errorf("after G, expected exactly one 'Local branches' line (sticky only), got %d in %q", bodyHeaderCount, view)
-	}
-}
-
-func TestRefModelStickyHeaderSkippedWhenAlreadyVisible(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 8)
-	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
-	view := ansi.Strip(r.View())
-	lines := strings.Split(view, "\n")
-	headerCount := 0
-	for _, ln := range lines {
-		if strings.Contains(ln, "Local branches") {
-			headerCount++
-		}
-	}
-	if headerCount != 1 {
-		t.Errorf("at top, expected exactly one 'Local branches' (no sticky duplicate), got %d in %q", headerCount, view)
-	}
-}
-
 func TestRefModelLazyScrollOnJK(t *testing.T) {
 	r := newRefsModel()
 	const h = 6
 	r.SetSize(40, h)
 	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
-	// visibleHeight = h-1 = 5. flat-row layout: header(0), local-0(1) ..
-	// local-19(20). cursor=N sits at flat-row N+1. The lazy edge bump
-	// fires when flat-row reaches yOffset+visibleHeight = 5, i.e. at
-	// cursor=4. So j×3 stays at yOffset=0; the 4th j bumps to 1.
-	for i := 0; i < 3; i++ {
+	// flat-row layout: header(0), local-0(1) .. local-19(20). cursor=N
+	// sits at flat-row N+1. The lazy edge bump fires when flat-row reaches
+	// yOffset+h = 6, i.e. at cursor=5. So j×4 stays at yOffset=0; the 5th
+	// j bumps to 1.
+	for i := 0; i < 4; i++ {
 		r = pressKey(t, r, "j")
 	}
 	if r.yOffset != 0 {
-		t.Errorf("yOffset after j×3 = %d, want 0 (still inside window)", r.yOffset)
+		t.Errorf("yOffset after j×4 = %d, want 0 (still inside window)", r.yOffset)
 	}
 	r = pressKey(t, r, "j")
 	if r.yOffset != 1 {
-		t.Errorf("yOffset after j×4 = %d, want 1 (lazy bump on edge)", r.yOffset)
+		t.Errorf("yOffset after j×5 = %d, want 1 (lazy bump on edge)", r.yOffset)
 	}
 }
 
@@ -252,19 +212,20 @@ func TestRefModelLazyScrollOnK(t *testing.T) {
 	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
 	r = pressKey(t, r, "G")
 	startOffset := r.yOffset
-	// G lands cursor on local-19 (flat-row 20) and parks yOffset at the
-	// position where local-19 is the bottom visible row. k×4 walks the
-	// cursor up while it is still inside the window — yOffset must stay
-	// put. The 5th k makes flat-row land on yOffset-1, triggering -1.
-	for i := 0; i < 4; i++ {
+	// G lands cursor on local-19 (flat-row 20) and parks yOffset so the
+	// cursor is at the bottom of the visible window. Walking the cursor up
+	// keeps yOffset put until flat-row crosses yOffset-1 — that's cursor=N
+	// with flat-row N+1 = yOffset-1, i.e. N = yOffset-2.
+	triggerSteps := 19 - (startOffset - 2)
+	for i := 0; i < triggerSteps-1; i++ {
 		r = pressKey(t, r, "k")
 	}
 	if r.yOffset != startOffset {
-		t.Errorf("yOffset after G then k×4 = %d, want %d (still inside window)", r.yOffset, startOffset)
+		t.Errorf("yOffset after G then k×%d = %d, want %d (still inside window)", triggerSteps-1, r.yOffset, startOffset)
 	}
 	r = pressKey(t, r, "k")
 	if r.yOffset != startOffset-1 {
-		t.Errorf("yOffset after G then k×5 = %d, want %d (lazy -1)", r.yOffset, startOffset-1)
+		t.Errorf("yOffset after one more k = %d, want %d (lazy -1)", r.yOffset, startOffset-1)
 	}
 }
 
@@ -353,24 +314,14 @@ func TestRefModelSelectableCountIgnoresFoldedRefs(t *testing.T) {
 	}
 }
 
-func TestRefModelStickyDoesNotCoverCursorAtSmallHeight(t *testing.T) {
+func TestRefModelCursorVisibleAtSmallHeight(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 3)
 	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(10, 0, 0)})
 	r = pressKey(t, r, "G")
 	view := ansi.Strip(r.View())
-	lines := strings.Split(view, "\n")
-	// At least one line must mention the last selectable ref, even with
-	// height=3 (sticky 1 + body 2).
 	last := "local-9"
-	found := false
-	for _, ln := range lines {
-		if strings.Contains(ln, last) {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !strings.Contains(view, last) {
 		t.Errorf("at small height, cursor (%s) must remain visible; got %q", last, view)
 	}
 }

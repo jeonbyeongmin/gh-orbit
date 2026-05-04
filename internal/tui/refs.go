@@ -482,4 +482,7 @@ func renderRefLine(ref git.Ref, width int, selected bool) string {
 func (r *refModel) SetSize(w, h int) {
 	r.width = w
 	r.height = h
+	if r.loaded {
+		*r = r.ensureCursorVisible(true)
+	}
 }

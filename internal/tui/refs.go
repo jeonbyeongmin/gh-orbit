@@ -18,14 +18,14 @@ import (
 const refLoadTimeout = 30 * time.Second
 
 type refModel struct {
-	// byKind caches refs partitioned in render order so View / Selected /
-	// keypress bounds checks don't re-walk r.refs on every frame. Index
-	// matches refSections.
-	byKind [3][]git.Ref
-	width  int
-	cursor int
-	loaded bool
-	err    error
+	// byKind index matches refSections.
+	byKind  [3][]git.Ref
+	width   int
+	height  int
+	cursor  int
+	yOffset int
+	loaded  bool
+	err     error
 }
 
 func newRefsModel() refModel { return refModel{} }
@@ -65,6 +65,7 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	case refsLoadedMsg:
 		r.byKind = partitionByKind(m.refs)
 		r.cursor = 0
+		r.yOffset = 0
 		r.loaded = true
 		r.err = nil
 		return r, nil
@@ -90,35 +91,89 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 	case "j", "down":
 		if r.cursor < total-1 {
 			r.cursor++
+			r = r.nudgeOffsetOnEdge()
 		}
 	case "k", "up":
 		if r.cursor > 0 {
 			r.cursor--
+			r = r.nudgeOffsetOnEdge()
 		}
 	case "g":
 		r.cursor = 0
+		r.yOffset = 0
 	case "G":
 		if total > 0 {
 			r.cursor = total - 1
+			r = r.scrollCursorIntoView()
 		}
 	}
 	return r
 }
 
-// Selected returns the ref under the cursor, if any. Headers and empty-section
-// placeholders are not counted by the cursor — only refs are selectable.
+// scrollCursorIntoView pulls yOffset so the cursor row is inside the window
+// in one shot. Used by g/G/z and SetSize, where the cursor may have jumped
+// far from the previous offset.
+func (r refModel) scrollCursorIntoView() refModel {
+	rows := r.flatRows()
+	cursorRow, ok := r.cursorFlatRow(rows)
+	if !ok {
+		return r
+	}
+	if r.height <= 0 {
+		return r
+	}
+	if cursorRow < r.yOffset {
+		r.yOffset = cursorRow
+	} else if cursorRow >= r.yOffset+r.height {
+		r.yOffset = cursorRow - r.height + 1
+	}
+	return r.clampOffset(len(rows), r.height)
+}
+
+// nudgeOffsetOnEdge shifts yOffset by ±1 only when the cursor moved exactly
+// to the row immediately above or below the visible window. Used by j/k so
+// cursor and viewport advance together at the edges but otherwise stay put.
+func (r refModel) nudgeOffsetOnEdge() refModel {
+	rows := r.flatRows()
+	cursorRow, ok := r.cursorFlatRow(rows)
+	if !ok {
+		return r
+	}
+	if r.height <= 0 {
+		return r
+	}
+	switch cursorRow {
+	case r.yOffset - 1:
+		r.yOffset--
+	case r.yOffset + r.height:
+		r.yOffset++
+	}
+	return r.clampOffset(len(rows), r.height)
+}
+
+func (r refModel) clampOffset(rowsLen, vh int) refModel {
+	if r.yOffset < 0 {
+		r.yOffset = 0
+	}
+	maxOffset := rowsLen - vh
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if r.yOffset > maxOffset {
+		r.yOffset = maxOffset
+	}
+	return r
+}
+
+// Selected returns the ref under the cursor, if any.
 func (r refModel) Selected() (git.Ref, bool) {
-	idx := r.cursor
-	if idx < 0 {
+	rows := r.flatRows()
+	i, ok := r.cursorFlatRow(rows)
+	if !ok {
 		return git.Ref{}, false
 	}
-	for _, items := range r.byKind {
-		if idx < len(items) {
-			return items[idx], true
-		}
-		idx -= len(items)
-	}
-	return git.Ref{}, false
+	row := rows[i]
+	return r.byKind[row.sectionIdx][row.refIdx], true
 }
 
 func (r refModel) selectableCount() int {
@@ -150,6 +205,75 @@ var refSections = [3]refSection{
 	{"Tags", git.RefKindTag},
 }
 
+// refRowKind tags every visible line so View can slice by yOffset.
+type refRowKind int
+
+const (
+	refRowGap refRowKind = iota
+	refRowHeader
+	refRowEmpty
+	refRowRef
+)
+
+type refRow struct {
+	kind       refRowKind
+	sectionIdx int
+	refIdx     int // valid only for refRowRef
+}
+
+// flatRows expands the three sections into a flat row list in render order:
+// gap (between sections), header, then either empty placeholder or the ref
+// list. This is the index space visible-window slicing and scroll math share.
+func (r refModel) flatRows() []refRow {
+	var rows []refRow
+	for i := range refSections {
+		if i > 0 {
+			rows = append(rows, refRow{kind: refRowGap, sectionIdx: i})
+		}
+		rows = append(rows, refRow{kind: refRowHeader, sectionIdx: i})
+		items := r.byKind[i]
+		if len(items) == 0 {
+			rows = append(rows, refRow{kind: refRowEmpty, sectionIdx: i})
+			continue
+		}
+		for j := range items {
+			rows = append(rows, refRow{kind: refRowRef, sectionIdx: i, refIdx: j})
+		}
+	}
+	return rows
+}
+
+// cursorFlatRow maps r.cursor (n-th selectable ref) onto its flatRows index.
+// Returns false when there is no selectable ref (every section is empty).
+func (r refModel) cursorFlatRow(rows []refRow) (int, bool) {
+	n := 0
+	for i, row := range rows {
+		if row.kind != refRowRef {
+			continue
+		}
+		if n == r.cursor {
+			return i, true
+		}
+		n++
+	}
+	return -1, false
+}
+
+func (r refModel) renderRow(row refRow, width int, selected bool) string {
+	switch row.kind {
+	case refRowGap:
+		return ""
+	case refRowHeader:
+		return refHeaderStyle.Render(runewidth.Truncate(refSections[row.sectionIdx].title, width, "…"))
+	case refRowEmpty:
+		return timeStyle.Render(runewidth.Truncate("  (empty)", width, "…"))
+	case refRowRef:
+		ref := r.byKind[row.sectionIdx][row.refIdx]
+		return renderRefLine(ref, width, selected)
+	}
+	return ""
+}
+
 func (r refModel) View() string {
 	if !r.loaded {
 		return "loading…"
@@ -162,25 +286,29 @@ func (r refModel) View() string {
 		width = 1
 	}
 
-	var b strings.Builder
-	cursorIdx := 0
-	for i, sec := range refSections {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(refHeaderStyle.Render(runewidth.Truncate(sec.title, width, "…")))
+	rows := r.flatRows()
+	cursorRow, _ := r.cursorFlatRow(rows)
 
-		items := r.byKind[i]
-		if len(items) == 0 {
-			b.WriteByte('\n')
-			b.WriteString(timeStyle.Render(runewidth.Truncate("  (empty)", width, "…")))
-			continue
+	start, end := 0, len(rows)
+	if r.height > 0 {
+		start = r.yOffset
+		if start < 0 {
+			start = 0
 		}
-		for _, ref := range items {
-			b.WriteByte('\n')
-			b.WriteString(renderRefLine(ref, width, cursorIdx == r.cursor))
-			cursorIdx++
+		if start > end {
+			start = end
 		}
+		if bodyEnd := start + r.height; bodyEnd < end {
+			end = bodyEnd
+		}
+	}
+
+	var b strings.Builder
+	for i := start; i < end; i++ {
+		if i > start {
+			b.WriteByte('\n')
+		}
+		b.WriteString(r.renderRow(rows[i], width, i == cursorRow))
 	}
 	return b.String()
 }
@@ -210,6 +338,13 @@ func renderRefLine(ref git.Ref, width int, selected bool) string {
 	return prefix + name
 }
 
-func (r *refModel) SetSize(w, _ int) {
+func (r *refModel) SetSize(w, h int) {
+	if r.width == w && r.height == h {
+		return
+	}
 	r.width = w
+	r.height = h
+	if r.loaded {
+		*r = r.scrollCursorIntoView()
+	}
 }

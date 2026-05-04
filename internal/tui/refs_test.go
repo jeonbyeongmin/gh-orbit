@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -9,6 +10,26 @@ import (
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
+
+func makeRefs(localN, remoteN, tagN int) []git.Ref {
+	out := make([]git.Ref, 0, localN+remoteN+tagN)
+	for i := 0; i < localN; i++ {
+		out = append(out, git.Ref{ShortName: fmt.Sprintf("local-%d", i), Kind: git.RefKindLocal})
+	}
+	for i := 0; i < remoteN; i++ {
+		out = append(out, git.Ref{ShortName: fmt.Sprintf("remote-%d", i), Kind: git.RefKindRemote})
+	}
+	for i := 0; i < tagN; i++ {
+		out = append(out, git.Ref{ShortName: fmt.Sprintf("tag-%d", i), Kind: git.RefKindTag})
+	}
+	return out
+}
+
+func pressKey(t *testing.T, r refModel, key string) refModel {
+	t.Helper()
+	out, _ := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	return out
+}
 
 func TestRefModelInitialView(t *testing.T) {
 	r := newRefsModel()
@@ -149,5 +170,105 @@ func TestRefModelEnterOnEmptyDoesNothing(t *testing.T) {
 	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {
 		t.Errorf("enter with no selectable ref should not emit a cmd, got %v", cmd())
+	}
+}
+
+func TestRefModelClipsToHeight(t *testing.T) {
+	r := newRefsModel()
+	const h = 10
+	r.SetSize(40, h)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(30, 0, 0)})
+	view := ansi.Strip(r.View())
+	lines := strings.Split(view, "\n")
+	if len(lines) > h {
+		t.Errorf("View should clip to %d lines, got %d", h, len(lines))
+	}
+}
+
+func TestRefModelLazyScrollOnJK(t *testing.T) {
+	r := newRefsModel()
+	const h = 6
+	r.SetSize(40, h)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
+	// flat-row layout: header(0), local-0(1) .. local-19(20). cursor=N
+	// sits at flat-row N+1. The lazy edge bump fires when flat-row reaches
+	// yOffset+h = 6, i.e. at cursor=5. So j×4 stays at yOffset=0; the 5th
+	// j bumps to 1.
+	for i := 0; i < 4; i++ {
+		r = pressKey(t, r, "j")
+	}
+	if r.yOffset != 0 {
+		t.Errorf("yOffset after j×4 = %d, want 0 (still inside window)", r.yOffset)
+	}
+	r = pressKey(t, r, "j")
+	if r.yOffset != 1 {
+		t.Errorf("yOffset after j×5 = %d, want 1 (lazy bump on edge)", r.yOffset)
+	}
+}
+
+func TestRefModelLazyScrollOnK(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 6)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
+	r = pressKey(t, r, "G")
+	startOffset := r.yOffset
+	// G lands cursor on local-19 (flat-row 20) and parks yOffset so the
+	// cursor is at the bottom of the visible window. Walking the cursor up
+	// keeps yOffset put until flat-row crosses yOffset-1 — that's cursor=N
+	// with flat-row N+1 = yOffset-1, i.e. N = yOffset-2.
+	triggerSteps := 19 - (startOffset - 2)
+	for i := 0; i < triggerSteps-1; i++ {
+		r = pressKey(t, r, "k")
+	}
+	if r.yOffset != startOffset {
+		t.Errorf("yOffset after G then k×%d = %d, want %d (still inside window)", triggerSteps-1, r.yOffset, startOffset)
+	}
+	r = pressKey(t, r, "k")
+	if r.yOffset != startOffset-1 {
+		t.Errorf("yOffset after one more k = %d, want %d (lazy -1)", r.yOffset, startOffset-1)
+	}
+}
+
+func TestRefModelGGoesToTopAndResetsOffset(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 6)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
+	r = pressKey(t, r, "G")
+	if r.yOffset == 0 {
+		t.Fatal("G should advance yOffset above 0 when there are enough refs")
+	}
+	r = pressKey(t, r, "g")
+	if r.cursor != 0 {
+		t.Errorf("after g: cursor = %d, want 0", r.cursor)
+	}
+	if r.yOffset != 0 {
+		t.Errorf("after g: yOffset = %d, want 0", r.yOffset)
+	}
+}
+
+func TestRefModelYOffsetResetsAfterReload(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 6)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
+	r = pressKey(t, r, "G")
+	if r.yOffset == 0 {
+		t.Fatal("G should advance yOffset above 0 when there are enough refs")
+	}
+	r.ResetForReload()
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
+	if r.yOffset != 0 {
+		t.Errorf("yOffset should reset to 0 after reload, got %d", r.yOffset)
+	}
+}
+
+func TestRefModelCursorVisibleAtSmallHeight(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 3)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(10, 0, 0)})
+	r = pressKey(t, r, "G")
+	view := ansi.Strip(r.View())
+	last := "local-9"
+	if !strings.Contains(view, last) {
+		t.Errorf("at small height, cursor (%s) must remain visible; got %q", last, view)
 	}
 }

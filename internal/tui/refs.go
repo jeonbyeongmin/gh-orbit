@@ -158,6 +158,81 @@ var refSections = [3]refSection{
 	{"Tags", git.RefKindTag},
 }
 
+// refRowKind tags every visible line so View can slice by yOffset and so the
+// sticky-header pass (later step) can find headers without re-walking byKind.
+type refRowKind int
+
+const (
+	refRowGap refRowKind = iota
+	refRowHeader
+	refRowEmpty
+	refRowRef
+)
+
+type refRow struct {
+	kind       refRowKind
+	sectionIdx int
+	refIdx     int // valid only for refRowRef
+}
+
+// flatRows expands the three sections into a flat row list in render order:
+// gap (between sections), header, then either empty placeholder, the ref list,
+// or — for a folded section — nothing past the header. This is the index space
+// every later concern (visible-window slicing, sticky header, scroll math)
+// shares.
+func (r refModel) flatRows() []refRow {
+	var rows []refRow
+	for i := range refSections {
+		if i > 0 {
+			rows = append(rows, refRow{kind: refRowGap, sectionIdx: i})
+		}
+		rows = append(rows, refRow{kind: refRowHeader, sectionIdx: i})
+		if r.folded[i] {
+			continue
+		}
+		items := r.byKind[i]
+		if len(items) == 0 {
+			rows = append(rows, refRow{kind: refRowEmpty, sectionIdx: i})
+			continue
+		}
+		for j := range items {
+			rows = append(rows, refRow{kind: refRowRef, sectionIdx: i, refIdx: j})
+		}
+	}
+	return rows
+}
+
+// cursorFlatRow maps r.cursor (n-th selectable ref) onto its flatRows index.
+// Returns false when there is no selectable ref (everything empty or folded).
+func (r refModel) cursorFlatRow(rows []refRow) (int, bool) {
+	n := 0
+	for i, row := range rows {
+		if row.kind != refRowRef {
+			continue
+		}
+		if n == r.cursor {
+			return i, true
+		}
+		n++
+	}
+	return -1, false
+}
+
+func (r refModel) renderRow(row refRow, width int, selected bool) string {
+	switch row.kind {
+	case refRowGap:
+		return ""
+	case refRowHeader:
+		return refHeaderStyle.Render(runewidth.Truncate(refSections[row.sectionIdx].title, width, "…"))
+	case refRowEmpty:
+		return timeStyle.Render(runewidth.Truncate("  (empty)", width, "…"))
+	case refRowRef:
+		ref := r.byKind[row.sectionIdx][row.refIdx]
+		return renderRefLine(ref, width, selected)
+	}
+	return ""
+}
+
 func (r refModel) View() string {
 	if !r.loaded {
 		return "loading…"
@@ -170,25 +245,29 @@ func (r refModel) View() string {
 		width = 1
 	}
 
-	var b strings.Builder
-	cursorIdx := 0
-	for i, sec := range refSections {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(refHeaderStyle.Render(runewidth.Truncate(sec.title, width, "…")))
+	rows := r.flatRows()
+	cursorRow, _ := r.cursorFlatRow(rows)
 
-		items := r.byKind[i]
-		if len(items) == 0 {
-			b.WriteByte('\n')
-			b.WriteString(timeStyle.Render(runewidth.Truncate("  (empty)", width, "…")))
-			continue
+	start, end := 0, len(rows)
+	if r.height > 0 {
+		start = r.yOffset
+		if start < 0 {
+			start = 0
 		}
-		for _, ref := range items {
-			b.WriteByte('\n')
-			b.WriteString(renderRefLine(ref, width, cursorIdx == r.cursor))
-			cursorIdx++
+		if start > end {
+			start = end
 		}
+		if max := start + r.height; max < end {
+			end = max
+		}
+	}
+
+	var b strings.Builder
+	for i := start; i < end; i++ {
+		if i > start {
+			b.WriteByte('\n')
+		}
+		b.WriteString(r.renderRow(rows[i], width, i == cursorRow))
 	}
 	return b.String()
 }

@@ -227,9 +227,10 @@ func (r refModel) nudgeOffsetOnEdge() refModel {
 	if vh <= 0 {
 		return r
 	}
-	if cursorRow == r.yOffset-1 {
+	switch cursorRow {
+	case r.yOffset - 1:
 		r.yOffset--
-	} else if cursorRow == r.yOffset+vh {
+	case r.yOffset + vh:
 		r.yOffset++
 	}
 	return r.clampOffset(len(rows), vh)

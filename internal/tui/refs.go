@@ -23,7 +23,14 @@ type refModel struct {
 	// matches refSections.
 	byKind [3][]git.Ref
 	width  int
+	height int
 	cursor int
+	// yOffset is the first flat-row index visible inside the pane. Lazy
+	// scroll moves it ±1 only when cursor reaches the visible window edge.
+	yOffset int
+	// folded[i] toggles section i (Local/Remote/Tags) between expanded and
+	// collapsed. Zero value = all expanded, matching the previous behaviour.
+	folded [3]bool
 	loaded bool
 	err    error
 }
@@ -65,6 +72,7 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	case refsLoadedMsg:
 		r.byKind = partitionByKind(m.refs)
 		r.cursor = 0
+		r.yOffset = 0
 		r.loaded = true
 		r.err = nil
 		return r, nil
@@ -210,6 +218,7 @@ func renderRefLine(ref git.Ref, width int, selected bool) string {
 	return prefix + name
 }
 
-func (r *refModel) SetSize(w, _ int) {
+func (r *refModel) SetSize(w, h int) {
 	r.width = w
+	r.height = h
 }

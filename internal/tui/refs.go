@@ -113,8 +113,85 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 			r.cursor = total - 1
 			r = r.ensureCursorVisible(true)
 		}
+	case "z":
+		r = r.toggleFoldAtCursor()
+		r = r.ensureCursorVisible(true)
 	}
 	return r
+}
+
+// toggleFoldAtCursor flips the fold state of the section the cursor is in. If
+// the cursor was on a ref inside the section we just folded, it jumps to the
+// nearest expanded ref (down first, then up); when no other section has refs,
+// cursor stays at 0 and Selected() returns false on its own.
+func (r refModel) toggleFoldAtCursor() refModel {
+	sec, onRef := r.cursorSection()
+	if !onRef {
+		// Cursor isn't on a real ref (everything empty / all folded). Toggle
+		// the first section as a sane default — pick whichever section the
+		// flat-row pass landed on.
+		sec = 0
+	}
+	r.folded[sec] = !r.folded[sec]
+	if !r.folded[sec] {
+		// Just expanded — cursor mapping shifted but the cursor's logical
+		// position is still valid in the new (larger) selectable count.
+		return r
+	}
+	// Just folded the section the cursor was in — relocate the cursor to the
+	// nearest expanded, non-empty section (down, then up).
+	if !onRef {
+		return r
+	}
+	if newCursor, ok := r.firstRefIndexInExpandedSection(sec, +1); ok {
+		r.cursor = newCursor
+		return r
+	}
+	if newCursor, ok := r.firstRefIndexInExpandedSection(sec, -1); ok {
+		r.cursor = newCursor
+		return r
+	}
+	r.cursor = 0
+	return r
+}
+
+// cursorSection reports which section index the cursor currently sits in. The
+// second return is true only when the cursor lands on a real ref row — false
+// means there is no selectable ref at all.
+func (r refModel) cursorSection() (int, bool) {
+	idx := r.cursor
+	for i, items := range r.byKind {
+		if r.folded[i] {
+			continue
+		}
+		if idx < len(items) {
+			return i, true
+		}
+		idx -= len(items)
+	}
+	return 0, false
+}
+
+// firstRefIndexInExpandedSection scans sections in direction dir (+1 down,
+// -1 up) starting just past `from`, and returns the cursor index of the first
+// ref in the first expanded section that has any refs.
+func (r refModel) firstRefIndexInExpandedSection(from, dir int) (int, bool) {
+	for i := from + dir; i >= 0 && i < len(r.byKind); i += dir {
+		if r.folded[i] || len(r.byKind[i]) == 0 {
+			continue
+		}
+		// cursor index = number of selectable refs in expanded sections
+		// that come before section i.
+		n := 0
+		for j := 0; j < i; j++ {
+			if r.folded[j] {
+				continue
+			}
+			n += len(r.byKind[j])
+		}
+		return n, true
+	}
+	return 0, false
 }
 
 // visibleHeight is how many flat-rows fit under the sticky header. We always

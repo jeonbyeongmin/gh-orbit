@@ -159,7 +159,7 @@ func TestRenderCommitLineWithLocalChip(t *testing.T) {
 	if mainIdx < 0 || subjectIdx < 0 || hashIdx < 0 {
 		t.Fatalf("expected hash, chip, subject in %q", stripped)
 	}
-	if !(hashIdx < mainIdx && mainIdx < subjectIdx) {
+	if hashIdx >= mainIdx || mainIdx >= subjectIdx {
 		t.Errorf("expected order hash < chip < subject; got hash=%d chip=%d subject=%d in %q",
 			hashIdx, mainIdx, subjectIdx, stripped)
 	}

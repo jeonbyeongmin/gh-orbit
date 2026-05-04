@@ -238,17 +238,51 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 		cmd := g.list.SetItems(items)
 		g.loaded = true
 		g.err = nil
+		// First row gets a synthetic selection event so the diff pane can
+		// fire its initial stat load — without this the right pane would
+		// stay at "(no commit selected)" until the user touched j/k.
+		if c, ok := selectedCommit(g.list); ok {
+			return g, tea.Batch(cmd, emitCommitSelected(c.Hash))
+		}
 		return g, cmd
 	case commitsLoadFailedMsg:
 		g.loaded = true
 		g.err = m.err
 		return g, nil
 	case tea.KeyMsg:
+		prevHash := ""
+		if c, ok := selectedCommit(g.list); ok {
+			prevHash = c.Hash
+		}
 		var cmd tea.Cmd
 		g.list, cmd = g.list.Update(msg)
+		newHash := ""
+		if c, ok := selectedCommit(g.list); ok {
+			newHash = c.Hash
+		}
+		if newHash != "" && newHash != prevHash {
+			return g, tea.Batch(cmd, emitCommitSelected(newHash))
+		}
 		return g, cmd
 	}
 	return g, nil
+}
+
+// selectedCommit pulls the commit out of the list's currently focused item.
+// Returns false when the list is empty or the item is the wrong type.
+func selectedCommit(l list.Model) (git.Commit, bool) {
+	item, ok := l.SelectedItem().(commitItem)
+	if !ok {
+		return git.Commit{}, false
+	}
+	return item.c, true
+}
+
+// emitCommitSelected lifts a hash into a tea.Cmd that delivers
+// commitSelectedMsg on the next tick — keeping the message-passing pattern
+// consistent with the rest of the runtime.
+func emitCommitSelected(hash string) tea.Cmd {
+	return func() tea.Msg { return commitSelectedMsg{hash: hash} }
 }
 
 func (g graphModel) View() string {

@@ -45,8 +45,11 @@ func TestModelRefSelectedJumpsCursor(t *testing.T) {
 	if !m.graph.loaded {
 		t.Errorf("graph.loaded should remain true after refSelectedMsg (no reload)")
 	}
-	if cmd != nil {
-		t.Errorf("refSelectedMsg should not dispatch a load cmd, got %v", cmd)
+	// refSelectedMsg dispatches a diff debounce tick so the right pane
+	// refreshes for the newly focused commit. It does NOT dispatch a graph
+	// load cmd — currentRefs stays at --all.
+	if cmd == nil {
+		t.Error("refSelectedMsg should dispatch a diff debounce cmd for the new cursor")
 	}
 	if got := m.graph.list.Index(); got != 2 {
 		t.Errorf("graph cursor index = %d, want 2 (row of ccc3333)", got)

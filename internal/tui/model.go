@@ -17,10 +17,6 @@ const (
 	paneCount
 )
 
-func (p pane) title() string {
-	return [...]string{"refs", "commit graph", "diff"}[p]
-}
-
 // refsAllSentinel is the git revision spec that means "every ref". Used as the
 // default base for the unified graph: Init seeds currentRefs with this so the
 // commit list shows every local/remote/tag from the start, Fork-style.

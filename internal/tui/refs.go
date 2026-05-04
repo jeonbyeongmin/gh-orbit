@@ -113,14 +113,18 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 	return r
 }
 
-// Selected returns the ref under the cursor, if any. Headers and empty-section
-// placeholders are not counted by the cursor — only refs are selectable.
+// Selected returns the ref under the cursor, if any. Headers, gaps, and
+// empty-section placeholders are not selectable — and refs in folded sections
+// drop out of the count entirely so the cursor only ever lands on visible refs.
 func (r refModel) Selected() (git.Ref, bool) {
 	idx := r.cursor
 	if idx < 0 {
 		return git.Ref{}, false
 	}
-	for _, items := range r.byKind {
+	for i, items := range r.byKind {
+		if r.folded[i] {
+			continue
+		}
 		if idx < len(items) {
 			return items[idx], true
 		}
@@ -130,7 +134,14 @@ func (r refModel) Selected() (git.Ref, bool) {
 }
 
 func (r refModel) selectableCount() int {
-	return len(r.byKind[0]) + len(r.byKind[1]) + len(r.byKind[2])
+	n := 0
+	for i, items := range r.byKind {
+		if r.folded[i] {
+			continue
+		}
+		n += len(items)
+	}
+	return n
 }
 
 func partitionByKind(refs []git.Ref) [3][]git.Ref {

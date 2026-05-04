@@ -104,7 +104,10 @@ func buildChips(refNames []string, selected bool) (string, int) {
 		parts = append(parts, renderChip(fmt.Sprintf("+%d", overflow), chipMoreStyle, selected))
 	}
 
-	out := strings.Join(parts, " ")
+	// Adjacent chips already each contribute 1 cell of left+right padding,
+	// so concatenating without an extra separator gives a 2-cell visual gap
+	// between chips — enough for the eye to read them as distinct boxes.
+	out := strings.Join(parts, "")
 	return out, lipgloss.Width(out)
 }
 

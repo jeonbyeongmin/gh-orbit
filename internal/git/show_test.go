@@ -21,20 +21,54 @@ func TestShowStatIntegration(t *testing.T) {
 	gitRun(t, dir, "add", "f.txt")
 	gitRun(t, dir, "commit", "-m", "first")
 
-	out, err := Stat(context.Background(), dir, "HEAD")
+	files, err := Stat(context.Background(), dir, "HEAD")
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-	if !strings.Contains(out, "f.txt") {
-		t.Errorf("stat output should mention the file, got %q", out)
+	if len(files) != 1 {
+		t.Fatalf("got %d files, want 1: %+v", len(files), files)
 	}
-	// "1 file changed" plus "3 insertions" or similar — git's wording is
-	// stable enough that a substring check is fine.
-	if !strings.Contains(out, "insertion") {
-		t.Errorf("stat output should mention insertions, got %q", out)
+	got := files[0]
+	if got.Path != "f.txt" {
+		t.Errorf("Path = %q, want f.txt", got.Path)
 	}
-	if strings.Contains(out, "Author:") {
-		t.Errorf("stat output should not include the commit header, got %q", out)
+	if got.Insertions != 3 {
+		t.Errorf("Insertions = %d, want 3", got.Insertions)
+	}
+	if got.Deletions != 0 {
+		t.Errorf("Deletions = %d, want 0", got.Deletions)
+	}
+	if got.Binary() {
+		t.Error("text file should not be flagged Binary")
+	}
+}
+
+func TestParseNumstatHandlesBinaryAndRename(t *testing.T) {
+	in := "3\t1\tinternal/tui/diff.go\n-\t-\tassets/logo.png\n5\t2\told/{a => b}/file.txt\n"
+	out, err := parseNumstat(in)
+	if err != nil {
+		t.Fatalf("parseNumstat: %v", err)
+	}
+	if len(out) != 3 {
+		t.Fatalf("got %d entries, want 3", len(out))
+	}
+	if out[0].Path != "internal/tui/diff.go" || out[0].Insertions != 3 || out[0].Deletions != 1 {
+		t.Errorf("text entry = %+v", out[0])
+	}
+	if !out[1].Binary() || out[1].Path != "assets/logo.png" {
+		t.Errorf("binary entry = %+v, want Binary=true Path=assets/logo.png", out[1])
+	}
+	if out[2].Path != "old/{a => b}/file.txt" || out[2].Insertions != 5 || out[2].Deletions != 2 {
+		t.Errorf("rename entry = %+v", out[2])
+	}
+}
+
+func TestParseNumstatRejectsMalformed(t *testing.T) {
+	if _, err := parseNumstat("only-one-field\n"); err == nil {
+		t.Error("expected error on malformed numstat line")
+	}
+	if _, err := parseNumstat("notanumber\t0\tfile\n"); err == nil {
+		t.Error("expected error on non-numeric insertions")
 	}
 }
 

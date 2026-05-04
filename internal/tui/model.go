@@ -129,7 +129,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadDiffStatCmd("", msg.hash, msg.reqID)
 
 	case diffStatLoadedMsg:
-		m.diff.ApplyStatLoaded(msg.reqID, msg.hash, msg.text)
+		m.diff.ApplyStatLoaded(msg.reqID, msg.hash, msg.files)
 		return m, nil
 	case diffStatFailedMsg:
 		m.diff.ApplyStatFailed(msg.reqID, msg.hash, msg.err)

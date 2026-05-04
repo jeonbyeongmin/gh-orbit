@@ -370,11 +370,12 @@ func TestModelStaleStatLoadedIsIgnored(t *testing.T) {
 	m.diffReqID = 7
 	m.diff.MarkLoadingStat("current", 7)
 
-	// A stale response from reqID=3 must not overwrite the current state.
-	updated, _ = m.Update(diffStatLoadedMsg{reqID: 3, hash: "old", text: "stale stat"})
+	updated, _ = m.Update(diffStatLoadedMsg{reqID: 3, hash: "old", files: []git.FileStat{
+		{Path: "stale.txt", Insertions: 1},
+	}})
 	m = updated.(Model)
-	if m.diff.statText == "stale stat" {
-		t.Error("stale diffStatLoadedMsg must not overwrite current statText")
+	if m.diff.statLoaded {
+		t.Error("stale diffStatLoadedMsg must not flip statLoaded")
 	}
 	if !m.diff.loadingStat {
 		t.Error("stale response should leave loadingStat=true since the in-flight call is still pending")

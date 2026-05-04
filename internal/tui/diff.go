@@ -2,11 +2,15 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -20,7 +24,8 @@ const (
 type diffModel struct {
 	viewport     viewport.Model
 	currentHash  string
-	statText     string
+	statFiles    []git.FileStat
+	statLoaded   bool
 	patchText    string
 	loadingStat  bool
 	loadingPatch bool
@@ -55,7 +60,8 @@ func (d *diffModel) SetPatchViewportSize(w, h int) {
 
 func (d *diffModel) MarkLoadingStat(hash string, reqID uint64) {
 	d.currentHash = hash
-	d.statText = ""
+	d.statFiles = nil
+	d.statLoaded = false
 	d.loadingStat = true
 	d.err = nil
 	d.reqID = reqID
@@ -85,12 +91,13 @@ func (d *diffModel) accepts(reqID uint64, hash string) bool {
 	return reqID == d.reqID && hash == d.currentHash
 }
 
-func (d *diffModel) ApplyStatLoaded(reqID uint64, hash, text string) {
+func (d *diffModel) ApplyStatLoaded(reqID uint64, hash string, files []git.FileStat) {
 	if !d.accepts(reqID, hash) {
 		return
 	}
 	d.loadingStat = false
-	d.statText = text
+	d.statFiles = files
+	d.statLoaded = true
 	d.err = nil
 }
 
@@ -141,10 +148,83 @@ func (d diffModel) StatView() string {
 	if d.loadingStat {
 		return "loading…"
 	}
-	if strings.TrimSpace(d.statText) == "" {
+	if !d.statLoaded || len(d.statFiles) == 0 {
 		return "(no changes)"
 	}
-	return d.statText
+	return renderStat(d.statFiles, d.width)
+}
+
+var (
+	statInsertS  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	statDeleteS  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	statBinaryS  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	statSummaryS = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+)
+
+// renderStat lays each file out as "+N  -M  path" with stat columns aligned
+// across rows; binary changes show "Bin" in the stats column. The summary
+// line at the bottom matches git's "X files, +Y -Z" totals.
+func renderStat(files []git.FileStat, width int) string {
+	insW, delW := 1, 1 // at least "+" / "-"
+	var totalIns, totalDel int
+	for _, f := range files {
+		if f.Binary() {
+			continue
+		}
+		if w := len(strconv.Itoa(f.Insertions)) + 1; w > insW {
+			insW = w
+		}
+		if w := len(strconv.Itoa(f.Deletions)) + 1; w > delW {
+			delW = w
+		}
+		totalIns += f.Insertions
+		totalDel += f.Deletions
+	}
+	statColW := insW + 2 + delW // "+N  -M"
+	pathW := width - statColW - 1
+	if pathW < 4 {
+		pathW = 4
+	}
+
+	var b strings.Builder
+	for _, f := range files {
+		if f.Binary() {
+			binCell := runewidth.FillRight(statBinaryS.Render("Bin"), statColW)
+			fmt.Fprintf(&b, "%s %s\n", binCell, truncatePath(f.Path, pathW))
+			continue
+		}
+		ins := fmt.Sprintf("%*s", insW, "+"+strconv.Itoa(f.Insertions))
+		del := fmt.Sprintf("%*s", delW, "-"+strconv.Itoa(f.Deletions))
+		fmt.Fprintf(&b, "%s  %s %s\n",
+			statInsertS.Render(ins),
+			statDeleteS.Render(del),
+			truncatePath(f.Path, pathW))
+	}
+	summary := fmt.Sprintf("%d files: ", len(files))
+	summary += statInsertS.Render("+" + strconv.Itoa(totalIns))
+	summary += " "
+	summary += statDeleteS.Render("-" + strconv.Itoa(totalDel))
+	b.WriteString(statSummaryS.Render(summary))
+	return b.String()
+}
+
+// truncatePath shortens a path with a leading ellipsis when too wide. Paths
+// are more recognizable from the right end (the filename) than the left, so
+// we drop directory prefixes first.
+func truncatePath(p string, width int) string {
+	if runewidth.StringWidth(p) <= width {
+		return p
+	}
+	if width <= 1 {
+		return "…"
+	}
+	// Trim characters from the left until the remainder + leading "…" fits.
+	for i := range p {
+		if runewidth.StringWidth(p[i:])+1 <= width {
+			return "…" + p[i:]
+		}
+	}
+	return "…"
 }
 
 func (d diffModel) PatchView() string {
@@ -170,7 +250,7 @@ func firstLine(s string) string {
 type diffStatLoadedMsg struct {
 	reqID uint64
 	hash  string
-	text  string
+	files []git.FileStat
 }
 
 type diffStatFailedMsg struct {
@@ -213,11 +293,11 @@ func loadDiffStatCmd(dir, hash string, reqID uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), diffStatTimeout)
 		defer cancel()
-		text, err := git.Stat(ctx, dir, hash)
+		files, err := git.Stat(ctx, dir, hash)
 		if err != nil {
 			return diffStatFailedMsg{reqID: reqID, hash: hash, err: err}
 		}
-		return diffStatLoadedMsg{reqID: reqID, hash: hash, text: text}
+		return diffStatLoadedMsg{reqID: reqID, hash: hash, files: files}
 	}
 }
 

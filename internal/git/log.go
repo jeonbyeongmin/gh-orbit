@@ -25,6 +25,11 @@ type Commit struct {
 	AuthorEmail string
 	AuthorTime  time.Time
 	Subject     string
+	// RefNames carries the raw "%D" tokens (e.g. "HEAD -> main",
+	// "origin/main", "tag: v0.0.1"). Tokens keep their decoration prefixes;
+	// semantic classification lives in ParseDecoration so the renderer
+	// doesn't fork on token shape.
+	RefNames []string
 }
 
 // LogOptions selects which commits Log returns.
@@ -40,7 +45,7 @@ type LogOptions struct {
 // NUL between fields, newline between records. Subjects are single-line in
 // git log output, so newline-as-record-separator is safe; field values may
 // contain anything except NUL, which git itself will never emit here.
-const logFormat = "%H%x00%P%x00%an%x00%ae%x00%at%x00%s"
+const logFormat = "%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D"
 
 // Log runs `git log` and returns every matching commit, buffered. Fine for
 // the MVP; once we wire up the graph pane against large repos we'll add a
@@ -104,7 +109,7 @@ func parseLog(r io.Reader) ([]Commit, error) {
 
 func parseLine(line string) (Commit, error) {
 	fields := strings.Split(line, "\x00")
-	if len(fields) != 6 {
+	if len(fields) != 7 {
 		return Commit{}, fmt.Errorf("unexpected field count %d in %q", len(fields), line)
 	}
 	ts, err := strconv.ParseInt(fields[4], 10, 64)
@@ -122,5 +127,28 @@ func parseLine(line string) (Commit, error) {
 		AuthorEmail: fields[3],
 		AuthorTime:  time.Unix(ts, 0).UTC(),
 		Subject:     fields[5],
+		RefNames:    parseRefNames(fields[6]),
 	}, nil
+}
+
+// parseRefNames splits a raw "%D" payload ("HEAD -> main, origin/main, tag: v0.0.1")
+// into its comma-separated tokens. Empty payload returns nil — common, since
+// most commits aren't a ref tip.
+func parseRefNames(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ", ")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

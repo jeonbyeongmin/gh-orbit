@@ -76,11 +76,11 @@ right). `File Tree` is reserved for a follow-up backlog.
 
 | Key             | Pane          | Action                                         |
 | --------------- | ------------- | ---------------------------------------------- |
-| `h` / `l`       | global        | move focus refs ↔ graph ↔ tab (1-D, no wrap)   |
+| `tab`           | global        | cycle pane focus refs → graph → tab (wraps)    |
 | `j` / `k`       | focused pane  | navigate within pane (Changes: file-list cursor) |
 | `g` / `G`       | focused pane  | jump to top / bottom (Changes: file-list)      |
 | `ctrl+d` / `ctrl+u` | Changes tab | scroll the patch follower viewport             |
-| `tab` / `shift+tab` | tab pane    | switch between Commit and Changes              |
+| `h` / `l`       | tab pane      | switch between Commit and Changes (toggle, wraps) |
 | `ctrl+↑` / `ctrl+↓` | global    | resize graph/tab split (5% per press)          |
 | `enter`         | refs          | jump graph cursor to ref tip                   |
 | `a`             | refs          | show every ref's commits (unified `--all`)     |

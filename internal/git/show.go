@@ -54,14 +54,15 @@ func PatchForFile(ctx context.Context, dir, hash, path string) (string, error) {
 // raw `%G?` sign-status code, and the entire commit message body.
 //
 // SignStatus follows git's --format=%G? table:
-//   G = good (valid) signature
-//   B = bad signature
-//   U = good signature with unknown validity
-//   X = good signature that has expired
-//   Y = good signature made by an expired key
-//   R = good signature made by a revoked key
-//   E = signature cannot be checked (missing key, etc.)
-//   N = no signature
+//
+//	G = good (valid) signature
+//	B = bad signature
+//	U = good signature with unknown validity
+//	X = good signature that has expired
+//	Y = good signature made by an expired key
+//	R = good signature made by a revoked key
+//	E = signature cannot be checked (missing key, etc.)
+//	N = no signature
 type Detail struct {
 	Hash           string
 	Parents        []string

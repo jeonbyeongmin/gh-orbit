@@ -30,6 +30,8 @@ type changesModel struct {
 	files         []git.FileStat
 	cursor        int
 	hash          string
+	loadingFiles  bool
+	statErr       error
 	width, height int
 
 	viewport     viewport.Model
@@ -78,12 +80,30 @@ func (c changesModel) columnWidths() (fileW, patchW int) {
 	return fileW, patchW
 }
 
+// MarkPending stamps the new commit hash and clears prior state so the panel
+// shows a loading indicator while the stat dispatch is in flight (the
+// debounce window is 200ms, long enough that stale data would flash). Called
+// from Model.beginDiffStat.
+func (c *changesModel) MarkPending(hash string) {
+	c.hash = hash
+	c.files = nil
+	c.cursor = 0
+	c.loadingFiles = true
+	c.statErr = nil
+	c.patchText = ""
+	c.patchErr = nil
+	c.loadingPatch = false
+	c.viewport.SetContent("")
+}
+
 // SetFiles replaces the file list and the commit hash they belong to. Returns
 // a cmd that loads the patch for the current cursor position so the right
 // column refreshes whenever a new commit is selected.
 func (c *changesModel) SetFiles(hash string, files []git.FileStat) tea.Cmd {
 	c.files = files
 	c.hash = hash
+	c.loadingFiles = false
+	c.statErr = nil
 	if c.cursor >= len(files) {
 		c.cursor = 0
 	}
@@ -98,6 +118,19 @@ func (c *changesModel) SetFiles(hash string, files []git.FileStat) tea.Cmd {
 		return nil
 	}
 	return c.loadCurrentFileCmd()
+}
+
+// ApplyStatFailed surfaces a `git show --numstat` failure (bad revision,
+// permissions, etc.) into the file-list area. The patch viewport is left
+// alone since there is nothing to show until the user moves to a different
+// commit.
+func (c *changesModel) ApplyStatFailed(hash string, err error) {
+	if hash != c.hash {
+		return
+	}
+	c.loadingFiles = false
+	c.files = nil
+	c.statErr = err
 }
 
 func (c *changesModel) loadCurrentFileCmd() tea.Cmd {
@@ -189,6 +222,15 @@ var (
 )
 
 func (c changesModel) View() string {
+	if c.hash == "" {
+		return changesEmptyS.Render("(no commit selected)")
+	}
+	if c.statErr != nil {
+		return changesEmptyS.Render("error: " + firstLine(c.statErr.Error()))
+	}
+	if c.loadingFiles {
+		return changesEmptyS.Render("loading…")
+	}
 	if len(c.files) == 0 {
 		return changesEmptyS.Render("(no changes)")
 	}
@@ -262,6 +304,24 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// truncatePath shortens a path with a leading ellipsis when too wide. Paths
+// are more recognizable from the right end (the filename) than the left, so
+// we drop directory prefixes first.
+func truncatePath(p string, width int) string {
+	if runewidth.StringWidth(p) <= width {
+		return p
+	}
+	if width <= 1 {
+		return "…"
+	}
+	for i := range p {
+		if runewidth.StringWidth(p[i:])+1 <= width {
+			return "…" + p[i:]
+		}
+	}
+	return "…"
 }
 
 type filePatchLoadedMsg struct {

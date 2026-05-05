@@ -246,16 +246,22 @@ func TestModelCommitSelectedDispatchesDebounce(t *testing.T) {
 	updated, cmd := m.Update(commitSelectedMsg{hash: "aaa1111"})
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("commitSelectedMsg should return a debounce tick cmd")
+		t.Fatal("commitSelectedMsg should return a batched debounce + commit-detail cmd")
 	}
 	if m.diffReqID != priorReqID+1 {
 		t.Errorf("diffReqID should advance by 1, got %d (was %d)", m.diffReqID, priorReqID)
 	}
-	if !m.diff.loadingStat {
-		t.Error("diff sub-model should be marked loading after commitSelectedMsg")
+	if !m.changes.loadingFiles {
+		t.Error("changes pane should be marked loading after commitSelectedMsg")
 	}
-	if m.diff.currentHash != "aaa1111" {
-		t.Errorf("diff.currentHash = %q, want aaa1111", m.diff.currentHash)
+	if m.changes.hash != "aaa1111" {
+		t.Errorf("changes.hash = %q, want aaa1111", m.changes.hash)
+	}
+	if !m.commitDetail.loading {
+		t.Error("commitDetail should be marked loading after commitSelectedMsg")
+	}
+	if m.commitDetail.hash != "aaa1111" {
+		t.Errorf("commitDetail.hash = %q, want aaa1111", m.commitDetail.hash)
 	}
 }
 
@@ -365,20 +371,21 @@ func TestModelStaleStatLoadedIsIgnored(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	// Pretend we dispatched two cursor moves; the latest reqID is 7 and the
-	// diff sub-model is loading for hash "current".
+	// Pretend two cursor moves happened; the latest reqID is 7 and changes
+	// is loading for hash "current". A stale response at reqID 3 must not
+	// mutate the file list.
 	m.diffReqID = 7
-	m.diff.MarkLoadingStat("current", 7)
+	m.changes.MarkPending("current")
 
 	updated, _ = m.Update(diffStatLoadedMsg{reqID: 3, hash: "old", files: []git.FileStat{
 		{Path: "stale.txt", Insertions: 1},
 	}})
 	m = updated.(Model)
-	if m.diff.statLoaded {
-		t.Error("stale diffStatLoadedMsg must not flip statLoaded")
+	if len(m.changes.files) != 0 {
+		t.Errorf("stale diffStatLoadedMsg must not populate changes.files, got %v", m.changes.files)
 	}
-	if !m.diff.loadingStat {
-		t.Error("stale response should leave loadingStat=true since the in-flight call is still pending")
+	if !m.changes.loadingFiles {
+		t.Error("stale response should leave loadingFiles=true since the in-flight call is still pending")
 	}
 }
 

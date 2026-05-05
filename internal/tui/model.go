@@ -152,16 +152,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadDiffStatCmd("", msg.hash, msg.reqID)
 
 	case diffStatLoadedMsg:
-		m.diff.ApplyStatLoaded(msg.reqID, msg.hash, msg.files)
-		// changes pane reflects the same stat data as the file-list source
-		// and immediately requests the patch for the cursor's file. Step 8
-		// strips the diffModel side once the d-overlay is the only remaining
-		// consumer of patch text.
-		var cmd tea.Cmd
-		if msg.reqID == m.diffReqID {
-			cmd = m.changes.SetFiles(msg.hash, msg.files)
+		// Stat data is now Changes-tab content only; diffModel handles the
+		// d-overlay alone. reqID guard rejects responses for cursors the
+		// user has already navigated away from.
+		if msg.reqID != m.diffReqID {
+			return m, nil
 		}
-		return m, cmd
+		return m, m.changes.SetFiles(msg.hash, msg.files)
+	case diffStatFailedMsg:
+		if msg.reqID != m.diffReqID {
+			return m, nil
+		}
+		m.changes.ApplyStatFailed(msg.hash, msg.err)
+		return m, nil
 	case filePatchLoadedMsg:
 		m.changes.ApplyFilePatchLoaded(msg.reqID, msg.hash, msg.path, msg.text)
 		return m, nil
@@ -173,9 +176,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case commitDetailFailedMsg:
 		m.commitDetail.ApplyDetailFailed(msg.reqID, msg.hash, msg.err)
-		return m, nil
-	case diffStatFailedMsg:
-		m.diff.ApplyStatFailed(msg.reqID, msg.hash, msg.err)
 		return m, nil
 	case diffPatchLoadedMsg:
 		m.diff.ApplyPatchLoaded(msg.reqID, msg.hash, msg.text)
@@ -362,7 +362,7 @@ func (m Model) copyHashFromCommitTab() Model {
 // area always reflects the currently focused commit.
 func (m *Model) beginDiffStat(hash string) tea.Cmd {
 	m.diffReqID++
-	m.diff.MarkLoadingStat(hash, m.diffReqID)
+	m.changes.MarkPending(hash)
 	m.commitDetail.MarkLoading(hash, m.diffReqID)
 	return tea.Batch(
 		scheduleDiffStatCmd(m.diffReqID, hash),

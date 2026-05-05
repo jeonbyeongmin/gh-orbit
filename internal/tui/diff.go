@@ -18,9 +18,7 @@ const (
 )
 
 // diffModel hosts the full-screen patch overlay opened with `d`. The Changes
-// tab handles per-file stats and follower-patch on its own (changesModel);
-// this model is intentionally minimal — only patch text + viewport + the
-// stale-drop guard for the d-overlay's lifecycle.
+// tab owns per-file stats and the follower patch viewport (changesModel).
 type diffModel struct {
 	viewport     viewport.Model
 	currentHash  string

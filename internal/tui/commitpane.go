@@ -14,9 +14,8 @@ import (
 const commitDetailTimeout = 30 * time.Second
 
 // commitDetailModel renders the Commit tab body — author/committer identity,
-// dates, parents, sign-status and the full commit body. It mirrors the
-// stale-drop pattern used by diffModel: a reqID guard rejects responses for
-// commits the user has already navigated away from.
+// dates, parents, sign-status, and the full commit body. The reqID guard
+// rejects responses for commits the user has already navigated away from.
 type commitDetailModel struct {
 	hash    string
 	detail  git.Detail
@@ -35,9 +34,8 @@ func (c *commitDetailModel) SetSize(w, h int) {
 	c.height = h
 }
 
-// MarkLoading clears prior content and stamps the request id. Called from
-// Model.beginDiffStat so the Commit tab tracks the same hash lifecycle as
-// the Changes tab.
+// MarkLoading clears prior content and stamps the request id so the Commit
+// tab tracks the same hash lifecycle as the Changes tab.
 func (c *commitDetailModel) MarkLoading(hash string, reqID uint64) {
 	c.hash = hash
 	c.detail = git.Detail{}
@@ -69,10 +67,9 @@ func (c *commitDetailModel) ApplyDetailFailed(reqID uint64, hash string, err err
 	c.err = err
 }
 
-// CurrentHash returns the commit currently displayed (or "" if the pane has
-// never been populated). Used by the Model when handling the y key — the
-// clipboard write needs the hash even when the rest of the detail is still
-// loading.
+// CurrentHash returns the focused commit's hash even while the rest of the
+// detail is still loading — the y-key clipboard write needs it before the
+// `git show` round-trip completes.
 func (c commitDetailModel) CurrentHash() string { return c.hash }
 
 var (
@@ -124,10 +121,6 @@ func (c commitDetailModel) View() string {
 		return commitEmptyS.Render("loading…")
 	}
 	d := c.detail
-	short := d.Hash
-	if len(short) > 7 {
-		short = short[:7]
-	}
 	var b strings.Builder
 	row := func(label, value string) {
 		b.WriteString(commitLabelS.Render(label))
@@ -135,15 +128,11 @@ func (c commitDetailModel) View() string {
 		b.WriteString(value)
 		b.WriteByte('\n')
 	}
-	row("commit", commitHashS.Render(d.Hash)+"  ("+short+")")
+	row("commit", commitHashS.Render(d.Hash)+"  ("+shortHash(d.Hash)+")")
 	if len(d.Parents) > 0 {
-		var parentsShort []string
+		parentsShort := make([]string, 0, len(d.Parents))
 		for _, p := range d.Parents {
-			if len(p) > 7 {
-				parentsShort = append(parentsShort, p[:7])
-			} else {
-				parentsShort = append(parentsShort, p)
-			}
+			parentsShort = append(parentsShort, shortHash(p))
 		}
 		row("parents", strings.Join(parentsShort, " "))
 	}

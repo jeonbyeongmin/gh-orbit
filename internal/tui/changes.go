@@ -23,9 +23,7 @@ const changesFileListRatio = 35
 const filePatchTimeout = 60 * time.Second
 
 // changesModel hosts the Changes-tab body: a file-list cursor on the left
-// and a path-scoped patch viewport on the right. The viewport is a follower —
-// it never receives focus; ctrl+d/u routed from the parent scroll it while
-// j/k move the file-list cursor and trigger a fresh patch load.
+// and a path-scoped patch viewport (follower) on the right.
 type changesModel struct {
 	files         []git.FileStat
 	cursor        int
@@ -80,10 +78,9 @@ func (c changesModel) columnWidths() (fileW, patchW int) {
 	return fileW, patchW
 }
 
-// MarkPending stamps the new commit hash and clears prior state so the panel
-// shows a loading indicator while the stat dispatch is in flight (the
-// debounce window is 200ms, long enough that stale data would flash). Called
-// from Model.beginDiffStat.
+// MarkPending clears prior state and stamps the new hash so the loading
+// indicator shows during the 200ms debounce window — without this the panel
+// would flash the previous commit's files until the stat dispatch returns.
 func (c *changesModel) MarkPending(hash string) {
 	c.hash = hash
 	c.files = nil
@@ -120,10 +117,9 @@ func (c *changesModel) SetFiles(hash string, files []git.FileStat) tea.Cmd {
 	return c.loadCurrentFileCmd()
 }
 
-// ApplyStatFailed surfaces a `git show --numstat` failure (bad revision,
-// permissions, etc.) into the file-list area. The patch viewport is left
-// alone since there is nothing to show until the user moves to a different
-// commit.
+// ApplyStatFailed surfaces a numstat failure into the file-list area; the
+// patch viewport is left alone since there is nothing to show until the user
+// moves to a different commit.
 func (c *changesModel) ApplyStatFailed(hash string, err error) {
 	if hash != c.hash {
 		return
@@ -146,9 +142,8 @@ func (c *changesModel) loadCurrentFileCmd() tea.Cmd {
 	return loadFilePatchCmd("", c.hash, c.files[c.cursor].Path, c.fileReqID)
 }
 
-// acceptsPatch gates Apply* against stale dispatches. Both the reqID and the
-// (hash, path) tuple must match to avoid race conditions when two cursor
-// moves happen inside one git-show window.
+// acceptsPatch gates Apply* against stale dispatches: the reqID + (hash,
+// path) tuple must all match to avoid two-cursor-moves-in-one-show races.
 func (c *changesModel) acceptsPatch(reqID uint64, hash, path string) bool {
 	if reqID != c.fileReqID || hash != c.hash {
 		return false
@@ -179,7 +174,6 @@ func (c *changesModel) ApplyFilePatchFailed(reqID uint64, hash, path string, err
 }
 
 // ScrollPatch forwards a scroll key (ctrl+d/u/PgUp/PgDn) to the viewport.
-// Called from Model.Update when paneTab && tabs.Active() == tabChanges.
 func (c *changesModel) ScrollPatch(msg tea.KeyMsg) {
 	c.viewport, _ = c.viewport.Update(msg)
 }
@@ -237,7 +231,8 @@ func (c changesModel) View() string {
 	fileW, _ := c.columnWidths()
 	left := c.renderFileList(fileW)
 	right := c.renderPatch()
-	sep := changesSepS.Render(strings.Repeat("│\n", maxInt(c.height, 1)))
+	rows := max(c.height, 1)
+	sep := changesSepS.Render(strings.TrimRight(strings.Repeat("│\n", rows), "\n"))
 	leftBox := lipgloss.NewStyle().Width(fileW).Height(c.height).Render(left)
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftBox, sep, right)
 }
@@ -297,13 +292,6 @@ func (c changesModel) renderPatch() string {
 		return changesEmptyS.Render("(no patch)")
 	}
 	return c.viewport.View()
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // truncatePath shortens a path with a leading ellipsis when too wide. Paths

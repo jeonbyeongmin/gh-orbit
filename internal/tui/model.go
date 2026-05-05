@@ -105,6 +105,12 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		// Terminals re-emit WindowSizeMsg on focus changes / SIGWINCH bursts.
+		// Skip the SetSize cascade when nothing actually changed so the
+		// patch viewport doesn't re-wrap a multi-MB diff every burst.
+		if msg.Width == m.width && msg.Height == m.height {
+			return m, nil
+		}
 		m.width, m.height = msg.Width, msg.Height
 		m.applyPaneSizes()
 		if m.mode == viewModeDiffWindow {
@@ -145,16 +151,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case diffDebounceMsg:
 		// Drop stale ticks — if the user kept moving the cursor inside the
 		// 200ms window, m.diffReqID has already advanced past this tick's
-		// reqID and the latest tick wins.
+		// reqID and the latest tick wins. Stat (Changes) and metadata
+		// (Commit) fan out from the same tick so a fast j-mash spawns one
+		// pair of git processes per stop, not one per cursor row.
 		if msg.reqID != m.diffReqID {
 			return m, nil
 		}
-		return m, loadDiffStatCmd("", msg.hash, msg.reqID)
+		return m, tea.Batch(
+			loadDiffStatCmd("", msg.hash, msg.reqID),
+			loadCommitDetailCmd("", msg.hash, msg.reqID),
+		)
 
 	case diffStatLoadedMsg:
-		// Stat data is now Changes-tab content only; diffModel handles the
-		// d-overlay alone. reqID guard rejects responses for cursors the
-		// user has already navigated away from.
 		if msg.reqID != m.diffReqID {
 			return m, nil
 		}
@@ -236,22 +244,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			return m, m.reloadCmd()
 		case "ctrl+up":
-			if m.splitRatio > splitRatioMin {
-				m.splitRatio -= splitRatioStep
-				if m.splitRatio < splitRatioMin {
-					m.splitRatio = splitRatioMin
-				}
-				m.applyPaneSizes()
-			}
+			m.adjustSplit(-splitRatioStep)
 			return m, nil
 		case "ctrl+down":
-			if m.splitRatio < splitRatioMax {
-				m.splitRatio += splitRatioStep
-				if m.splitRatio > splitRatioMax {
-					m.splitRatio = splitRatioMax
-				}
-				m.applyPaneSizes()
-			}
+			m.adjustSplit(splitRatioStep)
 			return m, nil
 		case "y":
 			m = m.copyHashFromCommitTab()
@@ -288,18 +284,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "shift+tab":
 				m.tabs.Prev()
 				return m, nil
-			}
-			switch m.tabs.Active() {
-			case tabChanges:
-				// Patch-viewport scroll is the follower path: ctrl+d/u and
-				// PgUp/PgDn never move the file-list cursor, they only scroll
-				// the right column. j/k stay on the file-list and trigger a
-				// fresh patch load via changesModel.Update.
-				switch msg.String() {
-				case "ctrl+d", "ctrl+u", "pgdown", "pgup":
+			case "ctrl+d", "ctrl+u", "pgdown", "pgup":
+				// Scroll the patch viewport without moving the file-list
+				// cursor; j/k stay on the file list and trigger a fresh
+				// patch load via changesModel.Update.
+				if m.tabs.Active() == tabChanges {
 					m.changes.ScrollPatch(msg)
-					return m, nil
 				}
+				return m, nil
+			}
+			if m.tabs.Active() == tabChanges {
 				var cmd tea.Cmd
 				m.changes, cmd = m.changes.Update(msg)
 				return m, cmd
@@ -310,22 +304,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // applyPaneSizes recomputes the inner content dimensions for every sub-model
-// from the current width/height/splitRatio. Called from WindowSizeMsg and
-// ctrl+up/down so a resize never leaves a sub-model rendering against stale
-// dimensions.
+// from the current width/height/splitRatio.
 func (m *Model) applyPaneSizes() {
 	s := m.paneSizes()
 	m.refs.SetSize(s.refsW, s.refsH)
 	m.graph.SetSize(s.graphW, s.graphH)
 	m.diff.SetSize(s.tabW, s.tabH)
-	// tabPlaceholder reserves the first 2 lines for header + spacer, so the
-	// inner sub-models render at tabH-2.
+	// tabBody renders header + spacer (2 lines) above the tab content.
 	tabBodyH := s.tabH - 2
 	if tabBodyH < 1 {
 		tabBodyH = 1
 	}
 	m.changes.SetSize(s.tabW, tabBodyH)
 	m.commitDetail.SetSize(s.tabW, tabBodyH)
+}
+
+// adjustSplit nudges the graph/tab split ratio by delta percent and reflows
+// the panes if the value actually moved (clamped to [splitRatioMin, Max]).
+func (m *Model) adjustSplit(delta int) {
+	next := m.splitRatio + delta
+	if next < splitRatioMin {
+		next = splitRatioMin
+	} else if next > splitRatioMax {
+		next = splitRatioMax
+	}
+	if next == m.splitRatio {
+		return
+	}
+	m.splitRatio = next
+	m.applyPaneSizes()
 }
 
 // copyHashFromCommitTab handles `y`: only acts when paneTab is focused and
@@ -345,29 +352,21 @@ func (m Model) copyHashFromCommitTab() Model {
 		m.statusStyle = statusErrS
 		return m
 	}
-	short := hash
-	if len(short) > 7 {
-		short = short[:7]
-	}
-	m.status = "copied " + short
+	m.status = "copied " + shortHash(hash)
 	m.statusStyle = statusOkS
 	return m
 }
 
-// beginDiffStat advances the diff request id, marks both the Changes-tab
-// stat source and the Commit-tab detail sub-model as loading for the given
-// hash, and batches the debounce tick (Changes) plus the immediate
-// CommitDetail dispatch (Commit). Used by both graph cursor moves
-// (commitSelectedMsg) and ref-tip jumps (refSelectedMsg) so the bottom tab
-// area always reflects the currently focused commit.
+// beginDiffStat advances the request id, marks both Changes and Commit
+// panes loading for the given hash, and schedules a single debounced tick
+// that fans out to the stat (Changes) and metadata (Commit) git calls. Used
+// by graph cursor moves (commitSelectedMsg) and ref-tip jumps
+// (refSelectedMsg).
 func (m *Model) beginDiffStat(hash string) tea.Cmd {
 	m.diffReqID++
 	m.changes.MarkPending(hash)
 	m.commitDetail.MarkLoading(hash, m.diffReqID)
-	return tea.Batch(
-		scheduleDiffStatCmd(m.diffReqID, hash),
-		loadCommitDetailCmd("", hash, m.diffReqID),
-	)
+	return scheduleDiffStatCmd(m.diffReqID, hash)
 }
 
 // reloadCmd resets both panes to their loading state and dispatches fresh
@@ -490,7 +489,7 @@ func (m Model) View() string {
 
 	refsBox := boxStyle(m.focused == paneRefs).Width(s.refsW).Height(s.refsH).Render(m.refs.View())
 	graphBox := boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
-	tabBox := boxStyle(m.focused == paneTab).Width(s.tabW).Height(s.tabH).Render(m.tabPlaceholder())
+	tabBox := boxStyle(m.focused == paneTab).Width(s.tabW).Height(s.tabH).Render(m.tabBody())
 
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
 	main := lipgloss.JoinHorizontal(lipgloss.Top, refsBox, rightCol)
@@ -504,11 +503,8 @@ func boxStyle(focused bool) lipgloss.Style {
 	return borderUnfocused
 }
 
-// tabPlaceholder renders the active tab's body underneath the tabsModel
-// header. Steps 3+ replace each branch with a dedicated sub-model; until then
-// both branches reuse the existing diffModel.StatView() so the screen has
-// content while the user navigates between tabs.
-func (m Model) tabPlaceholder() string {
+// tabBody renders the active tab's body underneath the tabsModel header.
+func (m Model) tabBody() string {
 	header := m.tabs.HeaderView()
 	var body string
 	switch m.tabs.Active() {

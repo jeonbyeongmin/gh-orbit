@@ -6,8 +6,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// tabKind names the bottom tab. The plan stops at Commit + Changes; File Tree
-// lives in a separate spillover backlog and is intentionally not enumerated.
+// tabKind names the bottom tab.
 type tabKind int
 
 const (
@@ -26,9 +25,7 @@ func (t tabKind) label() string {
 	return ""
 }
 
-// tabsModel holds the active-tab cursor for the bottom area. Header rendering
-// lives here so the model can be reused across tab content panes without each
-// pane re-implementing the chip strip.
+// tabsModel holds the active-tab cursor for the bottom area.
 type tabsModel struct {
 	active tabKind
 }
@@ -53,9 +50,8 @@ var (
 	tabSepS      = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 )
 
-// HeaderView renders the tab strip as a single line. Active tab is wrapped in
-// brackets and styled bold/colored; inactive tabs render dimmed. The strip is
-// width-naive — the host bordered box clips overflow.
+// HeaderView renders the tab strip as a single line. The host bordered box
+// clips overflow if the terminal is too narrow.
 func (t tabsModel) HeaderView() string {
 	var b strings.Builder
 	for i := tabKind(0); i < tabCount; i++ {

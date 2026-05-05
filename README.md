@@ -34,9 +34,9 @@ PR review/merge is a follow-up milestone. Right now the build wires up:
 - `d` opens a full-screen patch overlay for the focused commit; `esc` / `q`
   close it without quitting the app
 - vim-style key bindings (full table in [CLAUDE.md](./CLAUDE.md#key-bindings)):
-  - `h` / `l` — move pane focus (refs ↔ graph ↔ tab, no wrap)
+  - `tab` — cycle pane focus (refs → graph → tab, wraps)
   - `j` / `k` / `g` / `G` — navigate within the focused pane
-  - `tab` / `shift+tab` — switch between the Commit and Changes tabs
+  - `h` / `l` — switch between the Commit and Changes tabs (only when the tab pane is focused)
   - `ctrl+↑` / `ctrl+↓` — resize the graph / tab split (5% per press)
   - `ctrl+d` / `ctrl+u` — scroll the Changes-tab patch viewport
   - `enter` — jump graph cursor to the focused ref tip (refs pane)

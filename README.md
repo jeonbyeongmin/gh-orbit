@@ -22,8 +22,13 @@ PR review/merge is a follow-up milestone. Right now the build wires up:
 - the graph runs against the unified `--all` revision spec by default so
   every local/remote/tag is one walk; `enter` from the refs pane jumps the
   graph cursor to a ref tip without changing the base
-- ref decoration (`%D`) is parsed into typed branch/tag entries and rendered
-  as chips between the timestamp and subject of each commit row
+- commit row reads left-to-right as `graph | message (chips + subject) |
+  author | hash | authored`; the hash and time anchor to the right edge,
+  the message column absorbs truncation, and chips/author drop (in that
+  order) before the subject shrinks below one cell
+- ref decoration (`%D`) is parsed into typed branch/tag entries and
+  rendered as chips attached to the front of the subject in the message
+  column
 - ref pane: lazy auto-scroll on j/k/g/G with overflow clipping (no fold or
   sticky-header — those were tried and removed)
 - `Commit` tab: author/email, ISO 8601 dates, parent hashes, `%G?` sign-status

@@ -108,7 +108,11 @@ Bubble Tea conventions for this codebase:
 - Prefer `StdoutPipe` + scanner over `CombinedOutput` for anything that can be large (`git log`, `git diff`).
 - When a git command fails, wrap stderr into the returned error. The TUI should be able to surface a real message instead of "exit status 128".
 - Parse with `--porcelain` / `-z` / `--format=...` whenever available — don't scrape human-readable output. NUL separators in `--format=%H%x00%P%x00...` keep newline-bearing fields like commit bodies safe to split.
-- Decoration tokens (`%D`) are parsed into typed `Ref` slices on each commit so the graph row can render branch/tag chips between the timestamp and the subject.
+- Decoration tokens (`%D`) are parsed into typed `Ref` slices on each commit so the graph row can render branch/tag chips attached to the front of the subject in the message column.
+
+## Commit Row Layout
+
+Each commit renders left-to-right as: `[graph][message (chips + subject)][author][hash][authored time]`. Hash and authored time are right-anchored and always visible; the message column absorbs truncation, with chips and the author column dropping (in that order) before the subject is allowed to fall below one cell.
 
 ## Logging
 

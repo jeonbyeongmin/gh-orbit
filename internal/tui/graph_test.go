@@ -63,7 +63,7 @@ func TestRenderCommitLineSelectedHasCursor(t *testing.T) {
 	}
 }
 
-func TestRenderCommitLineOrderingGraphHashSubject(t *testing.T) {
+func TestRenderCommitLineOrderingGraphSubjectHash(t *testing.T) {
 	c := git.Commit{
 		Hash:       "abcdef1234567",
 		Subject:    "graph layout",
@@ -71,21 +71,23 @@ func TestRenderCommitLineOrderingGraphHashSubject(t *testing.T) {
 	}
 	line := renderCommitLine(c, "* ", 2, 2, 80, false)
 	stripped := ansi.Strip(line)
-	subjectIdx := strings.Index(stripped, "graph layout")
 	starIdx := strings.Index(stripped, "*")
+	subjectIdx := strings.Index(stripped, "graph layout")
 	hashIdx := strings.Index(stripped, "abcdef1")
-	if starIdx < 0 || subjectIdx < 0 || hashIdx < 0 {
-		t.Fatalf("expected star, subject, and hash in %q", stripped)
+	relIdx := strings.Index(stripped, "just now")
+	if starIdx < 0 || subjectIdx < 0 || hashIdx < 0 || relIdx < 0 {
+		t.Fatalf("expected star, subject, hash, and rel in %q", stripped)
 	}
-	// New layout: graph < hash < subject. Subject anchors to the right edge
-	// so it absorbs truncation when the row is narrow.
-	if starIdx >= hashIdx || hashIdx >= subjectIdx {
-		t.Errorf("expected order graph < hash < subject, got star=%d hash=%d subject=%d in %q",
-			starIdx, hashIdx, subjectIdx, stripped)
+	// Layout: graph < message (subject) < hash < rel-time. Hash and time
+	// are right-anchored; subject sits in the message column and absorbs
+	// truncation when the row is narrow.
+	if starIdx >= subjectIdx || subjectIdx >= hashIdx || hashIdx >= relIdx {
+		t.Errorf("expected order graph < subject < hash < rel, got star=%d subject=%d hash=%d rel=%d in %q",
+			starIdx, subjectIdx, hashIdx, relIdx, stripped)
 	}
 }
 
-func TestRenderCommitLineHashAnchoredAfterGraph(t *testing.T) {
+func TestRenderCommitLineHashAnchoredToRightEdge(t *testing.T) {
 	c := git.Commit{
 		Hash:       "abcdef1234567",
 		Subject:    "right edge",
@@ -97,17 +99,19 @@ func TestRenderCommitLineHashAnchoredAfterGraph(t *testing.T) {
 	if w := len(stripped); w != 80 {
 		t.Errorf("rendered width = %d, want 80 (full row)", w)
 	}
-	// Hash now sits immediately after the graph cell (cursor 2 + graph 2 = 4).
+	// Hash + time sit at the right edge: width - rightTail. With
+	// shortHashLen=7 and timeColWidth=8 separated by one space, the hash
+	// starts at width - 7 - 1 - 8 = 64.
 	hashIdx := strings.Index(stripped, "abcdef1")
-	wantHashIdx := 2 + 2
+	wantHashIdx := 80 - shortHashLen - 1 - timeColWidth
 	if hashIdx != wantHashIdx {
-		t.Errorf("hash starts at %d, want %d (anchored after graph)", hashIdx, wantHashIdx)
+		t.Errorf("hash starts at %d, want %d (anchored to right edge)", hashIdx, wantHashIdx)
 	}
-	// Subject ends at the right edge — last visible character is part of
-	// the subject (or its trailing pad), never the hash or time column.
+	// Subject sits in the message column, between the graph and the hash.
 	subjectIdx := strings.Index(stripped, "right edge")
-	if subjectIdx < hashIdx+shortHashLen+1+timeColWidth+1 {
-		t.Errorf("subject too close to hash; subjectIdx=%d hashIdx=%d", subjectIdx, hashIdx)
+	wantSubjectMin := 2 + 2 // cursor + graph
+	if subjectIdx < wantSubjectMin || subjectIdx >= hashIdx {
+		t.Errorf("subject not in the message column; subjectIdx=%d hashIdx=%d", subjectIdx, hashIdx)
 	}
 }
 
@@ -152,16 +156,17 @@ func TestRenderCommitLineWithLocalChip(t *testing.T) {
 	}
 	line := renderCommitLine(c, "* ", 2, 2, 80, false)
 	stripped := ansi.Strip(line)
-	// Chip "main" sits between the time column and the subject.
+	// Chip "main" attaches to the front of the subject in the message
+	// column — both sit between the graph and the hash.
 	mainIdx := strings.Index(stripped, "main")
 	subjectIdx := strings.Index(stripped, "with chip")
 	hashIdx := strings.Index(stripped, "abcdef1")
 	if mainIdx < 0 || subjectIdx < 0 || hashIdx < 0 {
-		t.Fatalf("expected hash, chip, subject in %q", stripped)
+		t.Fatalf("expected chip, subject, hash in %q", stripped)
 	}
-	if hashIdx >= mainIdx || mainIdx >= subjectIdx {
-		t.Errorf("expected order hash < chip < subject; got hash=%d chip=%d subject=%d in %q",
-			hashIdx, mainIdx, subjectIdx, stripped)
+	if mainIdx >= subjectIdx || subjectIdx >= hashIdx {
+		t.Errorf("expected order chip < subject < hash; got chip=%d subject=%d hash=%d in %q",
+			mainIdx, subjectIdx, hashIdx, stripped)
 	}
 }
 
@@ -264,6 +269,81 @@ func TestRenderCommitLineSelectedRecolorsChipBackground(t *testing.T) {
 	}
 	if !strings.Contains(selected, "48;5;205") {
 		t.Errorf("selected line should set chip background to colorSelected (205), got %q", selected)
+	}
+}
+
+// TestRenderCommitLineWithAuthorName — author sits between the message
+// column and the right-anchored hash/time. Order: graph < subject <
+// author < hash < rel-time.
+func TestRenderCommitLineWithAuthorName(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "subj",
+		AuthorName: "Byeongmin Jeon",
+		AuthorTime: time.Now(),
+	}
+	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	stripped := ansi.Strip(line)
+	subjectIdx := strings.Index(stripped, "subj")
+	authorIdx := strings.Index(stripped, "Byeongmin")
+	hashIdx := strings.Index(stripped, "abcdef1")
+	if subjectIdx < 0 || authorIdx < 0 || hashIdx < 0 {
+		t.Fatalf("expected subject, author, hash in %q", stripped)
+	}
+	if subjectIdx >= authorIdx || authorIdx >= hashIdx {
+		t.Errorf("expected order subject < author < hash; got subject=%d author=%d hash=%d in %q",
+			subjectIdx, authorIdx, hashIdx, stripped)
+	}
+}
+
+// TestRenderCommitLineEmptyAuthorOmitsColumn — when AuthorName is empty
+// the author segment is skipped entirely so the message column reclaims
+// the column budget that author would have used.
+func TestRenderCommitLineEmptyAuthorOmitsColumn(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "no author",
+		AuthorTime: time.Now(),
+		// AuthorName left empty.
+	}
+	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	stripped := ansi.Strip(line)
+	if w := len(stripped); w != 80 {
+		t.Errorf("rendered width = %d, want 80", w)
+	}
+	// Subject ends right before the hash, separated by a single space.
+	hashIdx := strings.Index(stripped, "abcdef1")
+	if hashIdx <= 0 {
+		t.Fatalf("hash missing in %q", stripped)
+	}
+	// One char before the hash should be a space (separator), not a digit
+	// from the author column.
+	if got := stripped[hashIdx-1]; got != ' ' {
+		t.Errorf("expected single-space separator before hash; got %q in %q", got, stripped)
+	}
+}
+
+// TestRenderCommitLineDropsAuthorWhenNarrow — when the row can't fit
+// author + subject + hash + time, author drops first so the subject
+// remains visible.
+func TestRenderCommitLineDropsAuthorWhenNarrow(t *testing.T) {
+	c := git.Commit{
+		Hash:       "abcdef1234567",
+		Subject:    "Sx",
+		AuthorName: "alice",
+		AuthorTime: time.Now(),
+	}
+	// width = cursor 2 + graph 2 + subject 2 + sep 1 + hash 7 + sep 1 + rel 8 = 23
+	line := renderCommitLine(c, "* ", 2, 2, 23, false)
+	stripped := ansi.Strip(line)
+	if strings.Contains(stripped, "alice") {
+		t.Errorf("author should be dropped at narrow width, got %q", stripped)
+	}
+	if !strings.Contains(stripped, "Sx") {
+		t.Errorf("subject must remain visible, got %q", stripped)
+	}
+	if !strings.Contains(stripped, "abcdef1") {
+		t.Errorf("hash must remain visible, got %q", stripped)
 	}
 }
 

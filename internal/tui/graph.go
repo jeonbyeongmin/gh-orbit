@@ -24,6 +24,10 @@ const (
 	shortHashLen       = 7
 	// 8 covers the widest relativeShort output ("just now").
 	timeColWidth = 8
+	// authorColWidth is the visible budget for the author column. Names
+	// wider than this truncate with "…"; shorter ones right-pad so the
+	// hash/time columns to their right stay aligned across rows.
+	authorColWidth = 14
 
 	cursorColWidth = 2
 	maxLaneCap     = 8
@@ -31,6 +35,7 @@ const (
 
 	colorHash     = "214"
 	colorTime     = "245"
+	colorAuthor   = "248"
 	colorSelected = "205"
 )
 
@@ -122,21 +127,11 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 var (
 	hashStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorHash))
 	timeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime))
+	authorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAuthor))
 	cursorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected))
 	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected)).Bold(true)
 )
 
-// renderCommitLine builds one commit row.
-//
-// graphPrefix carries pre-styled ANSI escapes. graphRowWidth is the visible
-// column count of *this* row's graph (so we can pad it out without re-parsing
-// ANSI), graphColWidth is the column count to reserve so every visible row
-// aligns at the same boundary, and width is the overall row width.
-//
-// Layout: [cursor 2][graph][hash 7][space][rel 6][space][chips][space][subject].
-// Subject sits at the right edge so it absorbs the truncation when the row is
-// too narrow; chips are between time and subject, dropped wholesale rather
-// than partially when there isn't room for both chip and subject.
 // shortHash truncates a 40-char object name to the conventional 7-char abbrev.
 // Short hashes shorter than that are returned unchanged.
 func shortHash(h string) string {
@@ -146,6 +141,24 @@ func shortHash(h string) string {
 	return h
 }
 
+// renderCommitLine builds one commit row.
+//
+// graphPrefix carries pre-styled ANSI escapes. graphRowWidth is the visible
+// column count of *this* row's graph (so we can pad it out without re-parsing
+// ANSI), graphColWidth is the column count to reserve so every visible row
+// aligns at the same boundary, and width is the overall row width.
+//
+// Layout (left → right):
+//
+//	[cursor 2][graph][chips? + sp][subject][sp + author 14?][sp][hash 7][sp][rel 8]
+//
+// The "message" column carries chips (when present) and the subject; chips
+// sit just before the subject so a branch tip reads as a label attached to
+// the message. Hash and time are right-anchored — they always render even
+// at narrow widths. When the budget is tight the columns drop in this
+// priority: chips → author → subject truncates to a single cell → if
+// even that won't fit, the message segment disappears and only hash (then
+// hash + time) remain to the right of the graph.
 func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColWidth, width int, selected bool) string {
 	hash := shortHash(c.Hash)
 	rel := relativeShort(c.AuthorTime)
@@ -155,55 +168,82 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 		cursor = cursorStyle.Render("›") + " "
 	}
 	const cursorWidth = 2
+	// rightTail = hash + sep + time (always-anchored right edge).
+	const rightTail = shortHashLen + 1 + timeColWidth
 
-	// Cap graph so it never eats into the hash column on narrow terminals.
-	hashCap := width - cursorWidth - shortHashLen
-	if hashCap < 0 {
-		hashCap = 0
+	// Cap graph so it never eats into the right-anchored hash/time area.
+	graphBudget := width - cursorWidth - rightTail
+	if graphBudget < 0 {
+		graphBudget = 0
 	}
 	effectiveCol := graphColWidth
-	if effectiveCol > hashCap {
-		effectiveCol = hashCap
+	if effectiveCol > graphBudget {
+		effectiveCol = graphBudget
 	}
 
 	graphCell, graphCellW := buildGraphCell(graphPrefix, graphRowWidth, effectiveCol)
+	fixedLeft := cursorWidth + graphCellW
 
-	// Fixed-position prefix: cursor + graph + hash + space + relative-time.
-	fixedUsed := cursorWidth + graphCellW + shortHashLen + 1 + timeColWidth
-
-	// At least one cell for the subject (after a single separator space).
-	if width-fixedUsed-1 < 1 {
-		// Row is too narrow for the subject — drop it but keep hash visible.
-		return cursor + graphCell + hashStyle.Render(hash)
-	}
-
-	chipText, chipW := buildChips(c.RefNames, selected)
-	chipSegment := ""
-	chipSegmentWidth := 0
-	if chipW > 0 {
-		// Drop the chip cluster entirely if it would leave subject below 1
-		// cell. Subject wins over chips when the row is narrow.
-		candidate := 1 + chipW
-		if width-fixedUsed-candidate-1 >= 1 {
-			chipSegment = " " + chipText
-			chipSegmentWidth = candidate
+	// Need at least 1 cell for the subject + 1 separator before the hash.
+	// Below that we drop the message column entirely and fall back to the
+	// right tail (hash, then hash + time, depending on what fits).
+	if width-fixedLeft-1-rightTail < 1 {
+		switch {
+		case width-fixedLeft >= rightTail:
+			return cursor + graphCell +
+				hashStyle.Render(hash) + " " +
+				timeStyle.Render(runewidth.FillLeft(rel, timeColWidth))
+		case width-fixedLeft >= shortHashLen:
+			return cursor + graphCell + hashStyle.Render(hash)
+		default:
+			return cursor + graphCell
 		}
 	}
 
-	subjectWidth := width - fixedUsed - chipSegmentWidth - 1
+	// Author column — sits between the message and the right tail. Drops
+	// before the subject is allowed below 1 cell, but chips drop first
+	// since they're the most expendable label.
+	authorSeg := ""
+	authorSegW := 0
+	if c.AuthorName != "" {
+		candidate := 1 + authorColWidth // leading sep + fixed column
+		if width-fixedLeft-candidate-1-rightTail >= 1 {
+			truncated := runewidth.Truncate(c.AuthorName, authorColWidth, "…")
+			truncated = runewidth.FillRight(truncated, authorColWidth)
+			authorSeg = " " + authorStyle.Render(truncated)
+			authorSegW = candidate
+		}
+	}
+
+	// Chip cluster, attached to the front of the subject in the message
+	// column. Dropped wholesale rather than partially when there isn't
+	// room for both chip and subject.
+	chipText, chipW := buildChips(c.RefNames, selected)
+	chipSeg := ""
+	chipSegW := 0
+	if chipW > 0 {
+		candidate := chipW + 1 // chip + trailing sep before subject
+		if width-fixedLeft-candidate-authorSegW-1-rightTail >= 1 {
+			chipSeg = chipText + " "
+			chipSegW = candidate
+		}
+	}
+
+	subjectWidth := width - fixedLeft - chipSegW - authorSegW - 1 - rightTail
 	subject := runewidth.Truncate(c.Subject, subjectWidth, "…")
 	subject = runewidth.FillRight(subject, subjectWidth)
 	if selected {
 		subject = selectedStyle.Render(subject)
 	}
 
-	return fmt.Sprintf("%s%s%s %s%s %s",
+	return fmt.Sprintf("%s%s%s%s%s %s %s",
 		cursor,
 		graphCell,
+		chipSeg,
+		subject,
+		authorSeg,
 		hashStyle.Render(hash),
 		timeStyle.Render(runewidth.FillLeft(rel, timeColWidth)),
-		chipSegment,
-		subject,
 	)
 }
 

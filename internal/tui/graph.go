@@ -329,9 +329,6 @@ func newGraphModel() graphModel {
 	return graphModel{list: l, delegate: d}
 }
 
-type commitsLoadedMsg struct{ rows []graphRow }
-type commitsLoadFailedMsg struct{ err error }
-
 // commitsStreamStartedMsg is emitted exactly once per loadCommitsCmd, before
 // any commits arrive. The Model captures cancel so r/quit can stop the git
 // process without waiting for it to finish, and dispatches next to actually
@@ -494,37 +491,6 @@ func (g graphModel) Init() tea.Cmd { return nil }
 
 func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 	switch m := msg.(type) {
-	case commitsLoadedMsg:
-		items := make([]list.Item, len(m.rows))
-		maxW := 0
-		for i, r := range m.rows {
-			items[i] = commitItem{
-				c:                r.commit,
-				connectorPrefix:  r.connectorPrefix,
-				connectorWidth:   r.connectorWidth,
-				commitPrefix:     r.commitPrefix,
-				commitGraphWidth: r.commitWidth,
-			}
-			if r.commitWidth > maxW {
-				maxW = r.commitWidth
-			}
-			if r.connectorWidth > maxW {
-				maxW = r.connectorWidth
-			}
-		}
-		g.maxVisualWidth = maxW
-		g.applyGraphCap()
-		cmd := g.list.SetItems(items)
-		g.loaded = true
-		g.err = nil
-		if c, ok := g.Selected(); ok {
-			return g, tea.Batch(cmd, emitCommitSelected(c.Hash))
-		}
-		return g, cmd
-	case commitsLoadFailedMsg:
-		g.loaded = true
-		g.err = m.err
-		return g, nil
 	case commitsAppendedMsg:
 		// Empty batches can arrive transiently (timer fired right as the
 		// channel closed) — in that case there's nothing to merge but we

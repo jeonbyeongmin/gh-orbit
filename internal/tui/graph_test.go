@@ -369,7 +369,7 @@ func TestGraphModelInitialView(t *testing.T) {
 
 func TestGraphModelHandlesLoadFailure(t *testing.T) {
 	g := newGraphModel()
-	g, _ = g.Update(commitsLoadFailedMsg{err: errSentinel})
+	g, _ = g.Update(commitsStreamDoneMsg{reqID: 1, err: errSentinel})
 	view := g.View()
 	if !strings.Contains(view, "load error") {
 		t.Errorf("error view should mention load error, got %q", view)
@@ -379,11 +379,11 @@ func TestGraphModelHandlesLoadFailure(t *testing.T) {
 func TestGraphModelResetForReloadReturnsToLoading(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(40, 10)
-	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, rows: []graphRow{
 		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}, commitPrefix: "* ", commitWidth: 2},
 	}})
 	if !g.loaded {
-		t.Fatalf("graph should be loaded after commitsLoadedMsg")
+		t.Fatalf("graph should be loaded after commitsAppendedMsg")
 	}
 	if g.graphWidth != 2 {
 		t.Errorf("graphWidth = %d, want 2", g.graphWidth)
@@ -407,7 +407,7 @@ func TestGraphModelComputesGraphWidthFromLongestPrefix(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(80, 10)
 	now := time.Now()
-	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, rows: []graphRow{
 		{commit: git.Commit{Hash: "a", Subject: "s1", AuthorTime: now}, commitPrefix: "* ", commitWidth: 2},
 		{commit: git.Commit{Hash: "b", Subject: "s2", AuthorTime: now}, commitPrefix: "| | * ", commitWidth: 6},
 		{commit: git.Commit{Hash: "c", Subject: "s3", AuthorTime: now}, commitPrefix: "|/ ", commitWidth: 3},
@@ -423,7 +423,7 @@ func TestGraphModelComputesGraphWidthFromLongestPrefix(t *testing.T) {
 func TestGraphModelGraphWidthZeroWhenNoPrefix(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(80, 10)
-	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, rows: []graphRow{
 		{commit: git.Commit{Hash: "a", Subject: "s", AuthorTime: time.Now()}},
 	}})
 	if g.graphWidth != 0 {
@@ -450,7 +450,7 @@ func TestApplyGraphCapTruncatesWhenWidthBelowMaxVisual(t *testing.T) {
 	g := newGraphModel()
 	// Pretend many rows produced a 20-column graph in total.
 	g.SetSize(40, 10)
-	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, rows: []graphRow{
 		{commit: git.Commit{Hash: "a", Subject: "s", AuthorTime: time.Now()},
 			commitPrefix: strings.Repeat("│", 20), commitWidth: 20},
 	}})
@@ -477,7 +477,7 @@ func TestGraphModelJumpToHashMovesCursor(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(80, 10)
 	now := time.Now()
-	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, rows: []graphRow{
 		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: now}},
 		{commit: git.Commit{Hash: "bbb2222", Subject: "second", AuthorTime: now}},
 		{commit: git.Commit{Hash: "ccc3333", Subject: "third", AuthorTime: now}},
@@ -494,7 +494,7 @@ func TestGraphModelJumpToHashMovesCursor(t *testing.T) {
 func TestGraphModelJumpToHashReturnsFalseWhenMissing(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(80, 10)
-	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, rows: []graphRow{
 		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: time.Now()}},
 	}})
 
@@ -510,12 +510,12 @@ func TestGraphModelEmitsCommitSelectedAfterLoad(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(80, 10)
 	now := time.Now()
-	g, cmd := g.Update(commitsLoadedMsg{rows: []graphRow{
+	g, cmd := g.Update(commitsAppendedMsg{reqID: 1, rows: []graphRow{
 		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: now}},
 		{commit: git.Commit{Hash: "bbb2222", Subject: "second", AuthorTime: now}},
 	}})
 	if cmd == nil {
-		t.Fatal("commitsLoadedMsg should batch a commitSelectedMsg cmd for the initial cursor row")
+		t.Fatal("first commitsAppendedMsg should batch a commitSelectedMsg cmd for the initial cursor row")
 	}
 	msg := cmd()
 	sel, ok := msg.(commitSelectedMsg)
@@ -546,7 +546,7 @@ func TestGraphModelEmitsCommitSelectedOnCursorChange(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(80, 10)
 	now := time.Now()
-	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, rows: []graphRow{
 		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: now}},
 		{commit: git.Commit{Hash: "bbb2222", Subject: "second", AuthorTime: now}},
 	}})
@@ -578,7 +578,7 @@ func TestGraphModelDoesNotEmitWhenCursorUnchanged(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(80, 10)
 	now := time.Now()
-	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, rows: []graphRow{
 		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: now}},
 	}})
 
@@ -607,7 +607,7 @@ func TestGraphModelDoesNotEmitWhenCursorUnchanged(t *testing.T) {
 func TestGraphModelJumpToHashEmptyHashIsFalse(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(80, 10)
-	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, rows: []graphRow{
 		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: time.Now()}},
 	}})
 	if g.JumpToHash("") {

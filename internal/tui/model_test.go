@@ -153,6 +153,93 @@ func TestFocusCycle_TabWrap(t *testing.T) {
 	}
 }
 
+func TestTabPaneHL_TogglesCommitChanges(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.focused = paneTab
+	if m.tabs.Active() != tabCommit {
+		t.Fatalf("tabs default = %v, want tabCommit", m.tabs.Active())
+	}
+
+	send := func(r rune) Model {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return updated.(Model)
+	}
+
+	m = send('l')
+	if m.tabs.Active() != tabChanges {
+		t.Errorf("after l on paneTab, active = %v, want tabChanges", m.tabs.Active())
+	}
+	m = send('l')
+	if m.tabs.Active() != tabCommit {
+		t.Errorf("after l #2 (wrap), active = %v, want tabCommit", m.tabs.Active())
+	}
+	m = send('h')
+	if m.tabs.Active() != tabChanges {
+		t.Errorf("after h on paneTab, active = %v, want tabChanges (wrap reverse)", m.tabs.Active())
+	}
+}
+
+func TestRefsGraphHL_NoOp(t *testing.T) {
+	send := func(m Model, r rune) Model {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return updated.(Model)
+	}
+
+	for _, focus := range []pane{paneRefs, paneGraph} {
+		m := New()
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+		m = updated.(Model)
+		m.focused = focus
+		startActive := m.tabs.Active()
+
+		for _, key := range []rune{'h', 'l'} {
+			m = send(m, key)
+			if m.focused != focus {
+				t.Errorf("h/l from %v moved focus to %v, want unchanged", focus, m.focused)
+			}
+			if m.tabs.Active() != startActive {
+				t.Errorf("h/l from %v changed tab to %v, want %v", focus, m.tabs.Active(), startActive)
+			}
+		}
+	}
+}
+
+func TestDiffOverlay_TabHLSwallowed(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeDiffWindow
+	startFocus := m.focused
+	startActive := m.tabs.Active()
+
+	cases := []struct {
+		name string
+		msg  tea.KeyMsg
+	}{
+		{"tab", tea.KeyMsg{Type: tea.KeyTab}},
+		{"h", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}},
+		{"l", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}},
+	}
+	for _, tc := range cases {
+		updated, cmd := m.Update(tc.msg)
+		m = updated.(Model)
+		if m.mode != viewModeDiffWindow {
+			t.Errorf("%s in overlay closed/changed mode to %v, want viewModeDiffWindow", tc.name, m.mode)
+		}
+		if m.focused != startFocus {
+			t.Errorf("%s in overlay moved focus to %v, want %v", tc.name, m.focused, startFocus)
+		}
+		if m.tabs.Active() != startActive {
+			t.Errorf("%s in overlay changed tab to %v, want %v", tc.name, m.tabs.Active(), startActive)
+		}
+		if cmd != nil {
+			t.Errorf("%s in overlay should not dispatch a cmd, got %v", tc.name, cmd)
+		}
+	}
+}
+
 func TestModelInitSeedsCurrentRefsWithAllSentinel(t *testing.T) {
 	m := New()
 	if got, want := m.currentRefs, []string{refsAllSentinel}; !slices.Equal(got, want) {

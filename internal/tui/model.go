@@ -3,10 +3,17 @@
 package tui
 
 import (
+	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
+
+// clipboardWrite is the package-level seam for OS clipboard writes. Tests
+// swap it with an in-memory buffer; production code defaults to atotto's
+// platform-specific implementation (pbcopy on macOS, xclip/xsel on Linux,
+// Win32 on Windows).
+var clipboardWrite = clipboard.WriteAll
 
 type pane int
 
@@ -239,6 +246,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, fetchCmd("")
 		case "r":
 			return m, m.reloadCmd()
+		case "y":
+			m = m.copyHashFromCommitTab()
+			return m, nil
 		case "R":
 			// Swallow so capital R doesn't fall through to the focused
 			// sub-model. Reserved for a future Rebase action.
@@ -290,6 +300,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// copyHashFromCommitTab handles `y`: only acts when paneTab is focused and
+// the Commit tab is the active sub-tab; surfaces success ("copied <short>")
+// or the OS error (typical: xclip/xsel missing on Linux) through the status
+// line so the user always knows whether the clipboard was actually written.
+func (m Model) copyHashFromCommitTab() Model {
+	if m.focused != paneTab || m.tabs.Active() != tabCommit {
+		return m
+	}
+	hash := m.commitDetail.CurrentHash()
+	if hash == "" {
+		return m
+	}
+	if err := clipboardWrite(hash); err != nil {
+		m.status = "clipboard unavailable: " + firstLine(err.Error())
+		m.statusStyle = statusErrS
+		return m
+	}
+	short := hash
+	if len(short) > 7 {
+		short = short[:7]
+	}
+	m.status = "copied " + short
+	m.statusStyle = statusOkS
+	return m
 }
 
 // beginDiffStat advances the diff request id, marks both the Changes-tab

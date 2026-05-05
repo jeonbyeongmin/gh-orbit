@@ -13,9 +13,10 @@ Distribution target: `gh extension install jeonbyeongmin/gh-orbit`, invoked as `
 
 ## Stack
 
-- **Language:** Go 1.24+
+- **Language:** Go 1.26+
 - **TUI:** [Bubble Tea](https://github.com/charmbracelet/bubbletea) (Elm-style runtime) + [Lipgloss](https://github.com/charmbracelet/lipgloss) (styling) + [Bubbles](https://github.com/charmbracelet/bubbles) (widgets)
 - **Git access:** the user's `git` binary via `os/exec`. Deliberately **not** `go-git` — we want `.gitconfig`, hooks, commit signing, and LFS to keep working with zero extra code.
+- **Clipboard:** [`atotto/clipboard`](https://github.com/atotto/clipboard) for the `y` hash-copy action — shells out to `pbcopy`/`xclip`/`xsel`/Win32 so we inherit the user's environment.
 - **GitHub access (later):** shell out to `gh` so we inherit `gh auth` instead of running our own OAuth.
 
 ## Repository Layout
@@ -49,14 +50,49 @@ gh orbit
 
 ## TUI Architecture
 
-The MVP screen is a Fork-style 3-pane layout:
+The MVP screen is a Fork-style layout — refs sidebar on the left, the commit
+graph claiming the top of the right column, and a tab area below it that
+switches between the focused commit's metadata and its file-level changes:
 
 ```
-┌────────┬──────────────────────┬─────────────────┐
-│ refs   │   commit graph       │   diff          │
-│ branches/tags/PRs │  selected ─┘  of selected commit │
-└────────┴──────────────────────┴─────────────────┘
+┌────────┬──────────────────────────────────────┐
+│ refs   │   commit graph (full width, 60%)     │
+│        │                                      │
+│ local  │                                      │
+│ remote ├──────────────────────────────────────┤
+│ tags   │ [Commit] · Changes  (40%)            │
+│        │ author / date / parents / sign       │
+│        │ full message — or — file-list ↔ diff │
+└────────┴──────────────────────────────────────┘
 ```
+
+The graph/tab vertical split is user-resizable (`ctrl+↑` / `ctrl+↓`, 5% per
+press, clamped to [20, 80]). The bottom tab is `Commit` (full metadata —
+author/email, ISO 8601 dates, parent hashes, `%G?` sign-status, full body)
+or `Changes` (file-list cursor on the left, follower patch viewport on the
+right). `File Tree` is reserved for a follow-up backlog.
+
+### Key bindings
+
+| Key             | Pane          | Action                                         |
+| --------------- | ------------- | ---------------------------------------------- |
+| `h` / `l`       | global        | move focus refs ↔ graph ↔ tab (1-D, no wrap)   |
+| `j` / `k`       | focused pane  | navigate within pane (Changes: file-list cursor) |
+| `g` / `G`       | focused pane  | jump to top / bottom (Changes: file-list)      |
+| `ctrl+d` / `ctrl+u` | Changes tab | scroll the patch follower viewport             |
+| `tab` / `shift+tab` | tab pane    | switch between Commit and Changes              |
+| `ctrl+↑` / `ctrl+↓` | global    | resize graph/tab split (5% per press)          |
+| `enter`         | refs          | jump graph cursor to ref tip                   |
+| `a`             | refs          | show every ref's commits (unified `--all`)     |
+| `y`             | Commit tab    | copy full hash to clipboard                    |
+| `d`             | global        | open the focused commit's full patch overlay   |
+| `F`             | global        | `git fetch --all` in the background            |
+| `r`             | global        | reload refs + log                              |
+| `q` / `ctrl+c`  | global        | quit (closes the patch overlay first)          |
+| `R`             | global        | reserved for a future Rebase action            |
+
+Inside the `d` patch overlay only `j` / `k` / `pgup` / `pgdn` / `esc` / `q`
+are accepted — the rest of the keymap is gated on normal mode.
 
 Bubble Tea conventions for this codebase:
 
@@ -64,13 +100,15 @@ Bubble Tea conventions for this codebase:
 - **Never block in `Update`.** Every git invocation returns asynchronously through `tea.Cmd` → `tea.Msg`. A 50k-commit repo running `git log` synchronously would freeze the UI; stream and paginate.
 - **stdout is the TUI** while `tea.Program` is running — any `fmt.Println` will corrupt the screen. Use the file logger (below) instead.
 - Vim-style keys: `hjkl` for movement, `:` opens a command line (e.g. `:checkout <branch>`, `:merge <branch>`). Define bindings with `bubbles/key` so help screens stay in sync.
+- Cursor moves on the graph fan out to two debounced loaders: a 200ms `git show --numstat` for the Changes-tab file list and an immediate `git show --no-patch` for the Commit-tab metadata. Both share a single `diffReqID` for stale-drop, so a fast `j` mash never paints a previous commit's data.
 
 ## Git Wrapper Conventions (`internal/git`)
 
-- The TUI never constructs `*exec.Cmd` directly — it goes through typed wrappers (`Log`, `Diff`, `Branches`, ...). Makes stubbing in tests possible.
+- The TUI never constructs `*exec.Cmd` directly — it goes through typed wrappers (`Log`, `Stat`, `Patch`, `PatchForFile`, `CommitDetail`, `Refs`, `Fetch`, ...). Makes stubbing in tests possible.
 - Prefer `StdoutPipe` + scanner over `CombinedOutput` for anything that can be large (`git log`, `git diff`).
 - When a git command fails, wrap stderr into the returned error. The TUI should be able to surface a real message instead of "exit status 128".
-- Parse with `--porcelain` / `-z` / `--format=...` whenever available — don't scrape human-readable output.
+- Parse with `--porcelain` / `-z` / `--format=...` whenever available — don't scrape human-readable output. NUL separators in `--format=%H%x00%P%x00...` keep newline-bearing fields like commit bodies safe to split.
+- Decoration tokens (`%D`) are parsed into typed `Ref` slices on each commit so the graph row can render branch/tag chips between the timestamp and the subject.
 
 ## Logging
 

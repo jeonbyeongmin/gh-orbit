@@ -112,11 +112,17 @@ var (
 // Subject sits at the right edge so it absorbs the truncation when the row is
 // too narrow; chips are between time and subject, dropped wholesale rather
 // than partially when there isn't room for both chip and subject.
-func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColWidth, width int, selected bool) string {
-	hash := c.Hash
-	if len(hash) > shortHashLen {
-		hash = hash[:shortHashLen]
+// shortHash truncates a 40-char object name to the conventional 7-char abbrev.
+// Short hashes shorter than that are returned unchanged.
+func shortHash(h string) string {
+	if len(h) > shortHashLen {
+		return h[:shortHashLen]
 	}
+	return h
+}
+
+func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColWidth, width int, selected bool) string {
+	hash := shortHash(c.Hash)
 	rel := relativeShort(c.AuthorTime)
 
 	cursor := "  "

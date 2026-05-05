@@ -12,6 +12,154 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
+func TestSplitRatioClampOnResize(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	if m.splitRatio != splitRatioDefault {
+		t.Fatalf("default splitRatio = %d, want %d", m.splitRatio, splitRatioDefault)
+	}
+
+	send := func(t tea.KeyType) {
+		updated, _ := m.Update(tea.KeyMsg{Type: t})
+		m = updated.(Model)
+	}
+
+	// 12 ctrl+down presses (each +5) would push past splitRatioMax=80; we
+	// expect it to clamp.
+	for i := 0; i < 12; i++ {
+		send(tea.KeyCtrlDown)
+	}
+	if m.splitRatio != splitRatioMax {
+		t.Errorf("after 12 ctrl+down, splitRatio = %d, want %d (clamp)", m.splitRatio, splitRatioMax)
+	}
+
+	// Now drain back below the floor.
+	for i := 0; i < 16; i++ {
+		send(tea.KeyCtrlUp)
+	}
+	if m.splitRatio != splitRatioMin {
+		t.Errorf("after 16 ctrl+up, splitRatio = %d, want %d (clamp)", m.splitRatio, splitRatioMin)
+	}
+}
+
+func TestYKeyCopiesHashFromCommitTab(t *testing.T) {
+	original := clipboardWrite
+	t.Cleanup(func() { clipboardWrite = original })
+	var captured string
+	clipboardWrite = func(s string) error {
+		captured = s
+		return nil
+	}
+
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	// Pretend graph cursor selected this commit.
+	m.commitDetail.MarkLoading("0123456789abcdef0123456789abcdef01234567", 1)
+	m.focused = paneTab
+	if m.tabs.Active() != tabCommit {
+		t.Fatalf("tabs default = %v, want tabCommit", m.tabs.Active())
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if captured != "0123456789abcdef0123456789abcdef01234567" {
+		t.Errorf("clipboard captured = %q, want full hash", captured)
+	}
+	if !strings.HasPrefix(m.status, "copied ") {
+		t.Errorf("status = %q, want 'copied ...'", m.status)
+	}
+}
+
+func TestYKeyIsNoopOutsideCommitTab(t *testing.T) {
+	original := clipboardWrite
+	t.Cleanup(func() { clipboardWrite = original })
+	var captured string
+	clipboardWrite = func(s string) error {
+		captured = s
+		return nil
+	}
+
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.commitDetail.MarkLoading("abc1234deadbeefcafe1234567890abcdef12345", 1)
+	// graph focused, not paneTab
+	m.focused = paneGraph
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if captured != "" {
+		t.Errorf("clipboard should not be written when graph focused, got %q", captured)
+	}
+}
+
+func TestYKeySurfacesClipboardError(t *testing.T) {
+	original := clipboardWrite
+	t.Cleanup(func() { clipboardWrite = original })
+	clipboardWrite = func(string) error {
+		return errors.New("xclip: executable file not found in $PATH")
+	}
+
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.commitDetail.MarkLoading("abc1234deadbeefcafe1234567890abcdef12345", 1)
+	m.focused = paneTab
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if !strings.Contains(m.status, "clipboard unavailable") {
+		t.Errorf("status = %q, want clipboard error", m.status)
+	}
+	if !strings.Contains(m.status, "xclip") {
+		t.Errorf("status should carry the underlying error, got %q", m.status)
+	}
+}
+
+func TestFocusCycle_HL(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	// New() seeds focused at paneGraph.
+	if m.focused != paneGraph {
+		t.Fatalf("initial focus = %v, want paneGraph", m.focused)
+	}
+
+	step := func(key string) Model {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		return updated.(Model)
+	}
+
+	// l moves focus right: graph → tab.
+	m = step("l")
+	if m.focused != paneTab {
+		t.Errorf("after l from graph, focus = %v, want paneTab", m.focused)
+	}
+	// l at the right edge is a no-op (still tab).
+	m = step("l")
+	if m.focused != paneTab {
+		t.Errorf("l at right edge should clamp at paneTab, got %v", m.focused)
+	}
+	// h moves focus left: tab → graph → refs.
+	m = step("h")
+	if m.focused != paneGraph {
+		t.Errorf("after h from tab, focus = %v, want paneGraph", m.focused)
+	}
+	m = step("h")
+	if m.focused != paneRefs {
+		t.Errorf("after second h, focus = %v, want paneRefs", m.focused)
+	}
+	// h at the left edge is a no-op (still refs).
+	m = step("h")
+	if m.focused != paneRefs {
+		t.Errorf("h at left edge should clamp at paneRefs, got %v", m.focused)
+	}
+}
+
 func TestModelInitSeedsCurrentRefsWithAllSentinel(t *testing.T) {
 	m := New()
 	if got, want := m.currentRefs, []string{refsAllSentinel}; !slices.Equal(got, want) {
@@ -246,16 +394,22 @@ func TestModelCommitSelectedDispatchesDebounce(t *testing.T) {
 	updated, cmd := m.Update(commitSelectedMsg{hash: "aaa1111"})
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("commitSelectedMsg should return a debounce tick cmd")
+		t.Fatal("commitSelectedMsg should return a batched debounce + commit-detail cmd")
 	}
 	if m.diffReqID != priorReqID+1 {
 		t.Errorf("diffReqID should advance by 1, got %d (was %d)", m.diffReqID, priorReqID)
 	}
-	if !m.diff.loadingStat {
-		t.Error("diff sub-model should be marked loading after commitSelectedMsg")
+	if !m.changes.loadingFiles {
+		t.Error("changes pane should be marked loading after commitSelectedMsg")
 	}
-	if m.diff.currentHash != "aaa1111" {
-		t.Errorf("diff.currentHash = %q, want aaa1111", m.diff.currentHash)
+	if m.changes.hash != "aaa1111" {
+		t.Errorf("changes.hash = %q, want aaa1111", m.changes.hash)
+	}
+	if !m.commitDetail.loading {
+		t.Error("commitDetail should be marked loading after commitSelectedMsg")
+	}
+	if m.commitDetail.hash != "aaa1111" {
+		t.Errorf("commitDetail.hash = %q, want aaa1111", m.commitDetail.hash)
 	}
 }
 
@@ -365,20 +519,21 @@ func TestModelStaleStatLoadedIsIgnored(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	// Pretend we dispatched two cursor moves; the latest reqID is 7 and the
-	// diff sub-model is loading for hash "current".
+	// Pretend two cursor moves happened; the latest reqID is 7 and changes
+	// is loading for hash "current". A stale response at reqID 3 must not
+	// mutate the file list.
 	m.diffReqID = 7
-	m.diff.MarkLoadingStat("current", 7)
+	m.changes.MarkPending("current")
 
 	updated, _ = m.Update(diffStatLoadedMsg{reqID: 3, hash: "old", files: []git.FileStat{
 		{Path: "stale.txt", Insertions: 1},
 	}})
 	m = updated.(Model)
-	if m.diff.statLoaded {
-		t.Error("stale diffStatLoadedMsg must not flip statLoaded")
+	if len(m.changes.files) != 0 {
+		t.Errorf("stale diffStatLoadedMsg must not populate changes.files, got %v", m.changes.files)
 	}
-	if !m.diff.loadingStat {
-		t.Error("stale response should leave loadingStat=true since the in-flight call is still pending")
+	if !m.changes.loadingFiles {
+		t.Error("stale response should leave loadingFiles=true since the in-flight call is still pending")
 	}
 }
 

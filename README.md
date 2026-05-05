@@ -17,18 +17,42 @@ commit-graph-first workflow with PR review sitting next to it.
 **Early WIP.** The MVP scope is the local-git half (Fork replacement);
 PR review/merge is a follow-up milestone. Right now the build wires up:
 
-- 3-pane Fork-style layout (refs / commit graph / diff) — placeholder content
-- vim-style key bindings:
-  - `h` / `l` — move pane focus
-  - `j` / `k` — navigate within pane
-  - `enter` — select ref (refs pane)
+- Fork-style layout — refs sidebar on the left, commit graph filling the top
+  of the right column, and a tab area below it (`Commit` · `Changes`)
+- the graph runs against the unified `--all` revision spec by default so
+  every local/remote/tag is one walk; `enter` from the refs pane jumps the
+  graph cursor to a ref tip without changing the base
+- ref decoration (`%D`) is parsed into typed branch/tag entries and rendered
+  as chips between the timestamp and subject of each commit row
+- ref pane: lazy auto-scroll on j/k/g/G with overflow clipping (no fold or
+  sticky-header — those were tried and removed)
+- `Commit` tab: author/email, ISO 8601 dates, parent hashes, `%G?` sign-status
+  (`Signed (good)`, `Unsigned`, …), full message body
+- `Changes` tab: file-list cursor on the left (own colored `+N -M` rendering
+  parsed from `git show --numstat`) plus a follower patch viewport on the
+  right that reloads each time the file cursor moves
+- `d` opens a full-screen patch overlay for the focused commit; `esc` / `q`
+  close it without quitting the app
+- vim-style key bindings (full table in [CLAUDE.md](./CLAUDE.md#key-bindings)):
+  - `h` / `l` — move pane focus (refs ↔ graph ↔ tab, no wrap)
+  - `j` / `k` / `g` / `G` — navigate within the focused pane
+  - `tab` / `shift+tab` — switch between the Commit and Changes tabs
+  - `ctrl+↑` / `ctrl+↓` — resize the graph / tab split (5% per press)
+  - `ctrl+d` / `ctrl+u` — scroll the Changes-tab patch viewport
+  - `enter` — jump graph cursor to the focused ref tip (refs pane)
   - `a` — show every ref's commits (refs pane)
+  - `y` — copy the focused commit's hash to the clipboard (Commit tab)
+  - `d` — open the patch overlay (`esc` / `q` to close)
   - `F` — `git fetch --all` in the background
   - `r` — reload refs + log
-  - `q` / `ctrl+c` — quit
-  - `R` is reserved for a future Rebase action.
-- a status line next to the help row surfaces fetch progress and errors
-- `internal/git.Log()` / `git.Fetch()` shelling out to the user's `git` binary
+  - `q` / `ctrl+c` — quit (closes the patch overlay first)
+  - `R` is reserved for a future Rebase action
+- a status line next to the help row surfaces fetch progress, errors, and
+  hash-copy confirmation
+- `internal/git` exposes typed wrappers around `git log`, `git show
+  --numstat`, `git show -p` (full and per-file), `git show --no-patch`
+  metadata bundle, refs decoration, and `git fetch`, all shelling out to the
+  user's `git` binary so `.gitconfig`, hooks, signing, and LFS keep working
 
 ## Install
 

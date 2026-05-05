@@ -12,6 +12,113 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
+func TestSplitRatioClampOnResize(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	if m.splitRatio != splitRatioDefault {
+		t.Fatalf("default splitRatio = %d, want %d", m.splitRatio, splitRatioDefault)
+	}
+
+	send := func(t tea.KeyType) {
+		updated, _ := m.Update(tea.KeyMsg{Type: t})
+		m = updated.(Model)
+	}
+
+	// 12 ctrl+down presses (each +5) would push past splitRatioMax=80; we
+	// expect it to clamp.
+	for i := 0; i < 12; i++ {
+		send(tea.KeyCtrlDown)
+	}
+	if m.splitRatio != splitRatioMax {
+		t.Errorf("after 12 ctrl+down, splitRatio = %d, want %d (clamp)", m.splitRatio, splitRatioMax)
+	}
+
+	// Now drain back below the floor.
+	for i := 0; i < 16; i++ {
+		send(tea.KeyCtrlUp)
+	}
+	if m.splitRatio != splitRatioMin {
+		t.Errorf("after 16 ctrl+up, splitRatio = %d, want %d (clamp)", m.splitRatio, splitRatioMin)
+	}
+}
+
+func TestYKeyCopiesHashFromCommitTab(t *testing.T) {
+	original := clipboardWrite
+	t.Cleanup(func() { clipboardWrite = original })
+	var captured string
+	clipboardWrite = func(s string) error {
+		captured = s
+		return nil
+	}
+
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	// Pretend graph cursor selected this commit.
+	m.commitDetail.MarkLoading("0123456789abcdef0123456789abcdef01234567", 1)
+	m.focused = paneTab
+	if m.tabs.Active() != tabCommit {
+		t.Fatalf("tabs default = %v, want tabCommit", m.tabs.Active())
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if captured != "0123456789abcdef0123456789abcdef01234567" {
+		t.Errorf("clipboard captured = %q, want full hash", captured)
+	}
+	if !strings.HasPrefix(m.status, "copied ") {
+		t.Errorf("status = %q, want 'copied ...'", m.status)
+	}
+}
+
+func TestYKeyIsNoopOutsideCommitTab(t *testing.T) {
+	original := clipboardWrite
+	t.Cleanup(func() { clipboardWrite = original })
+	var captured string
+	clipboardWrite = func(s string) error {
+		captured = s
+		return nil
+	}
+
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.commitDetail.MarkLoading("abc1234deadbeefcafe1234567890abcdef12345", 1)
+	// graph focused, not paneTab
+	m.focused = paneGraph
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if captured != "" {
+		t.Errorf("clipboard should not be written when graph focused, got %q", captured)
+	}
+}
+
+func TestYKeySurfacesClipboardError(t *testing.T) {
+	original := clipboardWrite
+	t.Cleanup(func() { clipboardWrite = original })
+	clipboardWrite = func(string) error {
+		return errors.New("xclip: executable file not found in $PATH")
+	}
+
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.commitDetail.MarkLoading("abc1234deadbeefcafe1234567890abcdef12345", 1)
+	m.focused = paneTab
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if !strings.Contains(m.status, "clipboard unavailable") {
+		t.Errorf("status = %q, want clipboard error", m.status)
+	}
+	if !strings.Contains(m.status, "xclip") {
+		t.Errorf("status should carry the underlying error, got %q", m.status)
+	}
+}
+
 func TestFocusCycle_HL(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

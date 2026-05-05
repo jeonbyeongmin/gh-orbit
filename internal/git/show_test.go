@@ -104,6 +104,128 @@ func TestShowPatchIntegration(t *testing.T) {
 	}
 }
 
+func TestShowPatchForFileIsolatesPath(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("beta\n"), 0o644); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-m", "first")
+
+	out, err := PatchForFile(context.Background(), dir, "HEAD", "a.txt")
+	if err != nil {
+		t.Fatalf("PatchForFile: %v", err)
+	}
+	if !strings.Contains(out, "a.txt") {
+		t.Errorf("patch should include the requested path, got %q", out)
+	}
+	if !strings.Contains(out, "alpha") {
+		t.Errorf("patch should include the requested file's content, got %q", out)
+	}
+	if strings.Contains(out, "b.txt") || strings.Contains(out, "beta") {
+		t.Errorf("patch must not leak the unselected file, got %q", out)
+	}
+}
+
+func TestShowCommitDetailParsesAllFields(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	gitRun(t, dir, "add", "f.txt")
+	// Commit with a multi-line body and a fixed date so the parser surface is
+	// exercised end-to-end (subject, body, dates, sign-status).
+	cmd := exec.Command("git", "commit", "-m", "subject line\n\nbody line 1\nbody line 2\n")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Alice", "GIT_AUTHOR_EMAIL=alice@example.com",
+		"GIT_AUTHOR_DATE=2026-01-15T10:20:30+00:00",
+		"GIT_COMMITTER_NAME=Bob", "GIT_COMMITTER_EMAIL=bob@example.com",
+		"GIT_COMMITTER_DATE=2026-01-15T10:20:30+00:00",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+
+	d, err := CommitDetail(context.Background(), dir, "HEAD")
+	if err != nil {
+		t.Fatalf("CommitDetail: %v", err)
+	}
+	if len(d.Hash) != 40 {
+		t.Errorf("Hash length = %d, want 40", len(d.Hash))
+	}
+	if d.AuthorName != "Alice" || d.AuthorEmail != "alice@example.com" {
+		t.Errorf("author = %q <%q>, want Alice <alice@example.com>", d.AuthorName, d.AuthorEmail)
+	}
+	if d.CommitterName != "Bob" || d.CommitterEmail != "bob@example.com" {
+		t.Errorf("committer = %q <%q>, want Bob <bob@example.com>", d.CommitterName, d.CommitterEmail)
+	}
+	if d.AuthorDate.IsZero() {
+		t.Error("AuthorDate should parse from %aI")
+	}
+	if d.AuthorDate.Year() != 2026 || d.AuthorDate.Month() != 1 || d.AuthorDate.Day() != 15 {
+		t.Errorf("AuthorDate = %v, want 2026-01-15", d.AuthorDate)
+	}
+	if d.SignStatus != "N" {
+		t.Errorf("SignStatus = %q, want N (no signature)", d.SignStatus)
+	}
+	if !strings.Contains(d.Body, "subject line") || !strings.Contains(d.Body, "body line 1") {
+		t.Errorf("Body should contain the full message, got %q", d.Body)
+	}
+	if len(d.Parents) != 0 {
+		t.Errorf("first commit should have zero parents, got %v", d.Parents)
+	}
+}
+
+func TestShowCommitDetailParsesParents(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	gitRun(t, dir, "add", "f.txt")
+	gitRun(t, dir, "commit", "-m", "first")
+	gitRun(t, dir, "checkout", "-b", "feat")
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("a\nb\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	gitRun(t, dir, "commit", "-am", "feat side")
+	gitRun(t, dir, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(dir, "g.txt"), []byte("c\n"), 0o644); err != nil {
+		t.Fatalf("write g: %v", err)
+	}
+	gitRun(t, dir, "add", "g.txt")
+	gitRun(t, dir, "commit", "-m", "main side")
+	gitRun(t, dir, "merge", "--no-ff", "feat", "-m", "merge feat")
+
+	d, err := CommitDetail(context.Background(), dir, "HEAD")
+	if err != nil {
+		t.Fatalf("CommitDetail: %v", err)
+	}
+	if len(d.Parents) != 2 {
+		t.Errorf("merge commit should have 2 parents, got %d: %v", len(d.Parents), d.Parents)
+	}
+	for _, p := range d.Parents {
+		if len(p) != 40 {
+			t.Errorf("parent hash length = %d, want 40 (%q)", len(p), p)
+		}
+	}
+}
+
 func TestShowReturnsErrorWithStderr(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

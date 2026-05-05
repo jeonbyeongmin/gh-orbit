@@ -48,6 +48,7 @@ type Model struct {
 	refs          refModel
 	graph         graphModel
 	diff          diffModel
+	changes       changesModel
 	tabs          tabsModel
 	// splitRatio is the percentage of the right-column height allocated to the
 	// graph; the tab area takes the remainder. Bounded by splitRatioMin/Max.
@@ -78,6 +79,7 @@ func New() Model {
 		refs:        newRefsModel(),
 		graph:       newGraphModel(),
 		diff:        newDiffModel(),
+		changes:     newChangesModel(),
 		tabs:        newTabsModel(),
 		splitRatio:  splitRatioDefault,
 		currentRefs: []string{refsAllSentinel},
@@ -99,6 +101,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refs.SetSize(s.refsW, s.refsH)
 		m.graph.SetSize(s.graphW, s.graphH)
 		m.diff.SetSize(s.tabW, s.tabH)
+		m.changes.SetSize(s.tabW, s.tabH)
 		if m.mode == viewModeDiffWindow {
 			m.diff.SetPatchViewportSize(m.width, m.height-1)
 		}
@@ -145,6 +148,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case diffStatLoadedMsg:
 		m.diff.ApplyStatLoaded(msg.reqID, msg.hash, msg.files)
+		// changes pane reflects the same stat data as the file-list source.
+		// Step 8 strips the diffModel side once the d-overlay is the only
+		// remaining consumer of patch text.
+		if msg.reqID == m.diffReqID {
+			m.changes.SetFiles(msg.files)
+		}
 		return m, nil
 	case diffStatFailedMsg:
 		m.diff.ApplyStatFailed(msg.reqID, msg.hash, msg.err)
@@ -239,6 +248,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "shift+tab":
 				m.tabs.Prev()
 				return m, nil
+			}
+			switch m.tabs.Active() {
+			case tabChanges:
+				var cmd tea.Cmd
+				m.changes, cmd = m.changes.Update(msg)
+				return m, cmd
 			}
 		}
 	}
@@ -400,7 +415,7 @@ func (m Model) tabPlaceholder() string {
 	case tabCommit:
 		body = "(commit detail — placeholder)"
 	case tabChanges:
-		body = m.diff.StatView()
+		body = m.changes.View()
 	}
 	return header + "\n\n" + body
 }

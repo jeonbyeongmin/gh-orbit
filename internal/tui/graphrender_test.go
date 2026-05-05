@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
@@ -23,45 +22,6 @@ func TestRenderGraphRowLinear(t *testing.T) {
 	stripped := ansi.Strip(text)
 	if stripped != "* " {
 		t.Errorf("stripped = %q, want %q", stripped, "* ")
-	}
-}
-
-// Merge / fork diagonals are rendered blank — verify no slash glyphs leak
-// into the output and the column reservation is unchanged.
-func TestRenderGraphRowMergeIsBlank(t *testing.T) {
-	row := lanes.Row{
-		Cells: []lanes.Cell{
-			{Kind: lanes.CellCommit, Lane: 0},
-			{Kind: lanes.CellMergeRight, Lane: 1},
-		},
-		CommitLane: 0,
-	}
-	text, w := renderGraphRow(row)
-	if w != 2*cellWidth {
-		t.Errorf("visualWidth = %d, want %d", w, 2*cellWidth)
-	}
-	stripped := ansi.Strip(text)
-	if strings.ContainsAny(stripped, `/\`) {
-		t.Errorf("merge cell should render blank, got %q", stripped)
-	}
-}
-
-func TestRenderGraphRowOctopusForkIsBlank(t *testing.T) {
-	row := lanes.Row{
-		Cells: []lanes.Cell{
-			{Kind: lanes.CellCommit, Lane: 0},
-			{Kind: lanes.CellForkRight, Lane: 1},
-			{Kind: lanes.CellForkRight, Lane: 2},
-		},
-		CommitLane: 0,
-	}
-	text, w := renderGraphRow(row)
-	if w != 3*cellWidth {
-		t.Errorf("visualWidth = %d, want %d", w, 3*cellWidth)
-	}
-	stripped := ansi.Strip(text)
-	if strings.ContainsAny(stripped, `/\`) {
-		t.Errorf("fork cells should render blank, got %q", stripped)
 	}
 }
 
@@ -86,8 +46,12 @@ func TestRenderGraphRowEmptyCellPadsTwoColumns(t *testing.T) {
 func TestGlyphsAreSingleCell(t *testing.T) {
 	for _, k := range []lanes.CellKind{
 		lanes.CellPipe, lanes.CellCommit,
-		lanes.CellMergeLeft, lanes.CellMergeRight,
-		lanes.CellForkLeft, lanes.CellForkRight,
+		lanes.CellHoriz,
+		lanes.CellCornerTL, lanes.CellCornerTR,
+		lanes.CellCornerBL, lanes.CellCornerBR,
+		lanes.CellTeeRight, lanes.CellTeeLeft,
+		lanes.CellTeeDown, lanes.CellTeeUp,
+		lanes.CellCross,
 	} {
 		g := glyphFor(k)
 		if w := runewidth.StringWidth(g); w != 1 {

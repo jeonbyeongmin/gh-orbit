@@ -238,8 +238,8 @@ func loadCommitsCmd(dir string, refs []string, max int) tea.Cmd {
 		alloc := lanes.New()
 		rows := make([]graphRow, len(commits))
 		for i, c := range commits {
-			row := alloc.Push(c)
-			text, w := renderGraphRow(row)
+			pair := alloc.Push(c)
+			text, w := renderGraphRow(pair.Commit)
 			rows[i] = graphRow{commit: c, graphPrefix: text, visualWidth: w}
 		}
 		return commitsLoadedMsg{rows: rows}

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
@@ -20,8 +21,8 @@ func TestRenderGraphRowLinear(t *testing.T) {
 		t.Errorf("visualWidth = %d, want %d", w, cellWidth)
 	}
 	stripped := ansi.Strip(text)
-	if stripped != "* " {
-		t.Errorf("stripped = %q, want %q", stripped, "* ")
+	if stripped != "● " {
+		t.Errorf("stripped = %q, want %q", stripped, "● ")
 	}
 }
 
@@ -39,6 +40,82 @@ func TestRenderGraphRowEmptyCellPadsTwoColumns(t *testing.T) {
 	stripped := ansi.Strip(text)
 	if w := runewidth.StringWidth(stripped); w != 3*cellWidth {
 		t.Errorf("rendered width = %d, want %d (text=%q)", w, 3*cellWidth, stripped)
+	}
+}
+
+// TestRenderConnectorForkSpansHorizontal — a fork connector (├ followed by
+// ╮) should fill the trailing space with `─`, producing `├─╮` visually.
+func TestRenderConnectorForkSpansHorizontal(t *testing.T) {
+	row := lanes.Row{
+		Cells: []lanes.Cell{
+			{Kind: lanes.CellTeeRight, Lane: 0},
+			{Kind: lanes.CellCornerTR, Lane: 1},
+		},
+		CommitLane: -1,
+	}
+	text, _ := renderGraphRow(row)
+	stripped := ansi.Strip(text)
+	// Expect ├─╮ followed by a trailing space (last cell gets a plain
+	// space, not a horizontal).
+	if !strings.HasPrefix(stripped, "├─╮") {
+		t.Errorf("stripped = %q, want prefix %q (horizontal should fill the gap)",
+			stripped, "├─╮")
+	}
+	if !strings.Contains(stripped, "─") {
+		t.Errorf("stripped = %q, expected `─` between connecting cells", stripped)
+	}
+}
+
+// TestRenderConnectorMergeArmHorizontal — a merge connector (├ followed
+// by ╯) also fills the trailing column, producing `├─╯`.
+func TestRenderConnectorMergeArmHorizontal(t *testing.T) {
+	row := lanes.Row{
+		Cells: []lanes.Cell{
+			{Kind: lanes.CellTeeRight, Lane: 0},
+			{Kind: lanes.CellCornerBR, Lane: 1},
+		},
+		CommitLane: -1,
+	}
+	text, _ := renderGraphRow(row)
+	stripped := ansi.Strip(text)
+	if !strings.HasPrefix(stripped, "├─╯") {
+		t.Errorf("stripped = %q, want prefix %q", stripped, "├─╯")
+	}
+}
+
+// TestRenderConnectorOctopusFork — three-way fork lays out as ├─┬─╮ with
+// horizontal fills in both gaps.
+func TestRenderConnectorOctopusFork(t *testing.T) {
+	row := lanes.Row{
+		Cells: []lanes.Cell{
+			{Kind: lanes.CellTeeRight, Lane: 0},
+			{Kind: lanes.CellTeeDown, Lane: 1},
+			{Kind: lanes.CellCornerTR, Lane: 2},
+		},
+		CommitLane: -1,
+	}
+	text, _ := renderGraphRow(row)
+	stripped := ansi.Strip(text)
+	if !strings.HasPrefix(stripped, "├─┬─╮") {
+		t.Errorf("stripped = %q, want prefix %q", stripped, "├─┬─╮")
+	}
+}
+
+// TestRenderConnectorPipesNoHorizontal — two pass-through pipes do NOT
+// connect horizontally; the trailing column stays a plain space.
+func TestRenderConnectorPipesNoHorizontal(t *testing.T) {
+	row := lanes.Row{
+		Cells: []lanes.Cell{
+			{Kind: lanes.CellPipe, Lane: 0},
+			{Kind: lanes.CellPipe, Lane: 1},
+		},
+		CommitLane: -1,
+	}
+	text, _ := renderGraphRow(row)
+	stripped := ansi.Strip(text)
+	if strings.Contains(stripped, "─") {
+		t.Errorf("stripped = %q, plain pipes should not be connected by `─`",
+			stripped)
 	}
 }
 

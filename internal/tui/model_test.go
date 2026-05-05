@@ -119,7 +119,7 @@ func TestYKeySurfacesClipboardError(t *testing.T) {
 	}
 }
 
-func TestFocusCycle_HL(t *testing.T) {
+func TestFocusCycle_TabWrap(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -129,34 +129,27 @@ func TestFocusCycle_HL(t *testing.T) {
 		t.Fatalf("initial focus = %v, want paneGraph", m.focused)
 	}
 
-	step := func(key string) Model {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	tabStep := func() Model {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 		return updated.(Model)
 	}
 
-	// l moves focus right: graph → tab.
-	m = step("l")
+	// tab cycles forward and wraps: graph → tab → refs → graph → tab.
+	m = tabStep()
 	if m.focused != paneTab {
-		t.Errorf("after l from graph, focus = %v, want paneTab", m.focused)
+		t.Errorf("after tab #1 from graph, focus = %v, want paneTab", m.focused)
 	}
-	// l at the right edge is a no-op (still tab).
-	m = step("l")
-	if m.focused != paneTab {
-		t.Errorf("l at right edge should clamp at paneTab, got %v", m.focused)
+	m = tabStep()
+	if m.focused != paneRefs {
+		t.Errorf("after tab #2 from tab, focus = %v, want paneRefs (wrap)", m.focused)
 	}
-	// h moves focus left: tab → graph → refs.
-	m = step("h")
+	m = tabStep()
 	if m.focused != paneGraph {
-		t.Errorf("after h from tab, focus = %v, want paneGraph", m.focused)
+		t.Errorf("after tab #3 from refs, focus = %v, want paneGraph", m.focused)
 	}
-	m = step("h")
-	if m.focused != paneRefs {
-		t.Errorf("after second h, focus = %v, want paneRefs", m.focused)
-	}
-	// h at the left edge is a no-op (still refs).
-	m = step("h")
-	if m.focused != paneRefs {
-		t.Errorf("h at left edge should clamp at paneRefs, got %v", m.focused)
+	m = tabStep()
+	if m.focused != paneTab {
+		t.Errorf("after tab #4 from graph, focus = %v, want paneTab", m.focused)
 	}
 }
 

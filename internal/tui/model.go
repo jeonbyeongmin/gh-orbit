@@ -223,15 +223,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
-		case "h":
-			if m.focused > 0 {
-				m.focused--
-			}
-			return m, nil
-		case "l":
-			if m.focused < paneCount-1 {
-				m.focused++
-			}
+		case "tab":
+			m.focused = (m.focused + 1) % paneCount
 			return m, nil
 		case "F":
 			if m.fetchInFlight {
@@ -278,11 +271,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		case paneTab:
 			switch msg.String() {
-			case "tab":
-				m.tabs.Next()
-				return m, nil
-			case "shift+tab":
+			case "h":
 				m.tabs.Prev()
+				return m, nil
+			case "l":
+				m.tabs.Next()
 				return m, nil
 			case "ctrl+d", "ctrl+u", "pgdown", "pgup":
 				// Scroll the patch viewport without moving the file-list

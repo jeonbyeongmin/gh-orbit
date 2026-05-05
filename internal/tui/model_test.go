@@ -12,6 +12,47 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
+func TestFocusCycle_HL(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	// New() seeds focused at paneGraph.
+	if m.focused != paneGraph {
+		t.Fatalf("initial focus = %v, want paneGraph", m.focused)
+	}
+
+	step := func(key string) Model {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		return updated.(Model)
+	}
+
+	// l moves focus right: graph → tab.
+	m = step("l")
+	if m.focused != paneTab {
+		t.Errorf("after l from graph, focus = %v, want paneTab", m.focused)
+	}
+	// l at the right edge is a no-op (still tab).
+	m = step("l")
+	if m.focused != paneTab {
+		t.Errorf("l at right edge should clamp at paneTab, got %v", m.focused)
+	}
+	// h moves focus left: tab → graph → refs.
+	m = step("h")
+	if m.focused != paneGraph {
+		t.Errorf("after h from tab, focus = %v, want paneGraph", m.focused)
+	}
+	m = step("h")
+	if m.focused != paneRefs {
+		t.Errorf("after second h, focus = %v, want paneRefs", m.focused)
+	}
+	// h at the left edge is a no-op (still refs).
+	m = step("h")
+	if m.focused != paneRefs {
+		t.Errorf("h at left edge should clamp at paneRefs, got %v", m.focused)
+	}
+}
+
 func TestModelInitSeedsCurrentRefsWithAllSentinel(t *testing.T) {
 	m := New()
 	if got, want := m.currentRefs, []string{refsAllSentinel}; !slices.Equal(got, want) {

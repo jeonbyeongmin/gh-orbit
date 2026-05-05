@@ -300,7 +300,7 @@ func TestGraphModelResetForReloadReturnsToLoading(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(40, 10)
 	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
-		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}, graphPrefix: "* ", visualWidth: 2},
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}, commitPrefix: "* ", commitWidth: 2},
 	}})
 	if !g.loaded {
 		t.Fatalf("graph should be loaded after commitsLoadedMsg")
@@ -328,9 +328,9 @@ func TestGraphModelComputesGraphWidthFromLongestPrefix(t *testing.T) {
 	g.SetSize(80, 10)
 	now := time.Now()
 	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
-		{commit: git.Commit{Hash: "a", Subject: "s1", AuthorTime: now}, graphPrefix: "* ", visualWidth: 2},
-		{commit: git.Commit{Hash: "b", Subject: "s2", AuthorTime: now}, graphPrefix: "| | * ", visualWidth: 6},
-		{commit: git.Commit{Hash: "c", Subject: "s3", AuthorTime: now}, graphPrefix: "|/ ", visualWidth: 3},
+		{commit: git.Commit{Hash: "a", Subject: "s1", AuthorTime: now}, commitPrefix: "* ", commitWidth: 2},
+		{commit: git.Commit{Hash: "b", Subject: "s2", AuthorTime: now}, commitPrefix: "| | * ", commitWidth: 6},
+		{commit: git.Commit{Hash: "c", Subject: "s3", AuthorTime: now}, commitPrefix: "|/ ", commitWidth: 3},
 	}})
 	if g.graphWidth != 6 {
 		t.Errorf("graphWidth = %d, want 6 (width of '| | * ')", g.graphWidth)
@@ -372,7 +372,7 @@ func TestApplyGraphCapTruncatesWhenWidthBelowMaxVisual(t *testing.T) {
 	g.SetSize(40, 10)
 	g, _ = g.Update(commitsLoadedMsg{rows: []graphRow{
 		{commit: git.Commit{Hash: "a", Subject: "s", AuthorTime: time.Now()},
-			graphPrefix: strings.Repeat("│", 20), visualWidth: 20},
+			commitPrefix: strings.Repeat("│", 20), commitWidth: 20},
 	}})
 	if g.maxVisualWidth != 20 {
 		t.Fatalf("maxVisualWidth = %d, want 20", g.maxVisualWidth)

@@ -54,33 +54,45 @@ func laneColCap(paneWidth int) int {
 	return c * cellWidth
 }
 
-// commitItem wraps a Commit so it can be stored in bubbles/list. graphPrefix
-// is the ANSI-styled graph segment for this row; graphWidth is its visible
-// column count (we can't derive it from len() once ANSI escapes are mixed in).
+// commitItem wraps a Commit so it can be stored in bubbles/list. Both the
+// connector row drawn above this commit (transitions from the previous
+// commit) and the commit row itself are pre-rendered and cached here —
+// the delegate emits them as a 2-line block so j/k still moves one item
+// per press.
 type commitItem struct {
-	c           git.Commit
-	graphPrefix string
-	graphWidth  int
+	c                git.Commit
+	connectorPrefix  string
+	connectorWidth   int
+	commitPrefix     string
+	commitGraphWidth int
 }
 
 func (i commitItem) FilterValue() string { return i.c.Subject }
 
-// graphRow pairs a commit with its rendered graph segment.
+// graphRow pairs a commit with both pre-rendered graph segments (connector
+// + commit), so the delegate can emit them on consecutive lines.
 type graphRow struct {
-	commit      git.Commit
-	graphPrefix string
-	visualWidth int
+	commit          git.Commit
+	connectorPrefix string
+	connectorWidth  int
+	commitPrefix    string
+	commitWidth     int
 }
 
-// commitDelegate renders one commit per line: cursor + graph + short hash +
-// relative time + subject (with truncation when the row is too narrow).
+// commitDelegate renders one commit as a 2-line block:
+//
+//	[connector row]   ← lane transitions arriving at this commit
+//	[commit row]      ← cursor + graph + hash + time + chips + subject
+//
 // graphWidth is the column width every row should reserve for the graph
-// segment so columns stay aligned across the visible window.
+// segment so columns stay aligned across the visible window. For the very
+// first item (index 0) the connector is rendered as a blank line — there
+// is nothing above the most recent commit to connect to.
 type commitDelegate struct {
 	graphWidth int
 }
 
-func (commitDelegate) Height() int                             { return 1 }
+func (commitDelegate) Height() int                             { return 2 }
 func (commitDelegate) Spacing() int                            { return 0 }
 func (commitDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
@@ -91,7 +103,20 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	}
 	selected := index == m.Index()
 	width := m.Width()
-	_, _ = fmt.Fprint(w, renderCommitLine(ci.c, ci.graphPrefix, ci.graphWidth, d.graphWidth, width, selected))
+
+	connectorPrefix := ci.connectorPrefix
+	connectorWidth := ci.connectorWidth
+	if index == 0 {
+		// Top-of-screen commit has no preceding commit, so its connector
+		// row is a blank visual line that aligns with the graph column.
+		connectorPrefix = ""
+		connectorWidth = 0
+	}
+
+	connectorLine := renderConnectorLine(connectorPrefix, connectorWidth, d.graphWidth, width)
+	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, d.graphWidth, width, selected)
+
+	_, _ = fmt.Fprint(w, connectorLine+"\n"+commitLine)
 }
 
 var (
@@ -182,6 +207,33 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	)
 }
 
+// renderConnectorLine builds one connector row: a 2-space cursor gutter,
+// the styled connector graph segment padded to graphColWidth, and trailing
+// spaces filling out to the row width. Connector lines never carry hash /
+// time / subject — those belong on the commit row that follows.
+func renderConnectorLine(connectorPrefix string, connectorRowWidth, graphColWidth, width int) string {
+	const cursorWidth = 2
+	cursor := strings.Repeat(" ", cursorWidth)
+	if width <= cursorWidth {
+		return cursor[:width]
+	}
+
+	effectiveCol := graphColWidth
+	if effectiveCol > width-cursorWidth {
+		effectiveCol = width - cursorWidth
+	}
+	if effectiveCol < 0 {
+		effectiveCol = 0
+	}
+
+	graphCell, graphCellW := buildGraphCell(connectorPrefix, connectorRowWidth, effectiveCol)
+	used := cursorWidth + graphCellW
+	if used >= width {
+		return cursor + graphCell
+	}
+	return cursor + graphCell + strings.Repeat(" ", width-used)
+}
+
 // buildGraphCell returns the styled graph segment for one row plus the actual
 // visible column width consumed. When a row's prefix exceeds the column
 // budget (cap reached or narrow terminal), the tail is replaced with "…" so
@@ -239,8 +291,15 @@ func loadCommitsCmd(dir string, refs []string, max int) tea.Cmd {
 		rows := make([]graphRow, len(commits))
 		for i, c := range commits {
 			pair := alloc.Push(c)
-			text, w := renderGraphRow(pair.Commit)
-			rows[i] = graphRow{commit: c, graphPrefix: text, visualWidth: w}
+			connectorText, connectorW := renderGraphRow(pair.Connector)
+			commitText, commitW := renderGraphRow(pair.Commit)
+			rows[i] = graphRow{
+				commit:          c,
+				connectorPrefix: connectorText,
+				connectorWidth:  connectorW,
+				commitPrefix:    commitText,
+				commitWidth:     commitW,
+			}
 		}
 		return commitsLoadedMsg{rows: rows}
 	}
@@ -254,9 +313,18 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 		items := make([]list.Item, len(m.rows))
 		maxW := 0
 		for i, r := range m.rows {
-			items[i] = commitItem{c: r.commit, graphPrefix: r.graphPrefix, graphWidth: r.visualWidth}
-			if r.visualWidth > maxW {
-				maxW = r.visualWidth
+			items[i] = commitItem{
+				c:                r.commit,
+				connectorPrefix:  r.connectorPrefix,
+				connectorWidth:   r.connectorWidth,
+				commitPrefix:     r.commitPrefix,
+				commitGraphWidth: r.commitWidth,
+			}
+			if r.commitWidth > maxW {
+				maxW = r.commitWidth
+			}
+			if r.connectorWidth > maxW {
+				maxW = r.connectorWidth
 			}
 		}
 		g.maxVisualWidth = maxW

@@ -48,6 +48,7 @@ type Model struct {
 	refs          refModel
 	graph         graphModel
 	diff          diffModel
+	tabs          tabsModel
 	// splitRatio is the percentage of the right-column height allocated to the
 	// graph; the tab area takes the remainder. Bounded by splitRatioMin/Max.
 	splitRatio int
@@ -77,6 +78,7 @@ func New() Model {
 		refs:        newRefsModel(),
 		graph:       newGraphModel(),
 		diff:        newDiffModel(),
+		tabs:        newTabsModel(),
 		splitRatio:  splitRatioDefault,
 		currentRefs: []string{refsAllSentinel},
 	}
@@ -229,6 +231,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.graph, cmd = m.graph.Update(msg)
 			return m, cmd
+		case paneTab:
+			switch msg.String() {
+			case "tab":
+				m.tabs.Next()
+				return m, nil
+			case "shift+tab":
+				m.tabs.Prev()
+				return m, nil
+			}
 		}
 	}
 	return m, nil
@@ -378,11 +389,20 @@ func boxStyle(focused bool) lipgloss.Style {
 	return borderUnfocused
 }
 
-// tabPlaceholder is the temporary tab-area body wired in step 1 of the
-// bottom-diff-pane-layout plan. Subsequent steps replace it with a real
-// tabsModel hosting the Commit and Changes panes.
+// tabPlaceholder renders the active tab's body underneath the tabsModel
+// header. Steps 3+ replace each branch with a dedicated sub-model; until then
+// both branches reuse the existing diffModel.StatView() so the screen has
+// content while the user navigates between tabs.
 func (m Model) tabPlaceholder() string {
-	return "Commit | Changes\n\n" + m.diff.StatView()
+	header := m.tabs.HeaderView()
+	var body string
+	switch m.tabs.Active() {
+	case tabCommit:
+		body = "(commit detail — placeholder)"
+	case tabChanges:
+		body = m.diff.StatView()
+	}
+	return header + "\n\n" + body
 }
 
 // renderHelpStatus lays out the bottom line as "help … status". When the

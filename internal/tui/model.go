@@ -106,18 +106,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		s := m.paneSizes()
-		m.refs.SetSize(s.refsW, s.refsH)
-		m.graph.SetSize(s.graphW, s.graphH)
-		m.diff.SetSize(s.tabW, s.tabH)
-		// tabPlaceholder reserves the first 2 lines for header + spacer, so
-		// the inner sub-models render at tabH-2.
-		tabBodyH := s.tabH - 2
-		if tabBodyH < 1 {
-			tabBodyH = 1
-		}
-		m.changes.SetSize(s.tabW, tabBodyH)
-		m.commitDetail.SetSize(s.tabW, tabBodyH)
+		m.applyPaneSizes()
 		if m.mode == viewModeDiffWindow {
 			m.diff.SetPatchViewportSize(m.width, m.height-1)
 		}
@@ -246,6 +235,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, fetchCmd("")
 		case "r":
 			return m, m.reloadCmd()
+		case "ctrl+up":
+			if m.splitRatio > splitRatioMin {
+				m.splitRatio -= splitRatioStep
+				if m.splitRatio < splitRatioMin {
+					m.splitRatio = splitRatioMin
+				}
+				m.applyPaneSizes()
+			}
+			return m, nil
+		case "ctrl+down":
+			if m.splitRatio < splitRatioMax {
+				m.splitRatio += splitRatioStep
+				if m.splitRatio > splitRatioMax {
+					m.splitRatio = splitRatioMax
+				}
+				m.applyPaneSizes()
+			}
+			return m, nil
 		case "y":
 			m = m.copyHashFromCommitTab()
 			return m, nil
@@ -300,6 +307,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// applyPaneSizes recomputes the inner content dimensions for every sub-model
+// from the current width/height/splitRatio. Called from WindowSizeMsg and
+// ctrl+up/down so a resize never leaves a sub-model rendering against stale
+// dimensions.
+func (m *Model) applyPaneSizes() {
+	s := m.paneSizes()
+	m.refs.SetSize(s.refsW, s.refsH)
+	m.graph.SetSize(s.graphW, s.graphH)
+	m.diff.SetSize(s.tabW, s.tabH)
+	// tabPlaceholder reserves the first 2 lines for header + spacer, so the
+	// inner sub-models render at tabH-2.
+	tabBodyH := s.tabH - 2
+	if tabBodyH < 1 {
+		tabBodyH = 1
+	}
+	m.changes.SetSize(s.tabW, tabBodyH)
+	m.commitDetail.SetSize(s.tabW, tabBodyH)
 }
 
 // copyHashFromCommitTab handles `y`: only acts when paneTab is focused and

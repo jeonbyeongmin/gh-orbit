@@ -119,7 +119,7 @@ func TestYKeySurfacesClipboardError(t *testing.T) {
 	}
 }
 
-func TestFocusCycle_HL(t *testing.T) {
+func TestFocusCycle_TabWrap(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -129,34 +129,114 @@ func TestFocusCycle_HL(t *testing.T) {
 		t.Fatalf("initial focus = %v, want paneGraph", m.focused)
 	}
 
-	step := func(key string) Model {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	tabStep := func() Model {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 		return updated.(Model)
 	}
 
-	// l moves focus right: graph → tab.
-	m = step("l")
+	// tab cycles forward and wraps: graph → tab → refs → graph → tab.
+	m = tabStep()
 	if m.focused != paneTab {
-		t.Errorf("after l from graph, focus = %v, want paneTab", m.focused)
+		t.Errorf("after tab #1 from graph, focus = %v, want paneTab", m.focused)
 	}
-	// l at the right edge is a no-op (still tab).
-	m = step("l")
-	if m.focused != paneTab {
-		t.Errorf("l at right edge should clamp at paneTab, got %v", m.focused)
+	m = tabStep()
+	if m.focused != paneRefs {
+		t.Errorf("after tab #2 from tab, focus = %v, want paneRefs (wrap)", m.focused)
 	}
-	// h moves focus left: tab → graph → refs.
-	m = step("h")
+	m = tabStep()
 	if m.focused != paneGraph {
-		t.Errorf("after h from tab, focus = %v, want paneGraph", m.focused)
+		t.Errorf("after tab #3 from refs, focus = %v, want paneGraph", m.focused)
 	}
-	m = step("h")
-	if m.focused != paneRefs {
-		t.Errorf("after second h, focus = %v, want paneRefs", m.focused)
+	m = tabStep()
+	if m.focused != paneTab {
+		t.Errorf("after tab #4 from graph, focus = %v, want paneTab", m.focused)
 	}
-	// h at the left edge is a no-op (still refs).
-	m = step("h")
-	if m.focused != paneRefs {
-		t.Errorf("h at left edge should clamp at paneRefs, got %v", m.focused)
+}
+
+func TestTabPaneHL_TogglesCommitChanges(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.focused = paneTab
+	if m.tabs.Active() != tabCommit {
+		t.Fatalf("tabs default = %v, want tabCommit", m.tabs.Active())
+	}
+
+	send := func(r rune) Model {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return updated.(Model)
+	}
+
+	m = send('l')
+	if m.tabs.Active() != tabChanges {
+		t.Errorf("after l on paneTab, active = %v, want tabChanges", m.tabs.Active())
+	}
+	m = send('l')
+	if m.tabs.Active() != tabCommit {
+		t.Errorf("after l #2 (wrap), active = %v, want tabCommit", m.tabs.Active())
+	}
+	m = send('h')
+	if m.tabs.Active() != tabChanges {
+		t.Errorf("after h on paneTab, active = %v, want tabChanges (wrap reverse)", m.tabs.Active())
+	}
+}
+
+func TestRefsGraphHL_NoOp(t *testing.T) {
+	send := func(m Model, r rune) Model {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return updated.(Model)
+	}
+
+	for _, focus := range []pane{paneRefs, paneGraph} {
+		m := New()
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+		m = updated.(Model)
+		m.focused = focus
+		startActive := m.tabs.Active()
+
+		for _, key := range []rune{'h', 'l'} {
+			m = send(m, key)
+			if m.focused != focus {
+				t.Errorf("h/l from %v moved focus to %v, want unchanged", focus, m.focused)
+			}
+			if m.tabs.Active() != startActive {
+				t.Errorf("h/l from %v changed tab to %v, want %v", focus, m.tabs.Active(), startActive)
+			}
+		}
+	}
+}
+
+func TestDiffOverlay_TabHLSwallowed(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeDiffWindow
+	startFocus := m.focused
+	startActive := m.tabs.Active()
+
+	cases := []struct {
+		name string
+		msg  tea.KeyMsg
+	}{
+		{"tab", tea.KeyMsg{Type: tea.KeyTab}},
+		{"h", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}},
+		{"l", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}},
+	}
+	for _, tc := range cases {
+		updated, cmd := m.Update(tc.msg)
+		m = updated.(Model)
+		if m.mode != viewModeDiffWindow {
+			t.Errorf("%s in overlay closed/changed mode to %v, want viewModeDiffWindow", tc.name, m.mode)
+		}
+		if m.focused != startFocus {
+			t.Errorf("%s in overlay moved focus to %v, want %v", tc.name, m.focused, startFocus)
+		}
+		if m.tabs.Active() != startActive {
+			t.Errorf("%s in overlay changed tab to %v, want %v", tc.name, m.tabs.Active(), startActive)
+		}
+		if cmd != nil {
+			t.Errorf("%s in overlay should not dispatch a cmd, got %v", tc.name, cmd)
+		}
 	}
 }
 

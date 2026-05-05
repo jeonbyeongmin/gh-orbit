@@ -223,15 +223,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
-		case "h":
-			if m.focused > 0 {
-				m.focused--
-			}
-			return m, nil
-		case "l":
-			if m.focused < paneCount-1 {
-				m.focused++
-			}
+		case "tab":
+			m.focused = (m.focused + 1) % paneCount
 			return m, nil
 		case "F":
 			if m.fetchInFlight {
@@ -278,11 +271,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		case paneTab:
 			switch msg.String() {
-			case "tab":
-				m.tabs.Next()
-				return m, nil
-			case "shift+tab":
+			case "h":
 				m.tabs.Prev()
+				return m, nil
+			case "l":
+				m.tabs.Next()
 				return m, nil
 			case "ctrl+d", "ctrl+u", "pgdown", "pgup":
 				// Scroll the patch viewport without moving the file-list
@@ -467,7 +460,7 @@ var (
 )
 
 const (
-	helpTextNormal     = "h/l focus · j/k navigate · tab switch · ctrl+↑/↓ resize · enter jump ref · y copy hash · d patch · F fetch · r reload · q quit"
+	helpTextNormal     = "tab focus · h/l switch tab · j/k navigate · ctrl+↑/↓ resize · enter jump ref · y copy hash · d patch · F fetch · r reload · q quit"
 	helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
 )
 

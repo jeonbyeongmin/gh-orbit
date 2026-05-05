@@ -49,6 +49,7 @@ type Model struct {
 	graph         graphModel
 	diff          diffModel
 	changes       changesModel
+	commitDetail  commitDetailModel
 	tabs          tabsModel
 	// splitRatio is the percentage of the right-column height allocated to the
 	// graph; the tab area takes the remainder. Bounded by splitRatioMin/Max.
@@ -75,14 +76,15 @@ type Model struct {
 
 func New() Model {
 	return Model{
-		focused:     paneGraph,
-		refs:        newRefsModel(),
-		graph:       newGraphModel(),
-		diff:        newDiffModel(),
-		changes:     newChangesModel(),
-		tabs:        newTabsModel(),
-		splitRatio:  splitRatioDefault,
-		currentRefs: []string{refsAllSentinel},
+		focused:      paneGraph,
+		refs:         newRefsModel(),
+		graph:        newGraphModel(),
+		diff:         newDiffModel(),
+		changes:      newChangesModel(),
+		commitDetail: newCommitDetailModel(),
+		tabs:         newTabsModel(),
+		splitRatio:   splitRatioDefault,
+		currentRefs:  []string{refsAllSentinel},
 	}
 }
 
@@ -108,6 +110,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tabBodyH = 1
 		}
 		m.changes.SetSize(s.tabW, tabBodyH)
+		m.commitDetail.SetSize(s.tabW, tabBodyH)
 		if m.mode == viewModeDiffWindow {
 			m.diff.SetPatchViewportSize(m.width, m.height-1)
 		}
@@ -168,6 +171,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case filePatchFailedMsg:
 		m.changes.ApplyFilePatchFailed(msg.reqID, msg.hash, msg.path, msg.err)
+		return m, nil
+	case commitDetailLoadedMsg:
+		m.commitDetail.ApplyDetailLoaded(msg.reqID, msg.hash, msg.detail)
+		return m, nil
+	case commitDetailFailedMsg:
+		m.commitDetail.ApplyDetailFailed(msg.reqID, msg.hash, msg.err)
 		return m, nil
 	case diffStatFailedMsg:
 		m.diff.ApplyStatFailed(msg.reqID, msg.hash, msg.err)
@@ -283,14 +292,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// beginDiffStat advances the diff request id, marks the diff sub-model as
-// loading for the given hash, and returns the debounce tick cmd. Used by both
-// graph cursor moves (commitSelectedMsg) and ref-tip jumps (refSelectedMsg)
-// so the right pane always reflects the currently focused commit.
+// beginDiffStat advances the diff request id, marks both the Changes-tab
+// stat source and the Commit-tab detail sub-model as loading for the given
+// hash, and batches the debounce tick (Changes) plus the immediate
+// CommitDetail dispatch (Commit). Used by both graph cursor moves
+// (commitSelectedMsg) and ref-tip jumps (refSelectedMsg) so the bottom tab
+// area always reflects the currently focused commit.
 func (m *Model) beginDiffStat(hash string) tea.Cmd {
 	m.diffReqID++
 	m.diff.MarkLoadingStat(hash, m.diffReqID)
-	return scheduleDiffStatCmd(m.diffReqID, hash)
+	m.commitDetail.MarkLoading(hash, m.diffReqID)
+	return tea.Batch(
+		scheduleDiffStatCmd(m.diffReqID, hash),
+		loadCommitDetailCmd("", hash, m.diffReqID),
+	)
 }
 
 // reloadCmd resets both panes to their loading state and dispatches fresh
@@ -436,7 +451,7 @@ func (m Model) tabPlaceholder() string {
 	var body string
 	switch m.tabs.Active() {
 	case tabCommit:
-		body = "(commit detail — placeholder)"
+		body = m.commitDetail.View()
 	case tabChanges:
 		body = m.changes.View()
 	}

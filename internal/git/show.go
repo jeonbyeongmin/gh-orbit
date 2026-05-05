@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // FileStat is one file's contribution to a commit. Insertions/Deletions are
@@ -46,6 +47,67 @@ func Patch(ctx context.Context, dir, hash string) (string, error) {
 // entry.
 func PatchForFile(ctx context.Context, dir, hash, path string) (string, error) {
 	return runShow(ctx, dir, "--format=", "-p", hash, "--", path)
+}
+
+// Detail bundles the metadata the Commit tab renders for the focused commit:
+// full hash, parent hashes, author/committer identity + ISO 8601 dates, the
+// raw `%G?` sign-status code, and the entire commit message body.
+//
+// SignStatus follows git's --format=%G? table:
+//   G = good (valid) signature
+//   B = bad signature
+//   U = good signature with unknown validity
+//   X = good signature that has expired
+//   Y = good signature made by an expired key
+//   R = good signature made by a revoked key
+//   E = signature cannot be checked (missing key, etc.)
+//   N = no signature
+type Detail struct {
+	Hash           string
+	Parents        []string
+	AuthorName     string
+	AuthorEmail    string
+	AuthorDate     time.Time
+	CommitterName  string
+	CommitterEmail string
+	CommitterDate  time.Time
+	SignStatus     string
+	Body           string
+}
+
+// CommitDetail loads the metadata bundle for a single commit via one
+// `git show --no-patch` call. NUL-separated fields keep newlines in the body
+// from interfering with the parser, and time.RFC3339 covers `%aI` / `%cI`.
+func CommitDetail(ctx context.Context, dir, hash string) (Detail, error) {
+	const format = "--format=%H%x00%P%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%G?%x00%B"
+	raw, err := runShow(ctx, dir, "--no-patch", format, hash)
+	if err != nil {
+		return Detail{}, err
+	}
+	raw = strings.TrimRight(raw, "\n")
+	parts := strings.SplitN(raw, "\x00", 10)
+	if len(parts) < 10 {
+		return Detail{}, fmt.Errorf("commit detail: expected 10 fields, got %d", len(parts))
+	}
+	d := Detail{
+		Hash:           parts[0],
+		AuthorName:     parts[2],
+		AuthorEmail:    parts[3],
+		CommitterName:  parts[5],
+		CommitterEmail: parts[6],
+		SignStatus:     parts[8],
+		Body:           parts[9],
+	}
+	if parts[1] != "" {
+		d.Parents = strings.Split(parts[1], " ")
+	}
+	if t, perr := time.Parse(time.RFC3339, parts[4]); perr == nil {
+		d.AuthorDate = t
+	}
+	if t, perr := time.Parse(time.RFC3339, parts[7]); perr == nil {
+		d.CommitterDate = t
+	}
+	return d, nil
 }
 
 func parseNumstat(s string) ([]FileStat, error) {

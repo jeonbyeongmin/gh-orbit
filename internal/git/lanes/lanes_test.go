@@ -1,6 +1,7 @@
 package lanes
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
@@ -32,7 +33,7 @@ func TestAllocateLinearOnLaneZero(t *testing.T) {
 	for i := 1; i < len(pairs); i++ {
 		want := []CellKind{CellPipe}
 		got := kindsOf(pairs[i].Connector.Cells)
-		if !equalKinds(got, want) {
+		if !slices.Equal(got, want) {
 			t.Errorf("pairs[%d].Connector kinds = %v, want %v", i, got, want)
 		}
 	}
@@ -182,18 +183,6 @@ func kindsOf(cells []Cell) []CellKind {
 		out[i] = c.Kind
 	}
 	return out
-}
-
-func equalKinds(a, b []CellKind) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func allEmpty(ks []CellKind) bool {

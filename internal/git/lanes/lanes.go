@@ -47,9 +47,12 @@ const (
 // Cell is one column of one row.
 type Cell struct {
 	Kind CellKind
-	// Lane is the column index; the renderer uses it as the color rotation
-	// key so every cell on the same vertical track shares a color, even
-	// when a freed column is later reused by a different branch.
+	// Lane is the color rotation key. On commit rows it equals the column
+	// index — same vertical track keeps the same color, even when a freed
+	// column is later reused by a different branch. On connector rows the
+	// horizontal pass-through cells between a fork's source and a merge's
+	// arm carry the merging/forking lane's key (not the column they sit
+	// in), so the routing line stays one continuous color.
 	Lane int
 }
 
@@ -193,12 +196,8 @@ func (a *Allocator) buildConnector(commitCol int, mergeArms []int) Row {
 	// Pass 1: every lane already alive in the previous state passes
 	// through. Lanes opened by the previous Push (pendingForks.to) are
 	// excluded — they don't exist above this connector row.
-	pendingTo := map[int]bool{}
-	for _, f := range a.pendingForks {
-		pendingTo[f.to] = true
-	}
 	for i, h := range a.slots {
-		if h == "" || pendingTo[i] {
+		if h == "" || isPendingForkTarget(a.pendingForks, i) {
 			continue
 		}
 		flags[i].up = true
@@ -283,6 +282,18 @@ func (a *Allocator) buildConnector(commitCol int, mergeArms []int) Row {
 		cells[i] = Cell{Kind: k, Lane: lane}
 	}
 	return Row{Cells: cells, CommitLane: -1}
+}
+
+// isPendingForkTarget reports whether column i is the destination of a
+// fork opened by the previous Push. pendingForks is typically 0–2 entries
+// (octopus is rare), so a linear scan beats a map allocation per call.
+func isPendingForkTarget(forks []forkInfo, i int) bool {
+	for _, f := range forks {
+		if f.to == i {
+			return true
+		}
+	}
+	return false
 }
 
 func kindFromFlags(f laneFlags) CellKind {

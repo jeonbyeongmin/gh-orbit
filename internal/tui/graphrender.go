@@ -59,29 +59,29 @@ func glyphFor(k lanes.CellKind) string {
 	}
 }
 
-// isRightOpen reports whether the cell's right side opens onto a horizontal
-// — used to fill the trailing column with `─` when the next cell's left
-// side opens too.
-func isRightOpen(k lanes.CellKind) bool {
-	switch k {
-	case lanes.CellHoriz, lanes.CellCornerTL, lanes.CellCornerBL,
-		lanes.CellTeeRight, lanes.CellTeeDown, lanes.CellTeeUp,
-		lanes.CellCross:
-		return true
-	}
-	return false
+// cellSides records the four open sides of every routing CellKind in one
+// place — single source of truth so adding a kind needs only one edit.
+// Empty zero-value (all false) handles CellEmpty / CellCommit / unknown
+// kinds without explicit entries.
+var cellSides = map[lanes.CellKind]struct{ up, down, left, right bool }{
+	lanes.CellPipe:     {up: true, down: true},
+	lanes.CellHoriz:    {left: true, right: true},
+	lanes.CellCornerTL: {down: true, right: true},
+	lanes.CellCornerTR: {down: true, left: true},
+	lanes.CellCornerBL: {up: true, right: true},
+	lanes.CellCornerBR: {up: true, left: true},
+	lanes.CellTeeRight: {up: true, down: true, right: true},
+	lanes.CellTeeLeft:  {up: true, down: true, left: true},
+	lanes.CellTeeDown:  {down: true, left: true, right: true},
+	lanes.CellTeeUp:    {up: true, left: true, right: true},
+	lanes.CellCross:    {up: true, down: true, left: true, right: true},
 }
 
-// isLeftOpen reports whether the cell's left side opens onto a horizontal.
-func isLeftOpen(k lanes.CellKind) bool {
-	switch k {
-	case lanes.CellHoriz, lanes.CellCornerTR, lanes.CellCornerBR,
-		lanes.CellTeeLeft, lanes.CellTeeDown, lanes.CellTeeUp,
-		lanes.CellCross:
-		return true
-	}
-	return false
-}
+// isRightOpen / isLeftOpen drive the horizontal trail decision in
+// renderGraphRow: the trailing column gets `─` only when this cell's
+// right opens onto the next cell's left.
+func isRightOpen(k lanes.CellKind) bool { return cellSides[k].right }
+func isLeftOpen(k lanes.CellKind) bool  { return cellSides[k].left }
 
 // renderGraphRow returns the colored prefix for one row plus its visual
 // column width. Width is len(Cells) * cellWidth — having it up front lets

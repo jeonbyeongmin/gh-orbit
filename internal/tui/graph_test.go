@@ -620,3 +620,81 @@ type sentinelErr struct{}
 func (sentinelErr) Error() string { return "sentinel" }
 
 var errSentinel = sentinelErr{}
+
+func TestGraphModelTailFollowAppendsCursor(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	now := time.Now()
+
+	// First batch lands one commit; cursor settles at index 0 (= the only,
+	// = the tail row).
+	g, _ = g.Update(commitsAppendedMsg{
+		reqID: 1,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "a1", Subject: "first", AuthorTime: now}},
+		},
+	})
+	if got := g.list.Index(); got != 0 {
+		t.Fatalf("after first batch cursor index = %d, want 0", got)
+	}
+
+	// Cursor was on the tail when the second batch arrives. Tail-follow
+	// should slide it down to the new last row.
+	g, _ = g.Update(commitsAppendedMsg{
+		reqID: 1,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "a2", Subject: "second", AuthorTime: now}},
+			{commit: git.Commit{Hash: "a3", Subject: "third", AuthorTime: now}},
+		},
+	})
+	if got, want := g.list.Index(), 2; got != want {
+		t.Errorf("tail-follow cursor index = %d, want %d (last row of 3)", got, want)
+	}
+}
+
+func TestGraphModelTailFollowStaysWhenCursorNotOnTail(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	now := time.Now()
+
+	// First batch lands three commits. Cursor stays at index 0 (newest /
+	// head) which is *not* the tail (tail = index 2).
+	g, _ = g.Update(commitsAppendedMsg{
+		reqID: 1,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "a1", Subject: "first", AuthorTime: now}},
+			{commit: git.Commit{Hash: "a2", Subject: "second", AuthorTime: now}},
+			{commit: git.Commit{Hash: "a3", Subject: "third", AuthorTime: now}},
+		},
+	})
+	if got := g.list.Index(); got != 0 {
+		t.Fatalf("first batch cursor index = %d, want 0 (head)", got)
+	}
+
+	// Subsequent batch must not move the cursor — the user's deliberate
+	// position takes priority over tail-follow.
+	g, _ = g.Update(commitsAppendedMsg{
+		reqID: 1,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "a4", Subject: "fourth", AuthorTime: now}},
+		},
+	})
+	if got, want := g.list.Index(), 0; got != want {
+		t.Errorf("non-tail cursor moved to %d, want stay at %d", got, want)
+	}
+}
+
+func TestGraphModelStreamDoneClearsLoadingOnEmpty(t *testing.T) {
+	// Empty repo path: LogStream produces zero commits and closes cleanly.
+	// View must flip from "loading…" to "(no commits)" rather than spin
+	// forever on the placeholder.
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	g, _ = g.Update(commitsStreamDoneMsg{reqID: 1})
+	if !g.loaded {
+		t.Errorf("commitsStreamDoneMsg should mark graph loaded even with zero rows")
+	}
+	if got := g.View(); got != "(no commits)" {
+		t.Errorf("empty stream view = %q, want %q", got, "(no commits)")
+	}
+}

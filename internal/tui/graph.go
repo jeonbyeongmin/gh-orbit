@@ -37,6 +37,15 @@ const (
 	colorTime     = "245"
 	colorAuthor   = "248"
 	colorSelected = "205"
+
+	// streamBatchSize / streamBatchTimeout cap how many commits one
+	// commitsAppendedMsg carries before flushing. 200 / 50ms keeps tea.Msg
+	// dispatch ~20/sec while letting the graph fill in noticeably as
+	// commits stream in. The very first commit flushes on its own
+	// (single-row batch) so the user never stares at "loading…" while git
+	// log is still warming up on a 50k-commit repo.
+	streamBatchSize    = 200
+	streamBatchTimeout = 50 * time.Millisecond
 )
 
 // laneColCap is the visible column budget for the graph segment given the
@@ -291,12 +300,18 @@ func buildGraphCell(graphPrefix string, graphRowWidth, effectiveCol int) (string
 
 // graphModel is the middle-pane sub-model.
 type graphModel struct {
-	list           list.Model
-	delegate       commitDelegate
-	width          int
-	height         int
-	err            error
+	list     list.Model
+	delegate commitDelegate
+	width    int
+	height   int
+	err      error
+	// loaded flips to true after the first commitsAppendedMsg arrives or
+	// commitsStreamDoneMsg ends an empty stream — i.e. View() should stop
+	// rendering "loading…". streaming stays true between those events;
+	// done-msg flips streaming back off so the status line can stop showing
+	// progress hints.
 	loaded         bool
+	streaming      bool
 	graphWidth     int // graph column width currently in effect (after cap)
 	maxVisualWidth int // widest graphPrefix among loaded rows
 }
@@ -317,31 +332,161 @@ func newGraphModel() graphModel {
 type commitsLoadedMsg struct{ rows []graphRow }
 type commitsLoadFailedMsg struct{ err error }
 
-// loadCommitsCmd runs git.Log in a tea.Cmd, then feeds the commits through a
-// fresh lane allocator to produce one styled graph segment per row.
-func loadCommitsCmd(dir string, refs []string, max int) tea.Cmd {
+// commitsStreamStartedMsg is emitted exactly once per loadCommitsCmd, before
+// any commits arrive. The Model captures cancel so r/quit can stop the git
+// process without waiting for it to finish, and dispatches next to actually
+// pull the first batch.
+type commitsStreamStartedMsg struct {
+	reqID  uint64
+	cancel context.CancelFunc
+	next   tea.Cmd
+}
+
+// commitsAppendedMsg carries one batch of pre-rendered rows. next is the
+// tea.Cmd that produces the *next* batch (or commitsStreamDoneMsg when the
+// stream ends); the Model chains it back into the runtime so the producer
+// keeps draining until done.
+type commitsAppendedMsg struct {
+	reqID uint64
+	rows  []graphRow
+	next  tea.Cmd
+}
+
+// commitsStreamDoneMsg ends a stream. err is nil on a clean finish; non-nil
+// when git log itself failed (early-error during Start) or surfaced a
+// trailing error event from LogStream. The Model uses it to clear the
+// streaming flag and surface failures via the status line.
+type commitsStreamDoneMsg struct {
+	reqID uint64
+	err   error
+}
+
+// streamState carries the state of one in-flight LogStream subscription
+// across consecutive batch tea.Cmd invocations. The lane allocator is built
+// once per reload so firstPush=true applies to exactly the first commit
+// pushed (not the first commit per batch).
+type streamState struct {
+	reqID          uint64
+	ch             <-chan git.CommitOrErr
+	cancel         context.CancelFunc
+	alloc          *lanes.Allocator
+	firstBatchSent bool
+	closed         bool
+	err            error
+}
+
+func (s *streamState) toRow(c git.Commit) graphRow {
+	pair := s.alloc.Push(c)
+	connectorText, connectorW := renderGraphRow(pair.Connector)
+	commitText, commitW := renderGraphRow(pair.Commit)
+	return graphRow{
+		commit:          c,
+		connectorPrefix: connectorText,
+		connectorWidth:  connectorW,
+		commitPrefix:    commitText,
+		commitWidth:     commitW,
+	}
+}
+
+// collectBatch returns a tea.Cmd that pulls the next batch from the stream.
+// First call: blocks until the very first commit (or close/err) arrives and
+// emits a single-row commitsAppendedMsg so the user sees the graph populate
+// the moment git log produces its first line. Subsequent calls: collect up
+// to streamBatchSize commits or until streamBatchTimeout elapses, whichever
+// comes first.
+func (s *streamState) collectBatch() tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		commits, err := git.Log(ctx, git.LogOptions{Dir: dir, Refs: refs, MaxCount: max})
-		if err != nil {
-			return commitsLoadFailedMsg{err: err}
+		if s.closed {
+			return commitsStreamDoneMsg{reqID: s.reqID, err: s.err}
 		}
-		alloc := lanes.New()
-		rows := make([]graphRow, len(commits))
-		for i, c := range commits {
-			pair := alloc.Push(c)
-			connectorText, connectorW := renderGraphRow(pair.Connector)
-			commitText, commitW := renderGraphRow(pair.Commit)
-			rows[i] = graphRow{
-				commit:          c,
-				connectorPrefix: connectorText,
-				connectorWidth:  connectorW,
-				commitPrefix:    commitText,
-				commitWidth:     commitW,
+
+		if !s.firstBatchSent {
+			for {
+				msg, ok := <-s.ch
+				if !ok {
+					s.closed = true
+					return commitsStreamDoneMsg{reqID: s.reqID, err: s.err}
+				}
+				if msg.Err != nil {
+					// Trailing err arrived before any commit. Record it and
+					// keep draining — the close is right behind.
+					s.err = msg.Err
+					continue
+				}
+				s.firstBatchSent = true
+				return commitsAppendedMsg{
+					reqID: s.reqID,
+					rows:  []graphRow{s.toRow(msg.Commit)},
+					next:  s.collectBatch(),
+				}
 			}
 		}
-		return commitsLoadedMsg{rows: rows}
+
+		var rows []graphRow
+		timer := time.NewTimer(streamBatchTimeout)
+		defer timer.Stop()
+	loop:
+		for len(rows) < streamBatchSize {
+			select {
+			case msg, ok := <-s.ch:
+				if !ok {
+					s.closed = true
+					break loop
+				}
+				if msg.Err != nil {
+					s.err = msg.Err
+					continue
+				}
+				rows = append(rows, s.toRow(msg.Commit))
+			case <-timer.C:
+				if len(rows) > 0 {
+					break loop
+				}
+				timer.Reset(streamBatchTimeout)
+			}
+		}
+
+		if s.closed && len(rows) == 0 {
+			return commitsStreamDoneMsg{reqID: s.reqID, err: s.err}
+		}
+		return commitsAppendedMsg{
+			reqID: s.reqID,
+			rows:  rows,
+			next:  s.collectBatch(),
+		}
+	}
+}
+
+// loadCommitsCmd starts a streaming git log and returns a tea.Cmd that emits
+// commitsStreamStartedMsg first (carrying the cancel func and the cmd that
+// pulls the first batch). The Model is responsible for stashing cancel
+// (so r/quit can interrupt the git process) and for chaining the embedded
+// next cmd until the producer signals done.
+//
+// reqID is used by the Model to drop stale batches: when a fresh reload
+// supersedes this stream, msg.reqID will not match m.streamReqID and the
+// Model discards the batch instead of merging it into a graph that's
+// already moved on.
+func loadCommitsCmd(dir string, refs []string, max int, reqID uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(context.Background())
+		ch, err := git.LogStream(ctx, git.LogOptions{Dir: dir, Refs: refs, MaxCount: max})
+		if err != nil {
+			cancel()
+			return commitsStreamDoneMsg{reqID: reqID, err: err}
+		}
+
+		state := &streamState{
+			reqID:  reqID,
+			ch:     ch,
+			cancel: cancel,
+			alloc:  lanes.New(),
+		}
+		return commitsStreamStartedMsg{
+			reqID:  reqID,
+			cancel: cancel,
+			next:   state.collectBatch(),
+		}
 	}
 }
 
@@ -379,6 +524,83 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 	case commitsLoadFailedMsg:
 		g.loaded = true
 		g.err = m.err
+		return g, nil
+	case commitsAppendedMsg:
+		// Empty batches can arrive transiently (timer fired right as the
+		// channel closed) — in that case there's nothing to merge but we
+		// still need to chain next so the producer keeps draining.
+		if len(m.rows) == 0 {
+			return g, m.next
+		}
+
+		prev := g.list.Items()
+		// Tail-follow: when the cursor is on the very last visible row
+		// before this batch lands, slide it down to the new last row so the
+		// graph "grows" under the user's gaze. Any cursor position other
+		// than the tail stays put — the user's deliberate placement wins.
+		atTail := len(prev) > 0 && g.list.Index() == len(prev)-1
+
+		next := make([]list.Item, 0, len(prev)+len(m.rows))
+		next = append(next, prev...)
+		for _, r := range m.rows {
+			next = append(next, commitItem{
+				c:                r.commit,
+				connectorPrefix:  r.connectorPrefix,
+				connectorWidth:   r.connectorWidth,
+				commitPrefix:     r.commitPrefix,
+				commitGraphWidth: r.commitWidth,
+			})
+			if r.commitWidth > g.maxVisualWidth {
+				g.maxVisualWidth = r.commitWidth
+			}
+			if r.connectorWidth > g.maxVisualWidth {
+				g.maxVisualWidth = r.connectorWidth
+			}
+		}
+		g.applyGraphCap()
+		setCmd := g.list.SetItems(next)
+
+		firstBatch := !g.loaded
+		g.loaded = true
+		g.err = nil
+		g.streaming = m.next != nil
+
+		var cmds []tea.Cmd
+		if setCmd != nil {
+			cmds = append(cmds, setCmd)
+		}
+		if atTail {
+			g.list.Select(len(next) - 1)
+		}
+		// Emit commitSelectedMsg only on the very first batch — subsequent
+		// batches don't move the selection (or, when tail-follow does move
+		// it, the selection is being chased automatically and we don't want
+		// to spawn diff fetches for every appended row).
+		if firstBatch {
+			if c, ok := g.Selected(); ok {
+				cmds = append(cmds, emitCommitSelected(c.Hash))
+			}
+		}
+		if m.next != nil {
+			cmds = append(cmds, m.next)
+		}
+		if len(cmds) == 0 {
+			return g, nil
+		}
+		if len(cmds) == 1 {
+			return g, cmds[0]
+		}
+		return g, tea.Batch(cmds...)
+	case commitsStreamDoneMsg:
+		g.streaming = false
+		// loaded must flip true even when the stream produced no commits
+		// (empty repo, ref query miss, early-error before first batch) so
+		// View renders "(no commits)" / "(load error: …)" instead of
+		// the indefinite "loading…" placeholder.
+		g.loaded = true
+		if m.err != nil && len(g.list.Items()) == 0 {
+			g.err = m.err
+		}
 		return g, nil
 	case tea.KeyMsg:
 		prevHash := ""
@@ -449,6 +671,7 @@ func (g *graphModel) applyGraphCap() {
 // callers should batch it with the new load cmd.
 func (g *graphModel) ResetForReload() tea.Cmd {
 	g.loaded = false
+	g.streaming = false
 	g.err = nil
 	g.maxVisualWidth = 0
 	g.graphWidth = 0

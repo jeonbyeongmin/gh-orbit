@@ -617,6 +617,81 @@ func TestModelStaleStatLoadedIsIgnored(t *testing.T) {
 	}
 }
 
+func TestModelRKeyCancelsPreviousStream(t *testing.T) {
+	m := New()
+	cancelled := false
+	m.streamCancel = func() { cancelled = true }
+	prevReqID := m.streamReqID
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = updated.(Model)
+
+	if !cancelled {
+		t.Error("r should cancel any in-flight stream before issuing a new load")
+	}
+	if m.streamCancel != nil {
+		t.Errorf("streamCancel should be cleared after cancel, got %v", m.streamCancel)
+	}
+	if m.streamReqID == prevReqID {
+		t.Errorf("streamReqID should advance on r, stayed at %d", m.streamReqID)
+	}
+}
+
+func TestModelStaleStreamBatchDropped(t *testing.T) {
+	m := New()
+	m.streamReqID = 5
+
+	updated, _ := m.Update(commitsAppendedMsg{
+		reqID: 4,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "stale1", Subject: "stale", AuthorTime: time.Now()}},
+		},
+	})
+	m = updated.(Model)
+
+	if items := m.graph.list.Items(); len(items) != 0 {
+		t.Errorf("stale (reqID=4) batch should not merge; got %d items", len(items))
+	}
+}
+
+func TestModelStaleStreamStartedCancelsImmediately(t *testing.T) {
+	m := New()
+	m.streamReqID = 5
+	cancelled := false
+
+	updated, _ := m.Update(commitsStreamStartedMsg{
+		reqID:  4,
+		cancel: func() { cancelled = true },
+		next:   nil,
+	})
+	m = updated.(Model)
+
+	if !cancelled {
+		t.Error("stale commitsStreamStartedMsg should be cancelled on arrival to release its git process")
+	}
+	if m.streamCancel != nil {
+		t.Errorf("streamCancel should not be set from a stale started msg, got %v", m.streamCancel)
+	}
+}
+
+func TestModelQuitCancelsStream(t *testing.T) {
+	m := New()
+	cancelled := false
+	m.streamCancel = func() { cancelled = true }
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+
+	if !cancelled {
+		t.Error("q should cancel in-flight stream before quitting so the git process is reaped")
+	}
+	if cmd == nil {
+		t.Fatal("q should return a non-nil cmd (tea.Quit)")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("q cmd should produce tea.QuitMsg, got %T", cmd())
+	}
+}
+
 func TestModelFetchFailedSurfacesError(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

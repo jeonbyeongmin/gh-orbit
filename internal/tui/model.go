@@ -3,6 +3,8 @@
 package tui
 
 import (
+	"context"
+
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -65,6 +67,19 @@ type Model struct {
 	// in-flight git show responses compare their reqID against this and drop
 	// themselves if they no longer match.
 	diffReqID uint64
+	// streamReqID is the counterpart for the graph's commit stream. Each
+	// reloadCmd bumps it; commitsStreamStartedMsg / commitsAppendedMsg /
+	// commitsStreamDoneMsg events carry the reqID they were issued with and
+	// are dropped when they no longer match. Kept separate from diffReqID
+	// so a hover-triggered diff debounce never cancels an in-flight log
+	// stream and vice versa.
+	streamReqID uint64
+	// streamCancel cancels the most recently dispatched LogStream's ctx.
+	// Set when commitsStreamStartedMsg lands; cleared on stream-done or by
+	// reload/quit. Calling it SIGKILLs the git log process, which then
+	// drains the channel and lands a final commitsStreamDoneMsg that the
+	// reqID guard drops.
+	streamCancel context.CancelFunc
 	// currentRefs is the last commit-query argument dispatched to
 	// loadCommitsCmd. New() seeds it with [refsAllSentinel] so the unified
 	// graph is the default base. Reload (r) replays git.Log with this exact
@@ -92,12 +107,17 @@ func New() Model {
 		tabs:         newTabsModel(),
 		splitRatio:   splitRatioDefault,
 		currentRefs:  []string{refsAllSentinel},
+		// Stream reqIDs start at 1 so the very first loadCommitsCmd carries
+		// a non-zero id; subsequent reloads bump it. The Init Cmd inherits
+		// this seed value because Bubble Tea's Init runs before any Update
+		// could mutate the Model, so a counter increment can't happen here.
+		streamReqID: 1,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
+		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount, m.streamReqID),
 		loadRefsCmd(""),
 	)
 }
@@ -121,6 +141,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case commitsLoadedMsg, commitsLoadFailedMsg:
 		var cmd tea.Cmd
 		m.graph, cmd = m.graph.Update(msg)
+		return m, cmd
+
+	case commitsStreamStartedMsg:
+		if msg.reqID != m.streamReqID {
+			// A reload superseded this stream before it could even start.
+			// Cancel its ctx right away so the stranded LogStream goroutine
+			// (and the git process behind it) winds down instead of leaking.
+			msg.cancel()
+			return m, nil
+		}
+		m.streamCancel = msg.cancel
+		return m, msg.next
+
+	case commitsAppendedMsg:
+		if msg.reqID != m.streamReqID {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.graph, cmd = m.graph.Update(msg)
+		return m, cmd
+
+	case commitsStreamDoneMsg:
+		if msg.reqID != m.streamReqID {
+			return m, nil
+		}
+		m.streamCancel = nil
+		var cmd tea.Cmd
+		m.graph, cmd = m.graph.Update(msg)
+		// If the stream failed mid-flight but already painted commits, the
+		// error never reaches the graph view ("(load error: …)" only renders
+		// when items==0). Surface it on the status line so the user sees
+		// that the loaded window is partial.
+		if msg.err != nil && len(m.graph.list.Items()) > 0 {
+			m.status = "log: " + firstLine(msg.err.Error())
+			m.statusStyle = statusErrS
+		}
 		return m, cmd
 
 	case refsLoadedMsg, refsLoadFailedMsg:
@@ -214,6 +270,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.diff.ClosePatch()
 				return m, nil
 			case "ctrl+c":
+				if m.streamCancel != nil {
+					m.streamCancel()
+					m.streamCancel = nil
+				}
 				return m, tea.Quit
 			case "j", "k", "down", "up", "pgdown", "pgup":
 				return m, m.diff.ScrollPatch(msg)
@@ -222,6 +282,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "ctrl+c", "q":
+			if m.streamCancel != nil {
+				m.streamCancel()
+				m.streamCancel = nil
+			}
 			return m, tea.Quit
 		case "tab":
 			m.focused = (m.focused + 1) % paneCount
@@ -363,15 +427,22 @@ func (m *Model) beginDiffStat(hash string) tea.Cmd {
 }
 
 // reloadCmd resets both panes to their loading state and dispatches fresh
-// log + refs queries. If the ref stored in m.currentRefs was deleted by
-// another tool, git.Log surfaces that through the existing commitsLoadFailedMsg
-// path.
+// log + refs queries. Cancels any in-flight LogStream first so the previous
+// stream's git process exits and its trailing batches drop on reqID mismatch
+// rather than racing against the new query. If the ref stored in
+// m.currentRefs was deleted by another tool, the failure surfaces through
+// commitsStreamDoneMsg's err field.
 func (m *Model) reloadCmd() tea.Cmd {
+	if m.streamCancel != nil {
+		m.streamCancel()
+		m.streamCancel = nil
+	}
+	m.streamReqID++
 	resetCmd := m.graph.ResetForReload()
 	m.refs.ResetForReload()
 	return tea.Batch(
 		resetCmd,
-		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
+		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount, m.streamReqID),
 		loadRefsCmd(""),
 	)
 }

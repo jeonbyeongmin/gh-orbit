@@ -67,18 +67,12 @@ type Model struct {
 	// in-flight git show responses compare their reqID against this and drop
 	// themselves if they no longer match.
 	diffReqID uint64
-	// streamReqID is the counterpart for the graph's commit stream. Each
-	// reloadCmd bumps it; commitsStreamStartedMsg / commitsAppendedMsg /
-	// commitsStreamDoneMsg events carry the reqID they were issued with and
-	// are dropped when they no longer match. Kept separate from diffReqID
-	// so a hover-triggered diff debounce never cancels an in-flight log
-	// stream and vice versa.
+	// streamReqID is the stale-drop counter for the graph's commit stream.
+	// Kept separate from diffReqID so a hover-triggered diff debounce
+	// doesn't cancel an in-flight log stream.
 	streamReqID uint64
-	// streamCancel cancels the most recently dispatched LogStream's ctx.
-	// Set when commitsStreamStartedMsg lands; cleared on stream-done or by
-	// reload/quit. Calling it SIGKILLs the git log process, which then
-	// drains the channel and lands a final commitsStreamDoneMsg that the
-	// reqID guard drops.
+	// streamCancel SIGKILLs the most recently dispatched LogStream's git
+	// process; the trailing commitsStreamDoneMsg drops on reqID mismatch.
 	streamCancel context.CancelFunc
 	// currentRefs is the last commit-query argument dispatched to
 	// loadCommitsCmd. New() seeds it with [refsAllSentinel] so the unified
@@ -107,10 +101,7 @@ func New() Model {
 		tabs:         newTabsModel(),
 		splitRatio:   splitRatioDefault,
 		currentRefs:  []string{refsAllSentinel},
-		// Stream reqIDs start at 1 so the very first loadCommitsCmd carries
-		// a non-zero id; subsequent reloads bump it. The Init Cmd inherits
-		// this seed value because Bubble Tea's Init runs before any Update
-		// could mutate the Model, so a counter increment can't happen here.
+		// Non-zero seed so the first stream carries a real reqID; reloads bump it.
 		streamReqID: 1,
 	}
 }

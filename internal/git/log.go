@@ -111,18 +111,12 @@ func LogStream(ctx context.Context, opts LogOptions) (<-chan CommitOrErr, error)
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
-		sendCommit := func(c Commit) bool {
+		send := func(ev CommitOrErr) bool {
 			select {
-			case ch <- CommitOrErr{Commit: c}:
+			case ch <- ev:
 				return true
 			case <-ctx.Done():
 				return false
-			}
-		}
-		sendErr := func(err error) {
-			select {
-			case ch <- CommitOrErr{Err: err}:
-			case <-ctx.Done():
 			}
 		}
 
@@ -133,7 +127,7 @@ func LogStream(ctx context.Context, opts LogOptions) (<-chan CommitOrErr, error)
 				parseErr = err
 				break
 			}
-			if !sendCommit(c) {
+			if !send(CommitOrErr{Commit: c}) {
 				break
 			}
 		}
@@ -146,12 +140,12 @@ func LogStream(ctx context.Context, opts LogOptions) (<-chan CommitOrErr, error)
 		case waitErr != nil:
 			msg := strings.TrimSpace(stderr.String())
 			if msg == "" {
-				sendErr(fmt.Errorf("git log: %w", waitErr))
+				send(CommitOrErr{Err: fmt.Errorf("git log: %w", waitErr)})
 			} else {
-				sendErr(fmt.Errorf("git log: %w: %s", waitErr, msg))
+				send(CommitOrErr{Err: fmt.Errorf("git log: %w: %s", waitErr, msg)})
 			}
 		case parseErr != nil:
-			sendErr(fmt.Errorf("git log: parse: %w", parseErr))
+			send(CommitOrErr{Err: fmt.Errorf("git log: parse: %w", parseErr)})
 		}
 	}()
 

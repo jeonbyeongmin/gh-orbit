@@ -101,7 +101,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refs.SetSize(s.refsW, s.refsH)
 		m.graph.SetSize(s.graphW, s.graphH)
 		m.diff.SetSize(s.tabW, s.tabH)
-		m.changes.SetSize(s.tabW, s.tabH)
+		// tabPlaceholder reserves the first 2 lines for header + spacer, so
+		// the inner sub-models render at tabH-2.
+		tabBodyH := s.tabH - 2
+		if tabBodyH < 1 {
+			tabBodyH = 1
+		}
+		m.changes.SetSize(s.tabW, tabBodyH)
 		if m.mode == viewModeDiffWindow {
 			m.diff.SetPatchViewportSize(m.width, m.height-1)
 		}
@@ -148,12 +154,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case diffStatLoadedMsg:
 		m.diff.ApplyStatLoaded(msg.reqID, msg.hash, msg.files)
-		// changes pane reflects the same stat data as the file-list source.
-		// Step 8 strips the diffModel side once the d-overlay is the only
-		// remaining consumer of patch text.
+		// changes pane reflects the same stat data as the file-list source
+		// and immediately requests the patch for the cursor's file. Step 8
+		// strips the diffModel side once the d-overlay is the only remaining
+		// consumer of patch text.
+		var cmd tea.Cmd
 		if msg.reqID == m.diffReqID {
-			m.changes.SetFiles(msg.files)
+			cmd = m.changes.SetFiles(msg.hash, msg.files)
 		}
+		return m, cmd
+	case filePatchLoadedMsg:
+		m.changes.ApplyFilePatchLoaded(msg.reqID, msg.hash, msg.path, msg.text)
+		return m, nil
+	case filePatchFailedMsg:
+		m.changes.ApplyFilePatchFailed(msg.reqID, msg.hash, msg.path, msg.err)
 		return m, nil
 	case diffStatFailedMsg:
 		m.diff.ApplyStatFailed(msg.reqID, msg.hash, msg.err)
@@ -251,6 +265,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			switch m.tabs.Active() {
 			case tabChanges:
+				// Patch-viewport scroll is the follower path: ctrl+d/u and
+				// PgUp/PgDn never move the file-list cursor, they only scroll
+				// the right column. j/k stay on the file-list and trigger a
+				// fresh patch load via changesModel.Update.
+				switch msg.String() {
+				case "ctrl+d", "ctrl+u", "pgdown", "pgup":
+					m.changes.ScrollPatch(msg)
+					return m, nil
+				}
 				var cmd tea.Cmd
 				m.changes, cmd = m.changes.Update(msg)
 				return m, cmd

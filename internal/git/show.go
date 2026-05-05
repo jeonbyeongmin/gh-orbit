@@ -40,6 +40,14 @@ func Patch(ctx context.Context, dir, hash string) (string, error) {
 	return runShow(ctx, dir, "--format=", "-p", hash)
 }
 
+// PatchForFile returns the unified diff for the given commit hash restricted
+// to a single file path. The Changes-tab follower viewport calls this each
+// time the file-list cursor moves so the right side reflects the focused
+// entry.
+func PatchForFile(ctx context.Context, dir, hash, path string) (string, error) {
+	return runShow(ctx, dir, "--format=", "-p", hash, "--", path)
+}
+
 func parseNumstat(s string) ([]FileStat, error) {
 	var out []FileStat
 	for _, line := range strings.Split(strings.TrimRight(s, "\n"), "\n") {

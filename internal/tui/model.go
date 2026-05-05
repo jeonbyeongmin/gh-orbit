@@ -1,5 +1,5 @@
 // Package tui hosts the Bubble Tea models, panes, and key bindings for the
-// Fork-style 3-pane layout (refs · commit graph · diff).
+// Fork-style layout (refs sidebar · commit graph on top · tab area on bottom).
 package tui
 
 import (
@@ -13,8 +13,17 @@ type pane int
 const (
 	paneRefs pane = iota
 	paneGraph
-	paneDiff
+	paneTab
 	paneCount
+)
+
+// splitRatioDefault, splitRatioMin, splitRatioMax bound the graph/tab vertical
+// split. ctrl+up / ctrl+down step by 5 inside [min, max].
+const (
+	splitRatioDefault = 60
+	splitRatioMin     = 20
+	splitRatioMax     = 80
+	splitRatioStep    = 5
 )
 
 // refsAllSentinel is the git revision spec that means "every ref". Used as the
@@ -39,6 +48,9 @@ type Model struct {
 	refs          refModel
 	graph         graphModel
 	diff          diffModel
+	// splitRatio is the percentage of the right-column height allocated to the
+	// graph; the tab area takes the remainder. Bounded by splitRatioMin/Max.
+	splitRatio int
 	// diffReqID counts every diff dispatch (cursor change, `d` press). Stale
 	// in-flight git show responses compare their reqID against this and drop
 	// themselves if they no longer match.
@@ -65,6 +77,7 @@ func New() Model {
 		refs:        newRefsModel(),
 		graph:       newGraphModel(),
 		diff:        newDiffModel(),
+		splitRatio:  splitRatioDefault,
 		currentRefs: []string{refsAllSentinel},
 	}
 }
@@ -81,9 +94,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		s := m.paneSizes()
-		m.refs.SetSize(s.refsW, s.contentH)
-		m.graph.SetSize(s.graphW, s.contentH)
-		m.diff.SetSize(s.diffW, s.contentH)
+		m.refs.SetSize(s.refsW, s.refsH)
+		m.graph.SetSize(s.graphW, s.graphH)
+		m.diff.SetSize(s.tabW, s.tabH)
 		if m.mode == viewModeDiffWindow {
 			m.diff.SetPatchViewportSize(m.width, m.height-1)
 		}
@@ -245,9 +258,14 @@ func (m *Model) reloadCmd() tea.Cmd {
 	)
 }
 
+// paneSizes holds the inner content dimensions for each rendered box. The
+// outer (bordered) widths/heights are content + 2 along each axis. The new
+// layout stacks graph above the tab area in the right column; refs is a
+// full-height left sidebar.
 type paneSizes struct {
-	refsW, graphW, diffW int
-	contentH             int
+	refsW, refsH   int
+	graphW, graphH int
+	tabW, tabH     int
 }
 
 func (m Model) paneSizes() paneSizes {
@@ -255,18 +273,57 @@ func (m Model) paneSizes() paneSizes {
 	if m.width == 0 || m.height == 0 {
 		return s
 	}
-	// 3 panes × 2 border cols = 6 frame cols total.
-	avail := m.width - 6
-	if avail < 3 {
-		avail = 3
+	// Reserve 1 row for the help line.
+	mainH := m.height - 1
+	if mainH < 1 {
+		mainH = 1
 	}
-	s.refsW = avail * 20 / 100
-	s.graphW = avail * 50 / 100
-	s.diffW = avail - s.refsW - s.graphW
-	// Reserve 1 row for the help line; subtract 2 for top/bottom border.
-	s.contentH = m.height - 1 - 2
-	if s.contentH < 1 {
-		s.contentH = 1
+	// refs sidebar gets ~20% of total width, right column the rest. Each box
+	// claims 2 cols of border around its content.
+	refsOuterW := m.width * 20 / 100
+	if refsOuterW < 12 {
+		refsOuterW = 12
+	}
+	if refsOuterW > m.width-12 {
+		refsOuterW = m.width - 12
+	}
+	rightOuterW := m.width - refsOuterW
+
+	s.refsW = refsOuterW - 2
+	s.refsH = mainH - 2
+	if s.refsW < 1 {
+		s.refsW = 1
+	}
+	if s.refsH < 1 {
+		s.refsH = 1
+	}
+
+	// Right column: vertical split between graph (top) and tab (bottom). Each
+	// has its own bordered box, so subtract 2 rows per box for borders.
+	graphOuterH := mainH * m.splitRatio / 100
+	if graphOuterH < 3 {
+		graphOuterH = 3
+	}
+	if graphOuterH > mainH-3 {
+		graphOuterH = mainH - 3
+	}
+	tabOuterH := mainH - graphOuterH
+
+	s.graphW = rightOuterW - 2
+	s.tabW = rightOuterW - 2
+	if s.graphW < 1 {
+		s.graphW = 1
+	}
+	if s.tabW < 1 {
+		s.tabW = 1
+	}
+	s.graphH = graphOuterH - 2
+	s.tabH = tabOuterH - 2
+	if s.graphH < 1 {
+		s.graphH = 1
+	}
+	if s.tabH < 1 {
+		s.tabH = 1
 	}
 	return s
 }
@@ -304,28 +361,28 @@ func (m Model) View() string {
 		return lipgloss.JoinVertical(lipgloss.Left, m.diff.PatchView(), helpRenderedDiffWindow)
 	}
 	s := m.paneSizes()
-	widths := [paneCount]int{s.refsW, s.graphW, s.diffW}
 
-	contents := [paneCount]string{
-		m.refs.View(),
-		m.graph.View(),
-		m.diff.StatView(),
+	refsBox := boxStyle(m.focused == paneRefs).Width(s.refsW).Height(s.refsH).Render(m.refs.View())
+	graphBox := boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
+	tabBox := boxStyle(m.focused == paneTab).Width(s.tabW).Height(s.tabH).Render(m.tabPlaceholder())
+
+	rightCol := lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
+	main := lipgloss.JoinHorizontal(lipgloss.Top, refsBox, rightCol)
+	return lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
+}
+
+func boxStyle(focused bool) lipgloss.Style {
+	if focused {
+		return borderFocused
 	}
+	return borderUnfocused
+}
 
-	boxes := make([]string, paneCount)
-	for p := paneRefs; p < paneCount; p++ {
-		style := borderUnfocused
-		if p == m.focused {
-			style = borderFocused
-		}
-		boxes[p] = style.
-			Width(widths[p]).
-			Height(s.contentH).
-			Render(contents[p])
-	}
-
-	row := lipgloss.JoinHorizontal(lipgloss.Top, boxes[paneRefs], boxes[paneGraph], boxes[paneDiff])
-	return lipgloss.JoinVertical(lipgloss.Left, row, m.renderHelpStatus())
+// tabPlaceholder is the temporary tab-area body wired in step 1 of the
+// bottom-diff-pane-layout plan. Subsequent steps replace it with a real
+// tabsModel hosting the Commit and Changes panes.
+func (m Model) tabPlaceholder() string {
+	return "Commit | Changes\n\n" + m.diff.StatView()
 }
 
 // renderHelpStatus lays out the bottom line as "help … status". When the

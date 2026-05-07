@@ -375,6 +375,28 @@ type commitsStreamDoneMsg struct {
 	err   error
 }
 
+// headAncestorsLoadedMsg carries the result of `git rev-list HEAD`.
+// reqID is m.streamReqID at dispatch time so a reload's fresh ancestry
+// reply doesn't overwrite the new stream's state. err non-nil means the
+// dim pass falls back to "all rows above HEAD are dim" — ancestry-aware
+// precision is lost but the boundary still reads.
+type headAncestorsLoadedMsg struct {
+	reqID     uint64
+	ancestors map[string]struct{}
+	err       error
+}
+
+// loadHeadAncestorsCmd dispatches `git rev-list HEAD` so the graph dim
+// pass can keep ancestor rows above HEAD bright. Pass the same reqID as
+// the matching loadCommitsCmd so a stale reload's response gets dropped
+// in the Model.Update reqID guard.
+func loadHeadAncestorsCmd(dir string, reqID uint64) tea.Cmd {
+	return func() tea.Msg {
+		ancestors, err := git.RevListAncestors(context.Background(), dir, "HEAD")
+		return headAncestorsLoadedMsg{reqID: reqID, ancestors: ancestors, err: err}
+	}
+}
+
 // streamState lives across a stream's lifetime. The lane allocator is created
 // once per reload so lane numbers stay continuous across batch boundaries.
 type streamState struct {

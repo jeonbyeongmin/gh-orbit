@@ -977,8 +977,11 @@ func TestGraphModelCaptureHeadRowFromDecoration(t *testing.T) {
 		{commit: git.Commit{Hash: "ccc"}},
 	}
 	g.captureHeadRow(rows, 0)
-	if g.headHash != "bbb" || g.headRowIndex != 1 {
-		t.Errorf("named HEAD: got hash=%q index=%d, want bbb / 1", g.headHash, g.headRowIndex)
+	if g.headRowIndex != 1 {
+		t.Errorf("named HEAD: got index=%d, want 1", g.headRowIndex)
+	}
+	if !g.headDimDirty {
+		t.Errorf("captureHeadRow must mark dim dirty when HEAD is found")
 	}
 
 	g2 := newGraphModel()
@@ -987,15 +990,15 @@ func TestGraphModelCaptureHeadRowFromDecoration(t *testing.T) {
 		{commit: git.Commit{Hash: "eee"}},
 	}
 	g2.captureHeadRow(rowsDet, 5) // baseIndex 5 simulates batch midstream
-	if g2.headHash != "ddd" || g2.headRowIndex != 5 {
-		t.Errorf("detached HEAD: got hash=%q index=%d, want ddd / 5", g2.headHash, g2.headRowIndex)
+	if g2.headRowIndex != 5 {
+		t.Errorf("detached HEAD: got index=%d, want 5", g2.headRowIndex)
 	}
 
 	// A second batch must not overwrite once HEAD is captured.
 	g2.captureHeadRow([]graphRow{
 		{commit: git.Commit{Hash: "fff", RefNames: []string{"HEAD -> main"}}},
 	}, 10)
-	if g2.headHash != "ddd" || g2.headRowIndex != 5 {
-		t.Errorf("second-batch HEAD must not overwrite first-batch capture; got hash=%q index=%d", g2.headHash, g2.headRowIndex)
+	if g2.headRowIndex != 5 {
+		t.Errorf("second-batch HEAD must not overwrite first-batch capture; got index=%d", g2.headRowIndex)
 	}
 }

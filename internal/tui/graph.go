@@ -95,12 +95,9 @@ type graphRow struct {
 // item (index 0) the connector is rendered as a blank line — there is
 // nothing above the most recent commit to connect to.
 //
-// headRowIndex / headAncestors carry the HEAD-as-dim-boundary state. -1
-// means HEAD is not in the loaded window and dim is suppressed entirely.
-// Otherwise rows above headRowIndex whose Hash isn't in headAncestors are
-// rendered with a Faint pass. headAncestors arrives asynchronously from
-// `git rev-list HEAD`; before it lands the delegate falls back to "all
-// rows above headRowIndex are dim" so the boundary is visible immediately.
+// headRowIndex == -1 suppresses dim entirely. Otherwise rows above
+// headRowIndex whose Hash isn't in headAncestors are dimmed; a nil
+// ancestor map is the "loading" fallback that dims everything above.
 type commitDelegate struct {
 	graphWidth    int
 	headRowIndex  int
@@ -147,23 +144,16 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	_, _ = fmt.Fprint(w, connectorLine+"\n"+commitLine)
 }
 
-// colorDim is xterm 240 — neutral grey with enough separation from the
-// regular palette (hash 214 / time 245 / author 248) that "above HEAD"
-// reads as a dimmed band even on terminals that under-render SGR 2.
+// colorDim is xterm 240 — also reused by chips.go (chipDimStyle) and
+// chipMoreStyle so the muted palette stays in one place.
 const colorDim = "240"
 
-// dimFGStyle paints text-only segments (subject, author, hash, time,
-// graph glyphs) in the muted grey when their row is above HEAD and not
-// in HEAD's ancestry. Chip backgrounds keep their box shape via
-// chipDimStyle in chips.go — dim is a per-segment recolor, not a single
-// wrapper, so each segment's own ANSI reset doesn't truncate the dim
-// effect midway through the row.
 var dimFGStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorDim))
 
-// dimGraphCell strips the lane palette ANSI off graphPrefix and re-renders
-// it in dim grey. graphPrefix is built upstream by renderGraphRow with
-// per-lane color SGRs; for above-HEAD rows we trade lane identification
-// for a uniform "this row is past the boundary" tone.
+// dimGraphCell strips the lane palette ANSI off graphPrefix before
+// re-coloring. The strip is necessary because each per-lane SGR ends
+// with its own reset, which would otherwise terminate any outer
+// foreground midway through the row and leave the dim effect spotty.
 func dimGraphCell(graphPrefix string, graphRowWidth, effectiveCol int) (string, int) {
 	plain, w := buildGraphCell(ansi.Strip(graphPrefix), graphRowWidth, effectiveCol)
 	return dimFGStyle.Render(plain), w
@@ -228,10 +218,11 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	hash := shortHash(c.Hash)
 	rel := relativeShort(c.AuthorTime)
 
-	// Resolve the per-segment styles up front. selected wins over dim so a
-	// row above HEAD that the user has navigated to keeps its highlight.
+	// selected wins over dim so a navigated row above HEAD still highlights.
+	useDim := dim && !selected
+
 	hashS, timeS, authorS := hashStyle, timeStyle, authorStyle
-	if dim && !selected {
+	if useDim {
 		hashS, timeS, authorS = dimFGStyle, dimFGStyle, dimFGStyle
 	}
 
@@ -254,7 +245,7 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	}
 
 	graphCell, graphCellW := buildGraphCell(graphPrefix, graphRowWidth, effectiveCol)
-	if dim && !selected {
+	if useDim {
 		graphCell, graphCellW = dimGraphCell(graphPrefix, graphRowWidth, effectiveCol)
 	}
 	fixedLeft := cursorWidth + graphCellW
@@ -310,7 +301,7 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	switch {
 	case selected:
 		subject = selectedStyle.Render(subject)
-	case dim:
+	case useDim:
 		subject = dimFGStyle.Render(subject)
 	}
 
@@ -387,17 +378,16 @@ type graphModel struct {
 	userHasMoved bool // true after the user has intentionally moved the cursor (j/k/g/G/etc)
 	graphWidth   int  // hard cap = laneColCap(width); rows render per-row tight up to this cap
 
-	// HEAD-as-dim-boundary state. headHash is the HEAD commit hash captured
-	// from `%D` decoration tokens during streaming (no extra git call —
-	// ParseDecoration already exposes it). headRowIndex is the list index
-	// of that row; -1 means HEAD never appeared in the loaded window, in
-	// which case the dim pass is suppressed (whole graph stays bright).
-	// headAncestors is the set of HEAD-reachable commit hashes from
-	// `git rev-list HEAD`, populated asynchronously and used by the
-	// delegate to keep ancestor rows above HEAD bright.
-	headHash      string
+	// headRowIndex is the list index of the row carrying HEAD per the
+	// streaming `%D` decoration; -1 = HEAD outside the loaded window so
+	// the dim pass is suppressed. headAncestors is `git rev-list HEAD`'s
+	// reachable set, loaded asynchronously to keep ancestor rows above
+	// HEAD bright. headDimDirty is set whenever either field changes so
+	// applyHeadDim can skip the list.SetDelegate on streaming batches
+	// that don't move the boundary.
 	headRowIndex  int
 	headAncestors map[string]struct{}
+	headDimDirty  bool
 }
 
 func newGraphModel() graphModel {
@@ -695,31 +685,31 @@ func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 }
 
 // captureHeadRow scans an appended batch for the HEAD commit and records
-// its absolute list index. Once HEAD is found the search is cheap — no
-// extra git invocation, just `ParseDecoration` on the rows already in
-// the batch. baseIndex is where this batch lands in the list (0 for the
-// first batch, prevLen for subsequent appends). detached HEAD (bare
-// `HEAD` token, no branch attached) is captured the same way as named
-// HEAD via ParseDecoration's headDetached return.
+// its absolute list index. baseIndex is where this batch lands in the
+// list (0 for the first batch, prevLen for appends). Detached HEAD lands
+// as `headDetached`; named HEAD as a `Ref.IsHead` flag from the same
+// ParseDecoration call.
 func (g *graphModel) captureHeadRow(rows []graphRow, baseIndex int) {
-	if g.headHash != "" {
+	if g.headRowIndex >= 0 {
 		return
 	}
 	for i, r := range rows {
 		refs, headDetached := git.ParseDecoration(r.commit.RefNames)
-		if headDetached {
-			g.headHash = r.commit.Hash
+		if headDetached || hasIsHead(refs) {
 			g.headRowIndex = baseIndex + i
+			g.headDimDirty = true
 			return
 		}
-		for _, ref := range refs {
-			if ref.IsHead {
-				g.headHash = r.commit.Hash
-				g.headRowIndex = baseIndex + i
-				return
-			}
+	}
+}
+
+func hasIsHead(refs []git.DecoratedRef) bool {
+	for _, r := range refs {
+		if r.IsHead {
+			return true
 		}
 	}
+	return false
 }
 
 func emitCommitSelected(hash string) tea.Cmd {
@@ -764,21 +754,25 @@ func (g *graphModel) applyGraphCap() {
 	g.list.SetDelegate(g.delegate)
 }
 
-// applyHeadDim mirrors graphModel's HEAD-as-dim-boundary state into the
-// delegate so Render can decide per-row dim without re-walking commits.
-// Always pushes the delegate back into the list so the next paint sees the
-// current values.
+// applyHeadDim copies graphModel's dim state into the delegate. The
+// caller marks state dirty by setting headDimDirty; otherwise this is a
+// cheap no-op so streaming batches that don't move the boundary don't
+// re-layout the list.
 func (g *graphModel) applyHeadDim() {
+	if !g.headDimDirty {
+		return
+	}
 	g.delegate.headRowIndex = g.headRowIndex
 	g.delegate.headAncestors = g.headAncestors
 	g.list.SetDelegate(g.delegate)
+	g.headDimDirty = false
 }
 
-// SetHeadAncestors stores the set of HEAD-reachable commit hashes so the
-// delegate can keep ancestor rows bright above the HEAD boundary. Called
-// from Model.Update on headAncestorsLoadedMsg.
+// SetHeadAncestors stores the HEAD-reachable hash set. Called from
+// Model.Update on headAncestorsLoadedMsg.
 func (g *graphModel) SetHeadAncestors(ancestors map[string]struct{}) {
 	g.headAncestors = ancestors
+	g.headDimDirty = true
 	g.applyHeadDim()
 }
 
@@ -794,9 +788,9 @@ func (g *graphModel) ResetForReload() tea.Cmd {
 	g.err = nil
 	g.graphWidth = 0
 	g.delegate.graphWidth = 0
-	g.headHash = ""
 	g.headRowIndex = -1
 	g.headAncestors = nil
+	g.headDimDirty = false
 	g.delegate.headRowIndex = -1
 	g.delegate.headAncestors = nil
 	g.list.SetDelegate(g.delegate)

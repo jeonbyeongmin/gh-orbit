@@ -17,8 +17,11 @@ const (
 	colorChipLocal  = "39"
 	colorChipRemote = "207"
 	colorChipTag    = "220"
-	colorChipMore   = "240"
 	colorChipFG     = "232"
+	// colorChipMore aliases colorDim — both the "+N" overflow chip and
+	// the dim-band chip share the same neutral grey. Keeping one source
+	// of truth so the palette can't drift.
+	colorChipMore = colorDim
 
 	// maxChipTextWidth caps a single chip's text so a really long branch
 	// name doesn't push the subject off the row. Branch names longer than
@@ -39,12 +42,7 @@ var (
 	chipTagStyle      = newChipStyle(colorChipTag, colorChipFG)
 	chipMoreStyle     = newChipStyle(colorChipMore, colorChipFG)
 	chipSelectedStyle = newChipStyle(colorSelected, colorChipFG)
-	// chipDimStyle replaces every chip background with the same neutral
-	// grey when the row is above HEAD and not in HEAD's ancestry. Padding
-	// stays so the chip's "box" silhouette is preserved — only the color
-	// information is muted, which is what the user expects for "this row
-	// is past the boundary but still carries refs."
-	chipDimStyle = newChipStyle(colorDim, colorChipFG)
+	chipDimStyle      = newChipStyle(colorDim, colorChipFG)
 )
 
 // pairedPrefix is rendered inside the paired-local chip text, just before the
@@ -57,13 +55,10 @@ const pairedPrefix = "☁ "
 // buildChips renders the chip cluster for one commit row. Returns ("", 0)
 // when there's nothing to draw.
 //
-// Layout: up to 2 body chips + optional "+M" overflow chip. HEAD is no
-// longer drawn as its own chip — the graph dim boundary at the HEAD row
-// carries that information instead. selected=true paints every chip with
-// the row's cursor color, deliberately overriding the kind palette.
-// dim=true overrides every kind palette with a neutral grey background
-// so above-HEAD rows still show chip silhouettes without bright color.
-// selected wins over dim when both apply.
+// Layout: up to 2 body chips + optional "+M" overflow chip. selected
+// paints every chip with the cursor color; dim swaps every kind to a
+// neutral grey so above-HEAD rows still show chip silhouettes. selected
+// wins when both apply.
 func buildChips(refNames []string, selected, dim bool) (string, int) {
 	refs, _ := git.ParseDecoration(refNames)
 	chips := git.MergeLocalRemotePairs(refs)
@@ -79,15 +74,22 @@ func buildChips(refNames []string, selected, dim bool) (string, int) {
 		visible = visible[:bodyCap]
 	}
 
+	// Row-wide override: selected and dim are constant for the whole row,
+	// so resolve once instead of per add() call.
+	var override *lipgloss.Style
+	switch {
+	case selected:
+		override = &chipSelectedStyle
+	case dim:
+		override = &chipDimStyle
+	}
+
 	var b strings.Builder
 	totalW := 0
 	add := func(text string, base lipgloss.Style) {
 		style := base
-		switch {
-		case selected:
-			style = chipSelectedStyle
-		case dim:
-			style = chipDimStyle
+		if override != nil {
+			style = *override
 		}
 		b.WriteString(style.Render(text))
 		// Each chip is text + Padding(0, 1) on both sides; adjacent chips

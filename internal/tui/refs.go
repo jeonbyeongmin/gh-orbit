@@ -91,12 +91,12 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 	case "j", "down":
 		if r.cursor < total-1 {
 			r.cursor++
-			r = r.nudgeOffsetOnEdge()
+			r = r.scrollCursorIntoView()
 		}
 	case "k", "up":
 		if r.cursor > 0 {
 			r.cursor--
-			r = r.nudgeOffsetOnEdge()
+			r = r.scrollCursorIntoView()
 		}
 	case "g":
 		r.cursor = 0
@@ -126,27 +126,6 @@ func (r refModel) scrollCursorIntoView() refModel {
 		r.yOffset = cursorRow
 	} else if cursorRow >= r.yOffset+r.height {
 		r.yOffset = cursorRow - r.height + 1
-	}
-	return r.clampOffset(len(rows), r.height)
-}
-
-// nudgeOffsetOnEdge shifts yOffset by ±1 only when the cursor moved exactly
-// to the row immediately above or below the visible window. Used by j/k so
-// cursor and viewport advance together at the edges but otherwise stay put.
-func (r refModel) nudgeOffsetOnEdge() refModel {
-	rows := r.flatRows()
-	cursorRow, ok := r.cursorFlatRow(rows)
-	if !ok {
-		return r
-	}
-	if r.height <= 0 {
-		return r
-	}
-	switch cursorRow {
-	case r.yOffset - 1:
-		r.yOffset--
-	case r.yOffset + r.height:
-		r.yOffset++
 	}
 	return r.clampOffset(len(rows), r.height)
 }

@@ -108,7 +108,7 @@ func New() Model {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount, m.streamReqID),
+		loadCommitsCmd("", m.currentRefs, m.streamReqID),
 		loadRefsCmd(""),
 	)
 }
@@ -420,7 +420,7 @@ func (m *Model) reloadCmd() tea.Cmd {
 	m.refs.ResetForReload()
 	return tea.Batch(
 		resetCmd,
-		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount, m.streamReqID),
+		loadCommitsCmd("", m.currentRefs, m.streamReqID),
 		loadRefsCmd(""),
 	)
 }

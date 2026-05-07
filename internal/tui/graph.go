@@ -20,7 +20,6 @@ import (
 )
 
 const (
-	defaultLogMaxCount  = 200
 	streamBatchSize     = 200
 	streamBatchInterval = 50 * time.Millisecond
 	shortHashLen        = 7
@@ -360,12 +359,15 @@ type streamState struct {
 // subsequent batches arrive as commitsAppendedMsg, with commitsStreamDoneMsg
 // closing the stream.
 //
+// No MaxCount: streaming means git can walk the full history without
+// blocking the UI, so we don't artificially cap the visible window.
+//
 // reqID lets the model drop stale messages after a reload — only the latest
 // reqID's batches should mutate the list.
-func loadCommitsCmd(dir string, refs []string, max int, reqID uint64) tea.Cmd {
+func loadCommitsCmd(dir string, refs []string, reqID uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(context.Background())
-		ch, err := git.LogStream(ctx, git.LogOptions{Dir: dir, Refs: refs, MaxCount: max})
+		ch, err := git.LogStream(ctx, git.LogOptions{Dir: dir, Refs: refs})
 		if err != nil {
 			cancel()
 			return commitsStreamDoneMsg{reqID: reqID, err: err}

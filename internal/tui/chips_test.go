@@ -40,21 +40,26 @@ func TestBuildChipsLocalRemotePairCollapses(t *testing.T) {
 	if !strings.Contains(plain, "HEAD") {
 		t.Errorf("plain=%q must contain HEAD chip", plain)
 	}
-	// paired chip 은 더 이상 "↑" 마커를 붙이지 않고, chipLocalPairedStyle 의
-	// 왼쪽 accent stripe (`▌`) 가 시각 신호다. ansi.Strip 이 일반 룬은 보존하므로
-	// 한 개의 `▌` 가 stripped 출력에 그대로 남아 있어야 한다.
+	// paired chip 은 더 이상 "↑" 마커를 붙이지 않고, 이전 시도였던 `▌` accent
+	// stripe 도 끊어졌다 — 시각 신호는 chipLocalPairedStyle 의 underline (SGR 4).
 	if strings.Contains(plain, "↑") {
 		t.Errorf("plain=%q must not contain stale '↑' marker", plain)
 	}
-	if got := strings.Count(plain, "▌"); got != 1 {
-		t.Errorf("paired chip should carry exactly one '▌' left accent stripe; got %d in %q", got, plain)
+	if strings.Contains(plain, "▌") {
+		t.Errorf("plain=%q must not contain stale '▌' accent stripe", plain)
+	}
+	// 시각 신호는 chip 텍스트 앞의 `≡ ` prefix — Fork 의 icon-then-chip 패턴을
+	// 보편 유니코드 글리프로 옮긴 형태. ansi.Strip 이 일반 룬은 보존하므로
+	// stripped 출력에 정확히 한 번 등장해야 한다.
+	if strings.Count(plain, "☁") != 1 {
+		t.Errorf("paired chip should carry exactly one '≡' sync prefix; got %q", plain)
 	}
 }
 
 func TestBuildChipsPairedChipPreservesWidth(t *testing.T) {
-	// Round 2 Q1: paired chip 은 Padding(0,0) + 좌·우 1-cell border 로
-	// `text + 2` 폭을 유지해야 한다 — Padding(0,1) 짜리 일반 chip 과 동일.
-	// HEAD chip 을 끼우지 않고 paired-only 케이스로 폭만 검증한다.
+	// totalW 가 실제 visible runewidth 와 일치해야 한다 — paired prefix 를
+	// chipDisplay 가 이름 앞에 붙이므로 paired chip 은 "≡ " (2 cells) 만큼
+	// plain 보다 넓고, 그 차이가 totalW 계산에 정확히 반영되어야 한다.
 	pairedRendered, pairedW := buildChips([]string{"main", "origin/main"}, false)
 	plainRendered, plainW := buildChips([]string{"feature/x"}, false)
 
@@ -66,12 +71,12 @@ func TestBuildChipsPairedChipPreservesWidth(t *testing.T) {
 		t.Errorf("plain chip totalW (%d) != visible runewidth of stripped output (%q -> %d)",
 			plainW, ansi.Strip(plainRendered), runewidth.StringWidth(ansi.Strip(plainRendered)))
 	}
-	// "main" (4) + 2 == 6, "feature/x" (9) + 2 == 11.
-	if pairedW != 6 {
-		t.Errorf("paired 'main' chip width = %d, want 6 (text+2)", pairedW)
+	// paired "≡ main" = 6 + 2 padding = 8. plain "feature/x" = 9 + 2 = 11.
+	if pairedW != 8 {
+		t.Errorf("paired 'main' chip width = %d, want 8 (≡ + space + text + padding)", pairedW)
 	}
 	if plainW != 11 {
-		t.Errorf("plain 'feature/x' chip width = %d, want 11 (text+2)", plainW)
+		t.Errorf("plain 'feature/x' chip width = %d, want 11 (text+padding)", plainW)
 	}
 }
 
@@ -149,21 +154,21 @@ func TestBuildChipsTruncatesLongBranchName(t *testing.T) {
 	}
 }
 
-func TestBuildChipsTruncatedNamePreservesPairBorder(t *testing.T) {
+func TestBuildChipsTruncatedNamePreservesPairPrefix(t *testing.T) {
 	long := strings.Repeat("a", maxChipTextWidth+5)
 	// pair: HEAD -> <long>, origin/<long>
 	s, _ := buildChips([]string{"HEAD -> " + long, "origin/" + long}, false)
 	plain := ansi.Strip(s)
-	// 이름은 여전히 maxChipTextWidth 한도에서 "…" 로 잘려야 하고, paired 신호는
-	// "↑" 마커가 아니라 chipLocalPairedStyle 의 좌·우 점선 border 로 표시된다.
+	// 이름 truncation 은 maxChipTextWidth 한도에서 "…" 로 그대로 동작해야 하고,
+	// paired prefix `≡ ` 는 truncate 와 무관하게 정확히 한 번 등장해야 한다.
 	if !strings.Contains(plain, "…") {
 		t.Errorf("paired chip with truncated name should still end with '…'; got %q", plain)
 	}
 	if strings.Contains(plain, "…↑") {
 		t.Errorf("plain=%q must not contain stale '…↑' marker", plain)
 	}
-	if got := strings.Count(plain, "▌"); got != 1 {
-		t.Errorf("paired chip should carry exactly one '▌' left accent stripe; got %d in %q", got, plain)
+	if strings.Count(plain, "☁") != 1 {
+		t.Errorf("truncated paired chip should still carry one '≡' sync prefix; got %q", plain)
 	}
 }
 

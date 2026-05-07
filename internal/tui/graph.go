@@ -94,8 +94,14 @@ type graphRow struct {
 // whose own prefix is wider get truncated with "…". For the very first
 // item (index 0) the connector is rendered as a blank line — there is
 // nothing above the most recent commit to connect to.
+//
+// headRowIndex == -1 suppresses dim entirely. Otherwise rows above
+// headRowIndex whose Hash isn't in headAncestors are dimmed; a nil
+// ancestor map is the "loading" fallback that dims everything above.
 type commitDelegate struct {
-	graphWidth int
+	graphWidth    int
+	headRowIndex  int
+	headAncestors map[string]struct{}
 }
 
 func (commitDelegate) Height() int                             { return 2 }
@@ -131,10 +137,46 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		connectorColW = capW
 	}
 
-	connectorLine := renderConnectorLine(connectorPrefix, connectorWidth, connectorColW, width)
-	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, commitColW, width, selected)
+	dim := d.shouldDim(index, ci.c.Hash)
+	connectorLine := renderConnectorLine(connectorPrefix, connectorWidth, connectorColW, width, dim)
+	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, commitColW, width, selected, dim)
 
 	_, _ = fmt.Fprint(w, connectorLine+"\n"+commitLine)
+}
+
+// colorDim is xterm 240 — also reused by chips.go (chipDimStyle) and
+// chipMoreStyle so the muted palette stays in one place.
+const colorDim = "240"
+
+var dimFGStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorDim))
+
+// dimGraphCell strips the lane palette ANSI off graphPrefix before
+// re-coloring. The strip is necessary because each per-lane SGR ends
+// with its own reset, which would otherwise terminate any outer
+// foreground midway through the row and leave the dim effect spotty.
+func dimGraphCell(graphPrefix string, graphRowWidth, effectiveCol int) (string, int) {
+	plain, w := buildGraphCell(ansi.Strip(graphPrefix), graphRowWidth, effectiveCol)
+	return dimFGStyle.Render(plain), w
+}
+
+// shouldDim is the row-level decision for HEAD-as-dim-boundary. Returns
+// false when HEAD is out of the loaded window (-1) or for the HEAD row
+// itself / rows below it (older commits). Above HEAD, ancestry membership
+// keeps HEAD's reachable history bright; non-ancestors are dimmed. While
+// ancestry hasn't arrived yet (nil set) the fallback is "dim everything
+// above HEAD" so the boundary reads on first paint.
+func (d commitDelegate) shouldDim(index int, hash string) bool {
+	if d.headRowIndex < 0 {
+		return false
+	}
+	if index >= d.headRowIndex {
+		return false
+	}
+	if d.headAncestors == nil {
+		return true
+	}
+	_, isAncestor := d.headAncestors[hash]
+	return !isAncestor
 }
 
 var (
@@ -172,9 +214,17 @@ func shortHash(h string) string {
 // priority: chips → author → subject truncates to a single cell → if
 // even that won't fit, the message segment disappears and only hash (then
 // hash + time) remain to the right of the graph.
-func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColWidth, width int, selected bool) string {
+func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColWidth, width int, selected, dim bool) string {
 	hash := shortHash(c.Hash)
 	rel := relativeShort(c.AuthorTime)
+
+	// selected wins over dim so a navigated row above HEAD still highlights.
+	useDim := dim && !selected
+
+	hashS, timeS, authorS := hashStyle, timeStyle, authorStyle
+	if useDim {
+		hashS, timeS, authorS = dimFGStyle, dimFGStyle, dimFGStyle
+	}
 
 	cursor := "  "
 	if selected {
@@ -195,6 +245,9 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	}
 
 	graphCell, graphCellW := buildGraphCell(graphPrefix, graphRowWidth, effectiveCol)
+	if useDim {
+		graphCell, graphCellW = dimGraphCell(graphPrefix, graphRowWidth, effectiveCol)
+	}
 	fixedLeft := cursorWidth + graphCellW
 
 	// Need at least 1 cell for the subject + 1 separator before the hash.
@@ -204,10 +257,10 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 		switch {
 		case width-fixedLeft >= rightTail:
 			return cursor + graphCell +
-				hashStyle.Render(hash) + " " +
-				timeStyle.Render(runewidth.FillLeft(rel, timeColWidth))
+				hashS.Render(hash) + " " +
+				timeS.Render(runewidth.FillLeft(rel, timeColWidth))
 		case width-fixedLeft >= shortHashLen:
-			return cursor + graphCell + hashStyle.Render(hash)
+			return cursor + graphCell + hashS.Render(hash)
 		default:
 			return cursor + graphCell
 		}
@@ -223,7 +276,7 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 		if width-fixedLeft-candidate-1-rightTail >= 1 {
 			truncated := runewidth.Truncate(c.AuthorName, authorColWidth, "…")
 			truncated = runewidth.FillRight(truncated, authorColWidth)
-			authorSeg = " " + authorStyle.Render(truncated)
+			authorSeg = " " + authorS.Render(truncated)
 			authorSegW = candidate
 		}
 	}
@@ -231,7 +284,7 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	// Chip cluster, attached to the front of the subject in the message
 	// column. Dropped wholesale rather than partially when there isn't
 	// room for both chip and subject.
-	chipText, chipW := buildChips(c.RefNames, selected)
+	chipText, chipW := buildChips(c.RefNames, selected, dim)
 	chipSeg := ""
 	chipSegW := 0
 	if chipW > 0 {
@@ -245,8 +298,11 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	subjectWidth := width - fixedLeft - chipSegW - authorSegW - 1 - rightTail
 	subject := runewidth.Truncate(c.Subject, subjectWidth, "…")
 	subject = runewidth.FillRight(subject, subjectWidth)
-	if selected {
+	switch {
+	case selected:
 		subject = selectedStyle.Render(subject)
+	case useDim:
+		subject = dimFGStyle.Render(subject)
 	}
 
 	return fmt.Sprintf("%s%s%s%s%s %s %s",
@@ -255,8 +311,8 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 		chipSeg,
 		subject,
 		authorSeg,
-		hashStyle.Render(hash),
-		timeStyle.Render(runewidth.FillLeft(rel, timeColWidth)),
+		hashS.Render(hash),
+		timeS.Render(runewidth.FillLeft(rel, timeColWidth)),
 	)
 }
 
@@ -264,7 +320,9 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 // the styled connector graph segment padded to graphColWidth, and trailing
 // spaces filling out to the row width. Connector lines never carry hash /
 // time / subject — those belong on the commit row that follows.
-func renderConnectorLine(connectorPrefix string, connectorRowWidth, graphColWidth, width int) string {
+// dim=true recolors the graph segment with the muted grey palette so the
+// connector keeps the visual band started by the commit row above it.
+func renderConnectorLine(connectorPrefix string, connectorRowWidth, graphColWidth, width int, dim bool) string {
 	const cursorWidth = 2
 	cursor := strings.Repeat(" ", cursorWidth)
 	if width <= cursorWidth {
@@ -279,7 +337,13 @@ func renderConnectorLine(connectorPrefix string, connectorRowWidth, graphColWidt
 		effectiveCol = 0
 	}
 
-	graphCell, graphCellW := buildGraphCell(connectorPrefix, connectorRowWidth, effectiveCol)
+	var graphCell string
+	var graphCellW int
+	if dim {
+		graphCell, graphCellW = dimGraphCell(connectorPrefix, connectorRowWidth, effectiveCol)
+	} else {
+		graphCell, graphCellW = buildGraphCell(connectorPrefix, connectorRowWidth, effectiveCol)
+	}
 	used := cursorWidth + graphCellW
 	if used >= width {
 		return cursor + graphCell
@@ -313,10 +377,21 @@ type graphModel struct {
 	streaming    bool // a LogStream is in flight; loaded may already be true
 	userHasMoved bool // true after the user has intentionally moved the cursor (j/k/g/G/etc)
 	graphWidth   int  // hard cap = laneColCap(width); rows render per-row tight up to this cap
+
+	// headRowIndex is the list index of the row carrying HEAD per the
+	// streaming `%D` decoration; -1 = HEAD outside the loaded window so
+	// the dim pass is suppressed. headAncestors is `git rev-list HEAD`'s
+	// reachable set, loaded asynchronously to keep ancestor rows above
+	// HEAD bright. headDimDirty is set whenever either field changes so
+	// applyHeadDim can skip the list.SetDelegate on streaming batches
+	// that don't move the boundary.
+	headRowIndex  int
+	headAncestors map[string]struct{}
+	headDimDirty  bool
 }
 
 func newGraphModel() graphModel {
-	d := commitDelegate{}
+	d := commitDelegate{headRowIndex: -1}
 	l := list.New(nil, d, 0, 0)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
@@ -325,7 +400,7 @@ func newGraphModel() graphModel {
 	l.SetFilteringEnabled(false)
 	l.DisableQuitKeybindings()
 	l.SetShowFilter(false)
-	return graphModel{list: l, delegate: d}
+	return graphModel{list: l, delegate: d, headRowIndex: -1}
 }
 
 // commitsStreamStartedMsg is the first event of a streaming load. The Model
@@ -352,6 +427,28 @@ type commitsAppendedMsg struct {
 type commitsStreamDoneMsg struct {
 	reqID uint64
 	err   error
+}
+
+// headAncestorsLoadedMsg carries the result of `git rev-list HEAD`.
+// reqID is m.streamReqID at dispatch time so a reload's fresh ancestry
+// reply doesn't overwrite the new stream's state. err non-nil means the
+// dim pass falls back to "all rows above HEAD are dim" — ancestry-aware
+// precision is lost but the boundary still reads.
+type headAncestorsLoadedMsg struct {
+	reqID     uint64
+	ancestors map[string]struct{}
+	err       error
+}
+
+// loadHeadAncestorsCmd dispatches `git rev-list HEAD` so the graph dim
+// pass can keep ancestor rows above HEAD bright. Pass the same reqID as
+// the matching loadCommitsCmd so a stale reload's response gets dropped
+// in the Model.Update reqID guard.
+func loadHeadAncestorsCmd(dir string, reqID uint64) tea.Cmd {
+	return func() tea.Msg {
+		ancestors, err := git.RevListAncestors(context.Background(), dir, "HEAD")
+		return headAncestorsLoadedMsg{reqID: reqID, ancestors: ancestors, err: err}
+	}
 }
 
 // streamState lives across a stream's lifetime. The lane allocator is created
@@ -539,7 +636,9 @@ func appendCommitItems(dst []list.Item, rows []graphRow) []list.Item {
 func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 	if !g.loaded {
 		items := appendCommitItems(make([]list.Item, 0, len(m.rows)), m.rows)
+		g.captureHeadRow(m.rows, 0)
 		g.applyGraphCap()
+		g.applyHeadDim()
 		setCmd := g.list.SetItems(items)
 		g.loaded = true
 		g.streaming = !m.done
@@ -565,6 +664,8 @@ func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 	items := make([]list.Item, 0, prevLen+len(m.rows))
 	items = append(items, prev...)
 	items = appendCommitItems(items, m.rows)
+	g.captureHeadRow(m.rows, prevLen)
+	g.applyHeadDim()
 	setCmd := g.list.SetItems(items)
 	g.streaming = !m.done
 
@@ -581,6 +682,34 @@ func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 		cmds = append(cmds, m.next)
 	}
 	return g, tea.Batch(cmds...)
+}
+
+// captureHeadRow scans an appended batch for the HEAD commit and records
+// its absolute list index. baseIndex is where this batch lands in the
+// list (0 for the first batch, prevLen for appends). Detached HEAD lands
+// as `headDetached`; named HEAD as a `Ref.IsHead` flag from the same
+// ParseDecoration call.
+func (g *graphModel) captureHeadRow(rows []graphRow, baseIndex int) {
+	if g.headRowIndex >= 0 {
+		return
+	}
+	for i, r := range rows {
+		refs, headDetached := git.ParseDecoration(r.commit.RefNames)
+		if headDetached || hasIsHead(refs) {
+			g.headRowIndex = baseIndex + i
+			g.headDimDirty = true
+			return
+		}
+	}
+}
+
+func hasIsHead(refs []git.DecoratedRef) bool {
+	for _, r := range refs {
+		if r.IsHead {
+			return true
+		}
+	}
+	return false
 }
 
 func emitCommitSelected(hash string) tea.Cmd {
@@ -625,6 +754,28 @@ func (g *graphModel) applyGraphCap() {
 	g.list.SetDelegate(g.delegate)
 }
 
+// applyHeadDim copies graphModel's dim state into the delegate. The
+// caller marks state dirty by setting headDimDirty; otherwise this is a
+// cheap no-op so streaming batches that don't move the boundary don't
+// re-layout the list.
+func (g *graphModel) applyHeadDim() {
+	if !g.headDimDirty {
+		return
+	}
+	g.delegate.headRowIndex = g.headRowIndex
+	g.delegate.headAncestors = g.headAncestors
+	g.list.SetDelegate(g.delegate)
+	g.headDimDirty = false
+}
+
+// SetHeadAncestors stores the HEAD-reachable hash set. Called from
+// Model.Update on headAncestorsLoadedMsg.
+func (g *graphModel) SetHeadAncestors(ancestors map[string]struct{}) {
+	g.headAncestors = ancestors
+	g.headDimDirty = true
+	g.applyHeadDim()
+}
+
 // ResetForReload clears state so View renders the "loading…" placeholder
 // again. Use this before dispatching a fresh loadCommitsCmd so the UI
 // reflects that the visible commits no longer match the requested ref. The
@@ -637,6 +788,11 @@ func (g *graphModel) ResetForReload() tea.Cmd {
 	g.err = nil
 	g.graphWidth = 0
 	g.delegate.graphWidth = 0
+	g.headRowIndex = -1
+	g.headAncestors = nil
+	g.headDimDirty = false
+	g.delegate.headRowIndex = -1
+	g.delegate.headAncestors = nil
 	g.list.SetDelegate(g.delegate)
 	return g.list.SetItems(nil)
 }

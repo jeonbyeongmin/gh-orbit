@@ -4,6 +4,7 @@ package tui
 
 import (
 	"context"
+	"log"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
@@ -166,6 +167,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		loadCommitsCmd("", m.currentRefs, m.streamReqID),
 		loadRefsCmd(""),
+		loadHeadAncestorsCmd("", m.streamReqID),
 	)
 }
 
@@ -216,6 +218,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.graph, cmd = m.graph.Update(msg)
 		m = m.tryHEADJump()
 		return m, cmd
+
+	case headAncestorsLoadedMsg:
+		if msg.reqID != m.streamReqID {
+			// A reload superseded this dispatch; the new reqID's ancestry
+			// is already in flight (or already landed).
+			return m, nil
+		}
+		if msg.err != nil {
+			// Fall back to position-based dim — the boundary still reads,
+			// just without ancestor protection. Surface in the log; don't
+			// noise the status bar with a niche error.
+			log.Printf("git rev-list HEAD: %v", msg.err)
+			return m, nil
+		}
+		m.graph.SetHeadAncestors(msg.ancestors)
+		return m, nil
 
 	case refsLoadedMsg, refsLoadFailedMsg:
 		if loaded, ok := msg.(refsLoadedMsg); ok && m.pendingHEADHash == pendingHEADSentinel {
@@ -646,6 +664,7 @@ func (m *Model) reloadCmd() tea.Cmd {
 		resetCmd,
 		loadCommitsCmd("", m.currentRefs, m.streamReqID),
 		loadRefsCmd(""),
+		loadHeadAncestorsCmd("", m.streamReqID),
 	)
 }
 

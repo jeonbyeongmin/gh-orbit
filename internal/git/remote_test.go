@@ -123,6 +123,173 @@ func TestPullIntegrationFastForward(t *testing.T) {
 	}
 }
 
+func TestCheckoutReturnsErrorOutsideRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	err := Checkout(context.Background(), dir, "main")
+	if err == nil {
+		t.Fatal("expected error running git checkout outside a repo")
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error %q should include git's stderr message", err)
+	}
+}
+
+func TestCheckoutIntegrationCleanTree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	gitRun(t, work, "commit", "--allow-empty", "-m", "first")
+	gitRun(t, work, "branch", "feat")
+
+	if err := Checkout(context.Background(), work, "feat"); err != nil {
+		t.Fatalf("clean-tree checkout: %v", err)
+	}
+	if got := readHEAD(t, work); got != "refs/heads/feat" {
+		t.Errorf("HEAD = %q, want refs/heads/feat", got)
+	}
+}
+
+func TestCheckoutIntegrationDirtyTreeWraps(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("main\n"), 0o644); err != nil {
+		t.Fatalf("write main f.txt: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "main")
+	gitRun(t, work, "checkout", "-b", "feat")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("feat\n"), 0o644); err != nil {
+		t.Fatalf("write feat f.txt: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "feat change")
+	gitRun(t, work, "checkout", "main")
+	// Uncommitted modification on main that would be clobbered by switching
+	// back to feat — git refuses with the canonical "Please commit your
+	// changes or stash them" / "would be overwritten" message.
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty f.txt: %v", err)
+	}
+
+	err := Checkout(context.Background(), work, "feat")
+	if err == nil {
+		t.Fatal("expected dirty-tree error")
+	}
+	if !errors.Is(err, ErrCheckoutNeedsCleanTree) {
+		t.Errorf("error %q should wrap ErrCheckoutNeedsCleanTree", err)
+	}
+}
+
+func TestCheckoutIntegrationRemoteTrackingDWIM(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	root := t.TempDir()
+	bare := filepath.Join(root, "bare.git")
+	work := filepath.Join(root, "work")
+	other := filepath.Join(root, "other")
+	for _, d := range []string{bare, work, other} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	gitRun(t, bare, "init", "--bare", "-b", "main")
+
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	gitRun(t, work, "remote", "add", "origin", bare)
+	gitRun(t, work, "commit", "--allow-empty", "-m", "first")
+	gitRun(t, work, "push", "origin", "main")
+
+	gitRun(t, other, "clone", bare, ".")
+	gitRun(t, other, "config", "user.name", "Other")
+	gitRun(t, other, "config", "user.email", "other@example.com")
+	gitRun(t, other, "checkout", "-b", "feat")
+	gitRun(t, other, "commit", "--allow-empty", "-m", "feat work")
+	gitRun(t, other, "push", "-u", "origin", "feat")
+
+	gitRun(t, work, "fetch", "origin")
+	// dwim: "git checkout feat" with no local branch but exactly one
+	// "<remote>/feat" creates a local tracking branch. The TUI is expected
+	// to strip the "origin/" prefix from a Kind=RefKindRemote ShortName
+	// before calling Checkout — that contract is exercised here.
+	if err := Checkout(context.Background(), work, "feat"); err != nil {
+		t.Fatalf("dwim checkout: %v", err)
+	}
+	if got := readHEAD(t, work); got != "refs/heads/feat" {
+		t.Errorf("HEAD = %q, want refs/heads/feat (dwim should create local branch)", got)
+	}
+	if got := gitOutput(t, work, "config", "--get", "branch.feat.remote"); got != "origin" {
+		t.Errorf("branch.feat.remote = %q, want origin", got)
+	}
+}
+
+func TestCheckoutDetachedIntegration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	gitRun(t, work, "commit", "--allow-empty", "-m", "first")
+	hash := gitOutput(t, work, "rev-parse", "HEAD")
+	gitRun(t, work, "commit", "--allow-empty", "-m", "second")
+
+	if err := CheckoutDetached(context.Background(), work, hash); err != nil {
+		t.Fatalf("CheckoutDetached: %v", err)
+	}
+	// symbolic-ref fails on detached HEAD — the absence of an exit-0 means
+	// HEAD is no longer pointing at any branch.
+	cmd := exec.Command("git", "-C", work, "symbolic-ref", "-q", "HEAD")
+	if err := cmd.Run(); err == nil {
+		t.Errorf("expected detached HEAD; symbolic-ref unexpectedly succeeded")
+	}
+	if got := gitOutput(t, work, "rev-parse", "HEAD"); got != hash {
+		t.Errorf("HEAD = %q, want %q", got, hash)
+	}
+}
+
+func TestStashIntegration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write f.txt: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "base")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("dirty f.txt: %v", err)
+	}
+
+	if err := Stash(context.Background(), work, "test stash"); err != nil {
+		t.Fatalf("Stash: %v", err)
+	}
+	out := gitOutput(t, work, "stash", "list")
+	if !strings.Contains(out, "test stash") {
+		t.Errorf("stash list = %q, want it to contain the stash message", out)
+	}
+}
+
 func TestPullIntegrationConflictWraps(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

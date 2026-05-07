@@ -31,7 +31,7 @@ jobs:
           fi
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: v2
+          version: v2.12
 
   test:
     name: go test

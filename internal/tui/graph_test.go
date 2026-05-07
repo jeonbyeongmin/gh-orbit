@@ -861,11 +861,11 @@ func renderDelegateRowRaw(t *testing.T, d commitDelegate, items []list.Item, idx
 	return parts[1]
 }
 
-// faintSGR is the ANSI sequence lipgloss emits for Faint(true). Tests look
-// for it as the dim signal — concatenated with other attributes lipgloss
-// joins the SGR codes with ";", but the standalone "[2m" form appears
-// when Faint is the only attribute.
-const faintSGR = "\x1b[2m"
+// dimSGR is the ANSI substring that the dim pass emits — Foreground 240
+// in 256-color form. dimLine strips inner ANSI then re-renders with the
+// grey foreground, so this is the marker tests look for to confirm a
+// row is in the "above HEAD, not an ancestor" band.
+const dimSGR = "38;5;240"
 
 func TestCommitDelegateDimAppliedAboveHEAD(t *testing.T) {
 	now := time.Now()
@@ -881,17 +881,17 @@ func TestCommitDelegateDimAppliedAboveHEAD(t *testing.T) {
 	}}
 
 	above := renderDelegateRowRaw(t, d, items, 0, 80)
-	if !strings.Contains(above, faintSGR) {
+	if !strings.Contains(above, dimSGR) {
 		t.Errorf("row above HEAD should carry Faint SGR; got %q", above)
 	}
 
 	head := renderDelegateRowRaw(t, d, items, 1, 80)
-	if strings.Contains(head, faintSGR) {
+	if strings.Contains(head, dimSGR) {
 		t.Errorf("HEAD row itself must not be dimmed; got %q", head)
 	}
 
 	below := renderDelegateRowRaw(t, d, items, 2, 80)
-	if strings.Contains(below, faintSGR) {
+	if strings.Contains(below, dimSGR) {
 		t.Errorf("row below HEAD must not be dimmed; got %q", below)
 	}
 }
@@ -912,11 +912,11 @@ func TestCommitDelegateDimSkipsAncestorAboveHEAD(t *testing.T) {
 	}}
 
 	sibling := renderDelegateRowRaw(t, d, items, 0, 80)
-	if !strings.Contains(sibling, faintSGR) {
+	if !strings.Contains(sibling, dimSGR) {
 		t.Errorf("non-ancestor sibling above HEAD should be dimmed; got %q", sibling)
 	}
 	ancestor := renderDelegateRowRaw(t, d, items, 1, 80)
-	if strings.Contains(ancestor, faintSGR) {
+	if strings.Contains(ancestor, dimSGR) {
 		t.Errorf("HEAD ancestor above HEAD must stay bright; got %q", ancestor)
 	}
 }
@@ -934,7 +934,7 @@ func TestCommitDelegateDimSuppressedWhenHeadOutOfWindow(t *testing.T) {
 	d := commitDelegate{graphWidth: maxLaneCap * cellWidth, headRowIndex: -1}
 	for i, it := range items {
 		raw := renderDelegateRowRaw(t, d, items, i, 80)
-		if strings.Contains(raw, faintSGR) {
+		if strings.Contains(raw, dimSGR) {
 			t.Errorf("row %d (%v) must not be dimmed when HEAD is out of window; got %q", i, it, raw)
 		}
 	}
@@ -952,11 +952,11 @@ func TestCommitDelegateDimFallbackBeforeAncestorsArrive(t *testing.T) {
 	d := commitDelegate{graphWidth: maxLaneCap * cellWidth, headRowIndex: 1, headAncestors: nil}
 
 	above := renderDelegateRowRaw(t, d, items, 0, 80)
-	if !strings.Contains(above, faintSGR) {
+	if !strings.Contains(above, dimSGR) {
 		t.Errorf("fallback dim should apply when ancestors not yet loaded; got %q", above)
 	}
 	head := renderDelegateRowRaw(t, d, items, 1, 80)
-	if strings.Contains(head, faintSGR) {
+	if strings.Contains(head, dimSGR) {
 		t.Errorf("HEAD row itself must stay bright in fallback; got %q", head)
 	}
 }

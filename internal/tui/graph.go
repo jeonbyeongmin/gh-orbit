@@ -144,20 +144,34 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, commitColW, width, selected)
 
 	if d.shouldDim(index, ci.c.Hash) {
-		connectorLine = dimStyle.Render(connectorLine)
-		commitLine = dimStyle.Render(commitLine)
+		connectorLine = dimLine(connectorLine)
+		commitLine = dimLine(commitLine)
 	}
 
 	_, _ = fmt.Fprint(w, connectorLine+"\n"+commitLine)
 }
 
-// dimStyle is the single Faint pass applied to rows above HEAD that
-// aren't in HEAD's ancestry. ANSI dim (SGR 2) layers on top of the
-// per-row styled prefix so lane lifeline color information is preserved
-// while the row visibly recedes. If terminal-side rendering of Faint
-// turns out to be too subtle we can fall back to a graphPrefix-protected
-// dim of just the message segment — see plan §위험.
-var dimStyle = lipgloss.NewStyle().Faint(true)
+// dimStyle paints the whole HEAD-above row in a single muted grey. We
+// strip the inner ANSI before applying the new foreground because each
+// inner segment's own reset (`\x1b[0m`) would otherwise terminate any
+// outer attribute (Faint or Foreground) midway through the line, leaving
+// the dim effect spotty. Lane lifeline color is sacrificed in exchange
+// for an unmistakably "this row is not where you are" visual — the
+// HEAD-relative boundary is the user-facing signal here, not lane id.
+var dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorDim))
+
+// colorDim is xterm 240 — neutral grey with enough separation from the
+// regular palette (hash 214 / time 245 / author 248) that "above HEAD"
+// reads as a dimmed band even on terminals that ignore SGR 2 (Faint).
+const colorDim = "240"
+
+// dimLine applies dimStyle to the visible characters of an ANSI-styled
+// line. ANSI escape sequences are stripped first so the new foreground
+// covers the entire row uniformly; spacing/width is preserved because
+// only zero-width SGR codes are dropped.
+func dimLine(line string) string {
+	return dimStyle.Render(ansi.Strip(line))
+}
 
 // shouldDim is the row-level decision for HEAD-as-dim-boundary. Returns
 // false when HEAD is out of the loaded window (-1) or for the HEAD row

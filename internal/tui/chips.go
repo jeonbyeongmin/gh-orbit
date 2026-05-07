@@ -131,6 +131,9 @@ func chipStyleFor(c git.ChipRef) lipgloss.Style {
 	case git.RefKindTag:
 		return chipTagStyle
 	default:
+		if c.PairedRemote {
+			return chipLocalPairedStyle
+		}
 		return chipLocalStyle
 	}
 }
@@ -139,9 +142,6 @@ func chipDisplay(c git.ChipRef) string {
 	name := c.DisplayName
 	if runewidth.StringWidth(name) > maxChipTextWidth {
 		name = runewidth.Truncate(name, maxChipTextWidth, "…")
-	}
-	if c.PairedRemote {
-		name += "↑"
 	}
 	return name
 }

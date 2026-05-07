@@ -140,37 +140,33 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		connectorColW = capW
 	}
 
-	connectorLine := renderConnectorLine(connectorPrefix, connectorWidth, connectorColW, width)
-	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, commitColW, width, selected)
-
-	if d.shouldDim(index, ci.c.Hash) {
-		connectorLine = dimLine(connectorLine)
-		commitLine = dimLine(commitLine)
-	}
+	dim := d.shouldDim(index, ci.c.Hash)
+	connectorLine := renderConnectorLine(connectorPrefix, connectorWidth, connectorColW, width, dim)
+	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, commitColW, width, selected, dim)
 
 	_, _ = fmt.Fprint(w, connectorLine+"\n"+commitLine)
 }
 
-// dimStyle paints the whole HEAD-above row in a single muted grey. We
-// strip the inner ANSI before applying the new foreground because each
-// inner segment's own reset (`\x1b[0m`) would otherwise terminate any
-// outer attribute (Faint or Foreground) midway through the line, leaving
-// the dim effect spotty. Lane lifeline color is sacrificed in exchange
-// for an unmistakably "this row is not where you are" visual — the
-// HEAD-relative boundary is the user-facing signal here, not lane id.
-var dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorDim))
-
 // colorDim is xterm 240 — neutral grey with enough separation from the
 // regular palette (hash 214 / time 245 / author 248) that "above HEAD"
-// reads as a dimmed band even on terminals that ignore SGR 2 (Faint).
+// reads as a dimmed band even on terminals that under-render SGR 2.
 const colorDim = "240"
 
-// dimLine applies dimStyle to the visible characters of an ANSI-styled
-// line. ANSI escape sequences are stripped first so the new foreground
-// covers the entire row uniformly; spacing/width is preserved because
-// only zero-width SGR codes are dropped.
-func dimLine(line string) string {
-	return dimStyle.Render(ansi.Strip(line))
+// dimFGStyle paints text-only segments (subject, author, hash, time,
+// graph glyphs) in the muted grey when their row is above HEAD and not
+// in HEAD's ancestry. Chip backgrounds keep their box shape via
+// chipDimStyle in chips.go — dim is a per-segment recolor, not a single
+// wrapper, so each segment's own ANSI reset doesn't truncate the dim
+// effect midway through the row.
+var dimFGStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorDim))
+
+// dimGraphCell strips the lane palette ANSI off graphPrefix and re-renders
+// it in dim grey. graphPrefix is built upstream by renderGraphRow with
+// per-lane color SGRs; for above-HEAD rows we trade lane identification
+// for a uniform "this row is past the boundary" tone.
+func dimGraphCell(graphPrefix string, graphRowWidth, effectiveCol int) (string, int) {
+	plain, w := buildGraphCell(ansi.Strip(graphPrefix), graphRowWidth, effectiveCol)
+	return dimFGStyle.Render(plain), w
 }
 
 // shouldDim is the row-level decision for HEAD-as-dim-boundary. Returns
@@ -228,9 +224,16 @@ func shortHash(h string) string {
 // priority: chips → author → subject truncates to a single cell → if
 // even that won't fit, the message segment disappears and only hash (then
 // hash + time) remain to the right of the graph.
-func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColWidth, width int, selected bool) string {
+func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColWidth, width int, selected, dim bool) string {
 	hash := shortHash(c.Hash)
 	rel := relativeShort(c.AuthorTime)
+
+	// Resolve the per-segment styles up front. selected wins over dim so a
+	// row above HEAD that the user has navigated to keeps its highlight.
+	hashS, timeS, authorS := hashStyle, timeStyle, authorStyle
+	if dim && !selected {
+		hashS, timeS, authorS = dimFGStyle, dimFGStyle, dimFGStyle
+	}
 
 	cursor := "  "
 	if selected {
@@ -251,6 +254,9 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	}
 
 	graphCell, graphCellW := buildGraphCell(graphPrefix, graphRowWidth, effectiveCol)
+	if dim && !selected {
+		graphCell, graphCellW = dimGraphCell(graphPrefix, graphRowWidth, effectiveCol)
+	}
 	fixedLeft := cursorWidth + graphCellW
 
 	// Need at least 1 cell for the subject + 1 separator before the hash.
@@ -260,10 +266,10 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 		switch {
 		case width-fixedLeft >= rightTail:
 			return cursor + graphCell +
-				hashStyle.Render(hash) + " " +
-				timeStyle.Render(runewidth.FillLeft(rel, timeColWidth))
+				hashS.Render(hash) + " " +
+				timeS.Render(runewidth.FillLeft(rel, timeColWidth))
 		case width-fixedLeft >= shortHashLen:
-			return cursor + graphCell + hashStyle.Render(hash)
+			return cursor + graphCell + hashS.Render(hash)
 		default:
 			return cursor + graphCell
 		}
@@ -279,7 +285,7 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 		if width-fixedLeft-candidate-1-rightTail >= 1 {
 			truncated := runewidth.Truncate(c.AuthorName, authorColWidth, "…")
 			truncated = runewidth.FillRight(truncated, authorColWidth)
-			authorSeg = " " + authorStyle.Render(truncated)
+			authorSeg = " " + authorS.Render(truncated)
 			authorSegW = candidate
 		}
 	}
@@ -287,7 +293,7 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	// Chip cluster, attached to the front of the subject in the message
 	// column. Dropped wholesale rather than partially when there isn't
 	// room for both chip and subject.
-	chipText, chipW := buildChips(c.RefNames, selected)
+	chipText, chipW := buildChips(c.RefNames, selected, dim)
 	chipSeg := ""
 	chipSegW := 0
 	if chipW > 0 {
@@ -301,8 +307,11 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	subjectWidth := width - fixedLeft - chipSegW - authorSegW - 1 - rightTail
 	subject := runewidth.Truncate(c.Subject, subjectWidth, "…")
 	subject = runewidth.FillRight(subject, subjectWidth)
-	if selected {
+	switch {
+	case selected:
 		subject = selectedStyle.Render(subject)
+	case dim:
+		subject = dimFGStyle.Render(subject)
 	}
 
 	return fmt.Sprintf("%s%s%s%s%s %s %s",
@@ -311,8 +320,8 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 		chipSeg,
 		subject,
 		authorSeg,
-		hashStyle.Render(hash),
-		timeStyle.Render(runewidth.FillLeft(rel, timeColWidth)),
+		hashS.Render(hash),
+		timeS.Render(runewidth.FillLeft(rel, timeColWidth)),
 	)
 }
 
@@ -320,7 +329,9 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 // the styled connector graph segment padded to graphColWidth, and trailing
 // spaces filling out to the row width. Connector lines never carry hash /
 // time / subject — those belong on the commit row that follows.
-func renderConnectorLine(connectorPrefix string, connectorRowWidth, graphColWidth, width int) string {
+// dim=true recolors the graph segment with the muted grey palette so the
+// connector keeps the visual band started by the commit row above it.
+func renderConnectorLine(connectorPrefix string, connectorRowWidth, graphColWidth, width int, dim bool) string {
 	const cursorWidth = 2
 	cursor := strings.Repeat(" ", cursorWidth)
 	if width <= cursorWidth {
@@ -335,7 +346,13 @@ func renderConnectorLine(connectorPrefix string, connectorRowWidth, graphColWidt
 		effectiveCol = 0
 	}
 
-	graphCell, graphCellW := buildGraphCell(connectorPrefix, connectorRowWidth, effectiveCol)
+	var graphCell string
+	var graphCellW int
+	if dim {
+		graphCell, graphCellW = dimGraphCell(connectorPrefix, connectorRowWidth, effectiveCol)
+	} else {
+		graphCell, graphCellW = buildGraphCell(connectorPrefix, connectorRowWidth, effectiveCol)
+	}
 	used := cursorWidth + graphCellW
 	if used >= width {
 		return cursor + graphCell

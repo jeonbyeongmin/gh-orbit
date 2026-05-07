@@ -39,6 +39,12 @@ var (
 	chipTagStyle      = newChipStyle(colorChipTag, colorChipFG)
 	chipMoreStyle     = newChipStyle(colorChipMore, colorChipFG)
 	chipSelectedStyle = newChipStyle(colorSelected, colorChipFG)
+	// chipDimStyle replaces every chip background with the same neutral
+	// grey when the row is above HEAD and not in HEAD's ancestry. Padding
+	// stays so the chip's "box" silhouette is preserved — only the color
+	// information is muted, which is what the user expects for "this row
+	// is past the boundary but still carries refs."
+	chipDimStyle = newChipStyle(colorDim, colorChipFG)
 )
 
 // pairedPrefix is rendered inside the paired-local chip text, just before the
@@ -55,7 +61,10 @@ const pairedPrefix = "☁ "
 // longer drawn as its own chip — the graph dim boundary at the HEAD row
 // carries that information instead. selected=true paints every chip with
 // the row's cursor color, deliberately overriding the kind palette.
-func buildChips(refNames []string, selected bool) (string, int) {
+// dim=true overrides every kind palette with a neutral grey background
+// so above-HEAD rows still show chip silhouettes without bright color.
+// selected wins over dim when both apply.
+func buildChips(refNames []string, selected, dim bool) (string, int) {
 	refs, _ := git.ParseDecoration(refNames)
 	chips := git.MergeLocalRemotePairs(refs)
 	if len(chips) == 0 {
@@ -74,8 +83,11 @@ func buildChips(refNames []string, selected bool) (string, int) {
 	totalW := 0
 	add := func(text string, base lipgloss.Style) {
 		style := base
-		if selected {
+		switch {
+		case selected:
 			style = chipSelectedStyle
+		case dim:
+			style = chipDimStyle
 		}
 		b.WriteString(style.Render(text))
 		// Each chip is text + Padding(0, 1) on both sides; adjacent chips

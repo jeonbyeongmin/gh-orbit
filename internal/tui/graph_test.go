@@ -26,7 +26,7 @@ func TestRenderCommitLineTruncatesLongSubject(t *testing.T) {
 		Subject:    "이것은 너비 검증을 위해 일부러 길게 적은 한국어 제목입니다",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "", 0, 0, 40, false)
+	line := renderCommitLine(c, "", 0, 0, 40, false, false)
 	if !strings.Contains(line, "…") {
 		t.Errorf("expected ellipsis when subject overflows, got %q", line)
 	}
@@ -39,7 +39,7 @@ func TestRenderCommitLineHidesSubjectWhenTooNarrow(t *testing.T) {
 		AuthorTime: time.Now(),
 	}
 	// Width less than cursor(2)+hash(7)+space(1)+time(8)+space(1) = 19.
-	line := renderCommitLine(c, "", 0, 0, 10, false)
+	line := renderCommitLine(c, "", 0, 0, 10, false, false)
 	if strings.Contains(line, "should-not-appear") {
 		t.Errorf("subject should be hidden at narrow width, got %q", line)
 	}
@@ -55,11 +55,11 @@ func TestRenderCommitLineSelectedHasCursor(t *testing.T) {
 		Subject:    "selected commit",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "", 0, 0, 80, true)
+	line := renderCommitLine(c, "", 0, 0, 80, true, false)
 	if !strings.Contains(line, "›") {
 		t.Errorf("selected line should contain cursor marker, got %q", line)
 	}
-	unselected := renderCommitLine(c, "", 0, 0, 80, false)
+	unselected := renderCommitLine(c, "", 0, 0, 80, false, false)
 	if strings.Contains(unselected, "›") {
 		t.Errorf("unselected line should not contain cursor marker, got %q", unselected)
 	}
@@ -71,7 +71,7 @@ func TestRenderCommitLineOrderingGraphSubjectHash(t *testing.T) {
 		Subject:    "graph layout",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
 	stripped := ansi.Strip(line)
 	starIdx := strings.Index(stripped, "*")
 	subjectIdx := strings.Index(stripped, "graph layout")
@@ -95,7 +95,7 @@ func TestRenderCommitLineHashAnchoredToRightEdge(t *testing.T) {
 		Subject:    "right edge",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
 	stripped := ansi.Strip(line)
 	// The visible width must still equal the requested width.
 	if w := len(stripped); w != 80 {
@@ -126,7 +126,7 @@ func TestRenderCommitLinePadsShortGraphPrefix(t *testing.T) {
 	// graphPrefix "*" is 1 column wide but graphColWidth=4 — the cell must
 	// be left-aligned and padded out to the full 4-column width so columns
 	// line up across rows.
-	line := renderCommitLine(c, "*", 1, 4, 80, false)
+	line := renderCommitLine(c, "*", 1, 4, 80, false, false)
 	stripped := ansi.Strip(line)
 	// cursor 2 + graph 4 = 6.
 	if got := stripped[2:6]; got != "*   " {
@@ -140,7 +140,7 @@ func TestRenderCommitLineNoChipAreaWhenNoRefs(t *testing.T) {
 		Subject:    "no refs",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
 	stripped := ansi.Strip(line)
 	// With no refs, no chip cluster appears. The substring " no refs" should
 	// follow the time column directly with one separator space.
@@ -156,7 +156,7 @@ func TestRenderCommitLineWithLocalChip(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"main"},
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
 	stripped := ansi.Strip(line)
 	// Chip "main" attaches to the front of the subject in the message
 	// column — both sit between the graph and the hash.
@@ -179,7 +179,7 @@ func TestRenderCommitLineWithPairedChip(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"HEAD -> main", "origin/main"},
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
 	stripped := ansi.Strip(line)
 	if strings.Count(stripped, "main") != 1 {
 		t.Errorf("paired chip should render 'main' exactly once, got %q", stripped)
@@ -202,7 +202,7 @@ func TestRenderCommitLineWithDetachedHead(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"HEAD"},
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
 	stripped := ansi.Strip(line)
 	if strings.Contains(stripped, "HEAD") {
 		t.Errorf("detached HEAD must NOT render a chip — boundary lives on the graph dim pass, got %q", stripped)
@@ -219,7 +219,7 @@ func TestRenderCommitLineWithTagChipStripsPrefix(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"tag: v0.0.1"},
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
 	stripped := ansi.Strip(line)
 	if !strings.Contains(stripped, "v0.0.1") {
 		t.Errorf("tag chip should display version, got %q", stripped)
@@ -236,7 +236,7 @@ func TestRenderCommitLineChipOverflowShowsPlusN(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"a", "b", "c", "d", "e"},
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 100, false)
+	line := renderCommitLine(c, "* ", 2, 2, 100, false, false)
 	stripped := ansi.Strip(line)
 	if !strings.Contains(stripped, "+3") {
 		t.Errorf("overflow indicator '+3' missing from %q", stripped)
@@ -253,7 +253,7 @@ func TestRenderCommitLineChipDroppedWhenSubjectWouldStarve(t *testing.T) {
 		RefNames: []string{"this-is-a-very-long-branch-name-that-cannot-fit"},
 	}
 	// width = cursor 2 + graph 2 + hash 7 + space 1 + time 8 + space 1 + subject 2 = 23
-	line := renderCommitLine(c, "* ", 2, 2, 23, false)
+	line := renderCommitLine(c, "* ", 2, 2, 23, false, false)
 	stripped := ansi.Strip(line)
 	if strings.Contains(stripped, "this-is-a-very-long") {
 		t.Errorf("chip should be dropped when subject can't fit alongside it, got %q", stripped)
@@ -270,8 +270,8 @@ func TestRenderCommitLineSelectedRecolorsChipBackground(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"main"},
 	}
-	unselected := renderCommitLine(c, "* ", 2, 2, 80, false)
-	selected := renderCommitLine(c, "* ", 2, 2, 80, true)
+	unselected := renderCommitLine(c, "* ", 2, 2, 80, false, false)
+	selected := renderCommitLine(c, "* ", 2, 2, 80, true, false)
 	if unselected == selected {
 		t.Fatalf("selected line should differ from unselected")
 	}
@@ -290,7 +290,7 @@ func TestRenderCommitLineWithAuthorName(t *testing.T) {
 		AuthorName: "Byeongmin Jeon",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
 	stripped := ansi.Strip(line)
 	subjectIdx := strings.Index(stripped, "subj")
 	authorIdx := strings.Index(stripped, "Byeongmin")
@@ -314,7 +314,7 @@ func TestRenderCommitLineEmptyAuthorOmitsColumn(t *testing.T) {
 		AuthorTime: time.Now(),
 		// AuthorName left empty.
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
 	stripped := ansi.Strip(line)
 	if w := len(stripped); w != 80 {
 		t.Errorf("rendered width = %d, want 80", w)
@@ -342,7 +342,7 @@ func TestRenderCommitLineDropsAuthorWhenNarrow(t *testing.T) {
 		AuthorTime: time.Now(),
 	}
 	// width = cursor 2 + graph 2 + subject 2 + sep 1 + hash 7 + sep 1 + rel 8 = 23
-	line := renderCommitLine(c, "* ", 2, 2, 23, false)
+	line := renderCommitLine(c, "* ", 2, 2, 23, false, false)
 	stripped := ansi.Strip(line)
 	if strings.Contains(stripped, "alice") {
 		t.Errorf("author should be dropped at narrow width, got %q", stripped)
@@ -362,7 +362,7 @@ func TestRenderCommitLineGraphTruncatedAtNarrowWidth(t *testing.T) {
 		AuthorTime: time.Now(),
 	}
 	// width 10, cursor 2 + hash 7 = 9 → at most 1 column for graph.
-	line := renderCommitLine(c, "| | * ", 6, 6, 10, false)
+	line := renderCommitLine(c, "| | * ", 6, 6, 10, false, false)
 	if !strings.Contains(line, "abcdef1") {
 		t.Errorf("hash must remain visible even when graph is wider than budget, got %q", line)
 	}
@@ -847,11 +847,14 @@ func TestCommitDelegateRightAnchorStaysAcrossRows(t *testing.T) {
 }
 
 // renderDelegateRowRaw is renderDelegateRow but returns the ANSI-bearing
-// (commit) line so callers can assert on Faint / Reset codes used by the
-// HEAD-as-dim-boundary pass.
-func renderDelegateRowRaw(t *testing.T, d commitDelegate, items []list.Item, idx, outerWidth int) string {
+// (commit) line so callers can assert on the SGR codes used by the
+// HEAD-as-dim-boundary pass. cursorIdx pins the list cursor so the row
+// under test isn't accidentally rendered as selected (selected wins over
+// dim, which would mask the assertion).
+func renderDelegateRowRaw(t *testing.T, d commitDelegate, items []list.Item, idx, cursorIdx, outerWidth int) string {
 	t.Helper()
 	l := list.New(items, d, outerWidth, 10)
+	l.Select(cursorIdx)
 	var buf strings.Builder
 	d.Render(&buf, l, idx, items[idx])
 	parts := strings.SplitN(buf.String(), "\n", 2)
@@ -880,17 +883,19 @@ func TestCommitDelegateDimAppliedAboveHEAD(t *testing.T) {
 		"below03": {},
 	}}
 
-	above := renderDelegateRowRaw(t, d, items, 0, 80)
+	// Park cursor on the HEAD row so the rows being tested aren't selected
+	// (selected wins over dim).
+	above := renderDelegateRowRaw(t, d, items, 0, 1, 80)
 	if !strings.Contains(above, dimSGR) {
-		t.Errorf("row above HEAD should carry Faint SGR; got %q", above)
+		t.Errorf("row above HEAD should carry dim SGR; got %q", above)
 	}
 
-	head := renderDelegateRowRaw(t, d, items, 1, 80)
+	head := renderDelegateRowRaw(t, d, items, 1, 1, 80)
 	if strings.Contains(head, dimSGR) {
 		t.Errorf("HEAD row itself must not be dimmed; got %q", head)
 	}
 
-	below := renderDelegateRowRaw(t, d, items, 2, 80)
+	below := renderDelegateRowRaw(t, d, items, 2, 1, 80)
 	if strings.Contains(below, dimSGR) {
 		t.Errorf("row below HEAD must not be dimmed; got %q", below)
 	}
@@ -911,11 +916,11 @@ func TestCommitDelegateDimSkipsAncestorAboveHEAD(t *testing.T) {
 		"anc0002": {},
 	}}
 
-	sibling := renderDelegateRowRaw(t, d, items, 0, 80)
+	sibling := renderDelegateRowRaw(t, d, items, 0, 2, 80)
 	if !strings.Contains(sibling, dimSGR) {
 		t.Errorf("non-ancestor sibling above HEAD should be dimmed; got %q", sibling)
 	}
-	ancestor := renderDelegateRowRaw(t, d, items, 1, 80)
+	ancestor := renderDelegateRowRaw(t, d, items, 1, 2, 80)
 	if strings.Contains(ancestor, dimSGR) {
 		t.Errorf("HEAD ancestor above HEAD must stay bright; got %q", ancestor)
 	}
@@ -932,8 +937,9 @@ func TestCommitDelegateDimSuppressedWhenHeadOutOfWindow(t *testing.T) {
 		commitItem{c: git.Commit{Hash: "bbb0002", Subject: "row-b", AuthorTime: now}, commitPrefix: "* ", commitGraphWidth: 2},
 	}
 	d := commitDelegate{graphWidth: maxLaneCap * cellWidth, headRowIndex: -1}
+	// Cursor parked off-rows (-1 acts as no-selection in bubbles/list).
 	for i, it := range items {
-		raw := renderDelegateRowRaw(t, d, items, i, 80)
+		raw := renderDelegateRowRaw(t, d, items, i, len(items), 80)
 		if strings.Contains(raw, dimSGR) {
 			t.Errorf("row %d (%v) must not be dimmed when HEAD is out of window; got %q", i, it, raw)
 		}
@@ -951,11 +957,11 @@ func TestCommitDelegateDimFallbackBeforeAncestorsArrive(t *testing.T) {
 	}
 	d := commitDelegate{graphWidth: maxLaneCap * cellWidth, headRowIndex: 1, headAncestors: nil}
 
-	above := renderDelegateRowRaw(t, d, items, 0, 80)
+	above := renderDelegateRowRaw(t, d, items, 0, 1, 80)
 	if !strings.Contains(above, dimSGR) {
 		t.Errorf("fallback dim should apply when ancestors not yet loaded; got %q", above)
 	}
-	head := renderDelegateRowRaw(t, d, items, 1, 80)
+	head := renderDelegateRowRaw(t, d, items, 1, 1, 80)
 	if strings.Contains(head, dimSGR) {
 		t.Errorf("HEAD row itself must stay bright in fallback; got %q", head)
 	}

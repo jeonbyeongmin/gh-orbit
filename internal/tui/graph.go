@@ -560,7 +560,9 @@ func appendCommitItems(dst []list.Item, rows []graphRow) []list.Item {
 func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 	if !g.loaded {
 		items := appendCommitItems(make([]list.Item, 0, len(m.rows)), m.rows)
+		g.captureHeadRow(m.rows, 0)
 		g.applyGraphCap()
+		g.applyHeadDim()
 		setCmd := g.list.SetItems(items)
 		g.loaded = true
 		g.streaming = !m.done
@@ -586,6 +588,8 @@ func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 	items := make([]list.Item, 0, prevLen+len(m.rows))
 	items = append(items, prev...)
 	items = appendCommitItems(items, m.rows)
+	g.captureHeadRow(m.rows, prevLen)
+	g.applyHeadDim()
 	setCmd := g.list.SetItems(items)
 	g.streaming = !m.done
 
@@ -602,6 +606,34 @@ func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 		cmds = append(cmds, m.next)
 	}
 	return g, tea.Batch(cmds...)
+}
+
+// captureHeadRow scans an appended batch for the HEAD commit and records
+// its absolute list index. Once HEAD is found the search is cheap — no
+// extra git invocation, just `ParseDecoration` on the rows already in
+// the batch. baseIndex is where this batch lands in the list (0 for the
+// first batch, prevLen for subsequent appends). detached HEAD (bare
+// `HEAD` token, no branch attached) is captured the same way as named
+// HEAD via ParseDecoration's headDetached return.
+func (g *graphModel) captureHeadRow(rows []graphRow, baseIndex int) {
+	if g.headHash != "" {
+		return
+	}
+	for i, r := range rows {
+		refs, headDetached := git.ParseDecoration(r.commit.RefNames)
+		if headDetached {
+			g.headHash = r.commit.Hash
+			g.headRowIndex = baseIndex + i
+			return
+		}
+		for _, ref := range refs {
+			if ref.IsHead {
+				g.headHash = r.commit.Hash
+				g.headRowIndex = baseIndex + i
+				return
+			}
+		}
+	}
 }
 
 func emitCommitSelected(hash string) tea.Cmd {

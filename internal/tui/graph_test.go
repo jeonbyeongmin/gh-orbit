@@ -184,8 +184,11 @@ func TestRenderCommitLineWithPairedChip(t *testing.T) {
 	if strings.Count(stripped, "main") != 1 {
 		t.Errorf("paired chip should render 'main' exactly once, got %q", stripped)
 	}
-	if !strings.Contains(stripped, "↑") {
-		t.Errorf("paired chip should carry ↑ marker, got %q", stripped)
+	if strings.Contains(stripped, "↑") {
+		t.Errorf("paired chip should not carry stale ↑ marker, got %q", stripped)
+	}
+	if strings.Count(stripped, "☁") != 1 {
+		t.Errorf("paired chip should carry exactly one '☁' sync prefix, got %q", stripped)
 	}
 	if !strings.Contains(stripped, "HEAD") {
 		t.Errorf("HEAD chip should appear, got %q", stripped)

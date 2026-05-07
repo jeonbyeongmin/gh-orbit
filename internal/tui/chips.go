@@ -44,6 +44,13 @@ var (
 	chipSelectedStyle = newChipStyle(colorSelected, colorChipFG)
 )
 
+// pairedPrefix is rendered inside the paired-local chip text, just before the
+// branch name — the same shape Fork uses (icon-then-chip), expressed as a
+// universally available Unicode glyph so terminal-theme variation can't hide
+// it. The chip's own bg color extends through the prefix, so it reads as a
+// "synced with remote" badge attached to the chip rather than a separate token.
+const pairedPrefix = "☁ "
+
 // buildChips renders the chip cluster for one commit row. Returns ("", 0)
 // when there's nothing to draw.
 //
@@ -124,7 +131,7 @@ func chipDisplay(c git.ChipRef) string {
 		name = runewidth.Truncate(name, maxChipTextWidth, "…")
 	}
 	if c.PairedRemote {
-		name += "↑"
+		return pairedPrefix + name
 	}
 	return name
 }

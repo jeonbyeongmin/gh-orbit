@@ -209,7 +209,7 @@ func TestTabPaneArrows_TogglesCommitChanges(t *testing.T) {
 	}
 }
 
-func TestRefsGraphHL_NoOp(t *testing.T) {
+func TestRefsGraphTabKeys_NoOp(t *testing.T) {
 	sendRune := func(m Model, r rune) Model {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 		return updated.(Model)

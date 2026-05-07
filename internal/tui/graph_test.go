@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -385,8 +387,8 @@ func TestGraphModelResetForReloadReturnsToLoading(t *testing.T) {
 	if !g.loaded {
 		t.Fatalf("graph should be loaded after commitsAppendedMsg")
 	}
-	if g.graphWidth != 2 {
-		t.Errorf("graphWidth = %d, want 2", g.graphWidth)
+	if want := laneColCap(40); g.graphWidth != want {
+		t.Errorf("graphWidth = %d, want %d", g.graphWidth, want)
 	}
 	g.ResetForReload()
 	if g.loaded {
@@ -403,7 +405,10 @@ func TestGraphModelResetForReloadReturnsToLoading(t *testing.T) {
 	}
 }
 
-func TestGraphModelComputesGraphWidthFromLongestPrefix(t *testing.T) {
+func TestGraphModelGraphWidthIsLaneColCapNotMaxRowWidth(t *testing.T) {
+	// Per-row tight: graphWidth is the hard cap derived from pane width
+	// (laneColCap), not the widest prefix among rows. The delegate uses
+	// it only to truncate rows whose prefix exceeds the cap.
 	g := newGraphModel()
 	g.SetSize(80, 10)
 	now := time.Now()
@@ -412,17 +417,19 @@ func TestGraphModelComputesGraphWidthFromLongestPrefix(t *testing.T) {
 		{commit: git.Commit{Hash: "b", Subject: "s2", AuthorTime: now}, commitPrefix: "| | * ", commitWidth: 6},
 		{commit: git.Commit{Hash: "c", Subject: "s3", AuthorTime: now}, commitPrefix: "|/ ", commitWidth: 3},
 	}})
-	if g.graphWidth != 6 {
-		t.Errorf("graphWidth = %d, want 6 (width of '| | * ')", g.graphWidth)
+	want := laneColCap(80)
+	if g.graphWidth != want {
+		t.Errorf("graphWidth = %d, want %d (laneColCap(80))", g.graphWidth, want)
 	}
-	if g.delegate.graphWidth != 6 {
-		t.Errorf("delegate.graphWidth = %d, want 6 (must match graphModel.graphWidth)", g.delegate.graphWidth)
+	if g.delegate.graphWidth != want {
+		t.Errorf("delegate.graphWidth = %d, want %d (must match graphModel.graphWidth)", g.delegate.graphWidth, want)
 	}
 }
 
-func TestGraphModelGraphWidthZeroWhenNoPrefix(t *testing.T) {
+func TestGraphModelGraphWidthZeroBeforeSetSize(t *testing.T) {
+	// Without SetSize the model has no pane width to compute a cap from,
+	// so graphWidth stays at zero — even after a row is appended.
 	g := newGraphModel()
-	g.SetSize(80, 10)
 	g, _ = g.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "a", Subject: "s", AuthorTime: time.Now()}},
 	}})
@@ -432,7 +439,8 @@ func TestGraphModelGraphWidthZeroWhenNoPrefix(t *testing.T) {
 }
 
 func TestLaneColCapClampsAtMax(t *testing.T) {
-	// Very wide terminal — graph must not grow past maxLaneCap × cellWidth.
+	// Very wide terminal — graph must not grow past maxLaneCap × cellWidth
+	// (16 lanes × 2 cols = 32 cols).
 	if got := laneColCap(500); got != maxLaneCap*cellWidth {
 		t.Errorf("laneColCap(500) = %d, want %d", got, maxLaneCap*cellWidth)
 	}
@@ -446,17 +454,16 @@ func TestLaneColCapClampsAtMin(t *testing.T) {
 	}
 }
 
-func TestApplyGraphCapTruncatesWhenWidthBelowMaxVisual(t *testing.T) {
+func TestApplyGraphCapTracksLaneColCapOnly(t *testing.T) {
+	// graphWidth tracks laneColCap(width) only — row prefix width is
+	// irrelevant. A wide-prefix row exceeding the cap will be truncated
+	// with "…" by buildGraphCell at render time, but doesn't move the cap.
 	g := newGraphModel()
-	// Pretend many rows produced a 20-column graph in total.
 	g.SetSize(40, 10)
 	g, _ = g.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "a", Subject: "s", AuthorTime: time.Now()},
 			commitPrefix: strings.Repeat("│", 20), commitWidth: 20},
 	}})
-	if g.maxVisualWidth != 20 {
-		t.Fatalf("maxVisualWidth = %d, want 20", g.maxVisualWidth)
-	}
 	wantCap := laneColCap(40)
 	if g.graphWidth != wantCap {
 		t.Errorf("graphWidth = %d, want %d (cap for width 40)", g.graphWidth, wantCap)
@@ -734,5 +741,101 @@ func TestGraphModelStreamDoneClearsLoadingOnEmpty(t *testing.T) {
 	}
 	if got := g.View(); got != "(no commits)" {
 		t.Errorf("after empty done, View = %q, want %q", got, "(no commits)")
+	}
+}
+
+// renderDelegateRow builds a list.Model around the given items and renders
+// the requested index through commitDelegate. Returns the ANSI-stripped
+// commit line (the second of the connector+commit pair).
+func renderDelegateRow(t *testing.T, items []list.Item, idx, outerWidth, capW int) string {
+	t.Helper()
+	d := commitDelegate{graphWidth: capW}
+	l := list.New(items, d, outerWidth, 10)
+	var buf strings.Builder
+	d.Render(&buf, l, idx, items[idx])
+	parts := strings.SplitN(buf.String(), "\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected connector + commit lines, got %q", buf.String())
+	}
+	return ansi.Strip(parts[1])
+}
+
+// visibleColOf returns the visible column where sub starts in s, or -1 if
+// sub is not present. Unlike strings.Index it counts cells (handles wide
+// runes and multi-byte ASCII glyphs like "›") rather than bytes.
+func visibleColOf(s, sub string) int {
+	i := strings.Index(s, sub)
+	if i < 0 {
+		return -1
+	}
+	return runewidth.StringWidth(s[:i])
+}
+
+func TestCommitDelegateRendersGraphPerRowTight(t *testing.T) {
+	// Two rows with very different lane counts. With per-row tight the
+	// subject starts immediately after each row's own graph width — so
+	// the two rows have *different* subject start columns. That is the
+	// whole point of dropping the max-align padding.
+	now := time.Now()
+	rowA := commitItem{
+		c:                git.Commit{Hash: "aaaa111", Subject: "row-a", AuthorTime: now},
+		commitPrefix:     "* ",
+		commitGraphWidth: 2,
+	}
+	rowB := commitItem{
+		c:                git.Commit{Hash: "bbbb222", Subject: "row-b", AuthorTime: now},
+		commitPrefix:     "| | | * ",
+		commitGraphWidth: 8,
+	}
+	items := []list.Item{rowA, rowB}
+
+	saStripped := renderDelegateRow(t, items, 0, 80, maxLaneCap*cellWidth)
+	sbStripped := renderDelegateRow(t, items, 1, 80, maxLaneCap*cellWidth)
+
+	saSubject := visibleColOf(saStripped, "row-a")
+	sbSubject := visibleColOf(sbStripped, "row-b")
+	if saSubject < 0 || sbSubject < 0 {
+		t.Fatalf("subject missing; A=%q B=%q", saStripped, sbStripped)
+	}
+	// No chips and no author here — subject sits at cursor + own graph width.
+	if want := cursorColWidth + rowA.commitGraphWidth; saSubject != want {
+		t.Errorf("row A subject col = %d, want %d", saSubject, want)
+	}
+	if want := cursorColWidth + rowB.commitGraphWidth; sbSubject != want {
+		t.Errorf("row B subject col = %d, want %d", sbSubject, want)
+	}
+	if saSubject == sbSubject {
+		t.Errorf("per-row tight: rows must not share the same subject column, both at %d", saSubject)
+	}
+}
+
+func TestCommitDelegateRightAnchorStaysAcrossRows(t *testing.T) {
+	// Right-anchor invariant: hash + time live at width - rightTail
+	// regardless of how wide each row's graph is. Per-row tight must
+	// not break this.
+	now := time.Now()
+	rowA := commitItem{
+		c:                git.Commit{Hash: "aaaa111", Subject: "row-a", AuthorTime: now},
+		commitPrefix:     "* ",
+		commitGraphWidth: 2,
+	}
+	rowB := commitItem{
+		c:                git.Commit{Hash: "bbbb222", Subject: "row-b", AuthorTime: now},
+		commitPrefix:     "| | | * ",
+		commitGraphWidth: 8,
+	}
+	items := []list.Item{rowA, rowB}
+	const width = 80
+
+	saStripped := renderDelegateRow(t, items, 0, width, maxLaneCap*cellWidth)
+	sbStripped := renderDelegateRow(t, items, 1, width, maxLaneCap*cellWidth)
+
+	saHash := visibleColOf(saStripped, "aaaa111")
+	sbHash := visibleColOf(sbStripped, "bbbb222")
+	// Right anchor is what matters: both rows must share the same hash
+	// column regardless of how wide their graph cell is. We don't pin
+	// the absolute column because list applies its own outer padding.
+	if saHash != sbHash {
+		t.Errorf("row A hash col %d != row B hash col %d (right anchor must hold across rows)", saHash, sbHash)
 	}
 }

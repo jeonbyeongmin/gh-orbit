@@ -31,7 +31,7 @@ const (
 	authorColWidth = 14
 
 	cursorColWidth = 2
-	maxLaneCap     = 8
+	maxLaneCap     = 16
 	minLaneCap     = 2
 
 	colorHash     = "214"
@@ -90,10 +90,10 @@ type graphRow struct {
 //	[connector row]   ← lane transitions arriving at this commit
 //	[commit row]      ← cursor + graph + hash + time + chips + subject
 //
-// graphWidth is the column width every row should reserve for the graph
-// segment so columns stay aligned across the visible window. For the very
-// first item (index 0) the connector is rendered as a blank line — there
-// is nothing above the most recent commit to connect to.
+// graphWidth is the hard cap (= laneColCap of the pane width); rows
+// whose own prefix is wider get truncated with "…". For the very first
+// item (index 0) the connector is rendered as a blank line — there is
+// nothing above the most recent commit to connect to.
 type commitDelegate struct {
 	graphWidth int
 }
@@ -119,8 +119,20 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		connectorWidth = 0
 	}
 
-	connectorLine := renderConnectorLine(connectorPrefix, connectorWidth, d.graphWidth, width)
-	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, d.graphWidth, width, selected)
+	// Clamp each row's column to the cap; below the cap rows render at
+	// their own prefix width so message starts right after the graph.
+	capW := d.graphWidth
+	commitColW := ci.commitGraphWidth
+	if capW > 0 && commitColW > capW {
+		commitColW = capW
+	}
+	connectorColW := connectorWidth
+	if capW > 0 && connectorColW > capW {
+		connectorColW = capW
+	}
+
+	connectorLine := renderConnectorLine(connectorPrefix, connectorWidth, connectorColW, width)
+	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, commitColW, width, selected)
 
 	_, _ = fmt.Fprint(w, connectorLine+"\n"+commitLine)
 }
@@ -275,10 +287,10 @@ func renderConnectorLine(connectorPrefix string, connectorRowWidth, graphColWidt
 	return cursor + graphCell + strings.Repeat(" ", width-used)
 }
 
-// buildGraphCell returns the styled graph segment for one row plus the actual
-// visible column width consumed. When a row's prefix exceeds the column
-// budget (cap reached or narrow terminal), the tail is replaced with "…" so
-// the truncation is visible rather than silent.
+// buildGraphCell returns the styled graph segment for one row plus the
+// actual visible column width consumed. The "…" tail surfaces only when
+// the row's prefix exceeds effectiveCol (lane count past the cap, or pane
+// too narrow) — i.e. it marks dropped lanes, not silent truncation.
 func buildGraphCell(graphPrefix string, graphRowWidth, effectiveCol int) (string, int) {
 	if effectiveCol <= 0 {
 		return "", 0
@@ -292,16 +304,15 @@ func buildGraphCell(graphPrefix string, graphRowWidth, effectiveCol int) (string
 
 // graphModel is the middle-pane sub-model.
 type graphModel struct {
-	list           list.Model
-	delegate       commitDelegate
-	width          int
-	height         int
-	err            error
-	loaded         bool
-	streaming      bool // a LogStream is in flight; loaded may already be true
-	userHasMoved   bool // true after the user has intentionally moved the cursor (j/k/g/G/etc)
-	graphWidth     int  // graph column width currently in effect (after cap)
-	maxVisualWidth int  // widest graphPrefix among loaded rows
+	list         list.Model
+	delegate     commitDelegate
+	width        int
+	height       int
+	err          error
+	loaded       bool
+	streaming    bool // a LogStream is in flight; loaded may already be true
+	userHasMoved bool // true after the user has intentionally moved the cursor (j/k/g/G/etc)
+	graphWidth   int  // hard cap = laneColCap(width); rows render per-row tight up to this cap
 }
 
 func newGraphModel() graphModel {
@@ -506,10 +517,10 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 	return g, nil
 }
 
-// appendCommitItems folds graphRows into a list.Item slice while tracking
-// the widest graph prefix seen. Returns the (possibly resliced) items and
-// the running max so callers can decide whether maxVisualWidth changed.
-func appendCommitItems(dst []list.Item, rows []graphRow, maxW int) ([]list.Item, int) {
+// appendCommitItems folds graphRows into a list.Item slice. Per-row tight
+// rendering means the delegate doesn't need to know the widest prefix —
+// each row carries its own commitGraphWidth / connectorWidth.
+func appendCommitItems(dst []list.Item, rows []graphRow) []list.Item {
 	for _, r := range rows {
 		dst = append(dst, commitItem{
 			c:                r.commit,
@@ -518,14 +529,8 @@ func appendCommitItems(dst []list.Item, rows []graphRow, maxW int) ([]list.Item,
 			commitPrefix:     r.commitPrefix,
 			commitGraphWidth: r.commitWidth,
 		})
-		if r.commitWidth > maxW {
-			maxW = r.commitWidth
-		}
-		if r.connectorWidth > maxW {
-			maxW = r.connectorWidth
-		}
 	}
-	return dst, maxW
+	return dst
 }
 
 // handleAppended folds one streaming batch into the list. First batch:
@@ -533,8 +538,7 @@ func appendCommitItems(dst []list.Item, rows []graphRow, maxW int) ([]list.Item,
 // append, with tail-follow gated by userHasMoved (PR #14 회귀 가드).
 func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 	if !g.loaded {
-		items, maxW := appendCommitItems(make([]list.Item, 0, len(m.rows)), m.rows, 0)
-		g.maxVisualWidth = maxW
+		items := appendCommitItems(make([]list.Item, 0, len(m.rows)), m.rows)
 		g.applyGraphCap()
 		setCmd := g.list.SetItems(items)
 		g.loaded = true
@@ -560,11 +564,7 @@ func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 
 	items := make([]list.Item, 0, prevLen+len(m.rows))
 	items = append(items, prev...)
-	items, maxW := appendCommitItems(items, m.rows, g.maxVisualWidth)
-	if maxW != g.maxVisualWidth {
-		g.maxVisualWidth = maxW
-		g.applyGraphCap()
-	}
+	items = appendCommitItems(items, m.rows)
 	setCmd := g.list.SetItems(items)
 	g.streaming = !m.done
 
@@ -608,15 +608,14 @@ func (g *graphModel) SetSize(w, h int) {
 	g.applyGraphCap()
 }
 
-// applyGraphCap reconciles graphWidth with both the row data and the current
-// pane width: take the smaller of "widest row prefix" and "lane cap for this
-// width", then push the value down into the delegate.
+// applyGraphCap derives the per-row hard cap from the current pane width
+// via laneColCap and pushes it into the delegate. Per-row tight rendering
+// means rows whose prefix is narrower than the cap render at their own
+// width — the cap only kicks in to truncate prefixes that exceed it.
 func (g *graphModel) applyGraphCap() {
-	cap := g.maxVisualWidth
+	cap := 0
 	if g.width > 0 {
-		if c := laneColCap(g.width); cap > c {
-			cap = c
-		}
+		cap = laneColCap(g.width)
 	}
 	if cap == g.graphWidth {
 		return
@@ -636,7 +635,6 @@ func (g *graphModel) ResetForReload() tea.Cmd {
 	g.streaming = false
 	g.userHasMoved = false
 	g.err = nil
-	g.maxVisualWidth = 0
 	g.graphWidth = 0
 	g.delegate.graphWidth = 0
 	g.list.SetDelegate(g.delegate)

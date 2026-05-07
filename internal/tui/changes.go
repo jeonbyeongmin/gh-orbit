@@ -112,13 +112,8 @@ func (c *changesModel) SetFiles(hash string, files []git.FileStat) tea.Cmd {
 	c.hash = hash
 	c.loadingFiles = false
 	c.statErr = nil
-	if c.cursor >= len(files) {
+	if c.cursor >= len(files) || c.cursor < 0 {
 		c.cursor = 0
-		c.fileListYOffset = 0
-	}
-	if c.cursor < 0 {
-		c.cursor = 0
-		c.fileListYOffset = 0
 	}
 	if len(files) == 0 {
 		c.fileListYOffset = 0

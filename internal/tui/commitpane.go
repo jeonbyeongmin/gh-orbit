@@ -17,8 +17,6 @@ const commitDetailTimeout = 30 * time.Second
 // commitDetailModel renders the Commit tab body — author/committer identity,
 // dates, parents, sign-status, and the full commit body. The reqID guard
 // rejects responses for commits the user has already navigated away from.
-// Content is hosted in a bubbles/viewport so long bodies (or many metadata
-// rows) scroll instead of being clipped by the tab area.
 type commitDetailModel struct {
 	hash    string
 	detail  git.Detail
@@ -27,28 +25,30 @@ type commitDetailModel struct {
 	err     error
 	reqID   uint64
 
-	width, height int
-	viewport      viewport.Model
+	width    int
+	viewport viewport.Model
 }
 
 func newCommitDetailModel() commitDetailModel {
 	return commitDetailModel{viewport: viewport.New(0, 0)}
 }
 
+// SetSize updates the viewport dimensions. The body is only re-wrapped when
+// the width actually changes — height-only changes (the common case for
+// ctrl+↑/↓ split adjustments) skip the lipgloss soft-wrap + ANSI re-parse,
+// which is the hot path the user holds the resize keys on.
 func (c *commitDetailModel) SetSize(w, h int) {
+	widthChanged := w != c.width
 	c.width = w
-	c.height = h
 	c.viewport.Width = w
 	c.viewport.Height = h
-	if c.loaded {
+	if c.loaded && widthChanged {
 		c.viewport.SetContent(c.renderContent())
 	}
 }
 
 // MarkLoading clears prior content and stamps the request id so the Commit
-// tab tracks the same hash lifecycle as the Changes tab. The viewport is
-// reset to the top so a long previous body doesn't leave the new commit
-// scrolled into nothing.
+// tab tracks the same hash lifecycle as the Changes tab.
 func (c *commitDetailModel) MarkLoading(hash string, reqID uint64) {
 	c.hash = hash
 	c.detail = git.Detail{}

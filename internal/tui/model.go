@@ -325,21 +325,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.changes.ScrollPatch(msg)
 				}
 				return m, nil
-			case "j", "k", "down", "up", "pgdown", "pgup":
-				// Commit tab scrolls its body viewport; Changes tab moves
-				// the file-list cursor (which triggers a fresh patch load
-				// inside changesModel.Update). pgdown/pgup live here, not
-				// with ctrl+d/u above, because the Commit tab is supposed
-				// to honor them too.
-				if m.tabs.Active() == tabCommit {
-					return m, m.commitDetail.ScrollContent(msg)
-				}
-				var cmd tea.Cmd
-				m.changes, cmd = m.changes.Update(msg)
-				return m, cmd
-			case "g", "G":
-				// Commit tab: jump-to-top/bottom of the viewport. Changes
-				// tab: jump file-list cursor to first/last entry.
+			case "j", "k", "down", "up", "pgdown", "pgup", "g", "G":
+				// Commit tab → body viewport scroll; Changes tab → file-list
+				// cursor (which loads a fresh patch inside changesModel.Update).
+				// pgdown/pgup live here rather than with ctrl+d/u above so the
+				// Commit tab honors them too.
 				if m.tabs.Active() == tabCommit {
 					return m, m.commitDetail.ScrollContent(msg)
 				}

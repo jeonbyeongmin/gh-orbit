@@ -31,6 +31,31 @@ func LogPath() (string, error) {
 	return filepath.Join(dir, "log"), nil
 }
 
+// ConfigDir returns the directory where gh-orbit looks for the user's
+// preferences file. Follows XDG: $XDG_CONFIG_HOME/gh-orbit, falling back to
+// ~/.config/gh-orbit. Unlike StateDir / LogPath, callers do not create the
+// directory eagerly — config is optional and a missing file means "use
+// defaults".
+func ConfigDir() (string, error) {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, appName), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", appName), nil
+}
+
+// ConfigPath returns the absolute path of the TOML preferences file.
+func ConfigPath() (string, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.toml"), nil
+}
+
 // OpenLog ensures the state directory exists and opens the log file for
 // append. The TUI owns stdout/stderr while running, so all log output must
 // go through this file.

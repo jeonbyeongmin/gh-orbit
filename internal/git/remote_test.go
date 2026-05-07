@@ -76,7 +76,7 @@ func TestPullReturnsErrorWithStderr(t *testing.T) {
 		t.Skip("git not available")
 	}
 	dir := t.TempDir()
-	_, err := Pull(context.Background(), dir, PullStrategyFFOnly)
+	err := Pull(context.Background(), dir, PullStrategyFFOnly)
 	if err == nil {
 		t.Fatal("expected error running git pull outside a repo")
 	}
@@ -118,7 +118,7 @@ func TestPullIntegrationFastForward(t *testing.T) {
 	gitRun(t, other, "commit", "--allow-empty", "-m", "second from other")
 	gitRun(t, other, "push", "origin", "main")
 
-	if _, err := Pull(context.Background(), work, PullStrategyFFOnly); err != nil {
+	if err := Pull(context.Background(), work, PullStrategyFFOnly); err != nil {
 		t.Fatalf("Pull happy path: %v", err)
 	}
 }
@@ -170,7 +170,7 @@ func TestPullIntegrationConflictWraps(t *testing.T) {
 	gitRun(t, work, "add", "f.txt")
 	gitRun(t, work, "commit", "-m", "local change")
 
-	_, err := Pull(context.Background(), work, PullStrategyMerge)
+	err := Pull(context.Background(), work, PullStrategyMerge)
 	if err == nil {
 		t.Fatal("expected pull conflict error")
 	}

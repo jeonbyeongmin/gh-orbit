@@ -42,6 +42,12 @@ const (
 // commit list shows every local/remote/tag from the start, Fork-style.
 const refsAllSentinel = "--all"
 
+// pendingHEADSentinel marks pendingHEADHash as "armed but the real hash
+// hasn't arrived yet". Replaced with HEAD's commit hash by the next
+// refsLoadedMsg. Picks an obviously-not-a-hash value so a misbehaving
+// refsLoadedMsg can never accidentally collide.
+const pendingHEADSentinel = "<pending>"
+
 // viewMode toggles between the 3-pane layout and the full-screen patch overlay
 // that `d` opens. graph cursor state is preserved across the toggle so esc
 // returns the user to exactly where they were.
@@ -94,12 +100,11 @@ type Model struct {
 	// "merge" / "rebase" / ""). Loaded once in New() from ConfigPath; an
 	// empty string means "let git config / final fallback decide".
 	pullPrefStrategy string
-	// pendingHEADJump is set when a successful pull asked the cursor to
-	// jump to HEAD. Cleared by tryHEADJump once the post-reload refs and
-	// commits arrive and the row is found.
-	pendingHEADJump bool
-	// pendingHEADHash is the commit hash of HEAD captured from the
-	// post-pull refsLoadedMsg, used by tryHEADJump.
+	// pendingHEADHash drives the post-pull cursor jump. pullSucceededMsg
+	// arms it with the sentinel pendingHEADSentinel; the post-reload
+	// refsLoadedMsg replaces the sentinel with HEAD's actual hash;
+	// tryHEADJump (called from both refsLoadedMsg and commitsStreamDoneMsg)
+	// clears it once the row lands. Empty string means "no pending jump".
 	pendingHEADHash string
 	// status is the one-line message rendered next to the help line:
 	// "fetching…", "fetch: done", "fetch failed: …". Empty hides it.
@@ -185,14 +190,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamCancel = nil
 		var cmd tea.Cmd
 		m.graph, cmd = m.graph.Update(msg)
-		if m.pendingHEADJump {
-			m = m.tryHEADJump()
-		}
+		m = m.tryHEADJump()
 		return m, cmd
 
-	case refsLoadedMsg:
-		if m.pendingHEADJump && m.pendingHEADHash == "" {
-			for _, r := range msg.refs {
+	case refsLoadedMsg, refsLoadFailedMsg:
+		if loaded, ok := msg.(refsLoadedMsg); ok && m.pendingHEADHash == pendingHEADSentinel {
+			for _, r := range loaded.refs {
 				if r.IsHead {
 					m.pendingHEADHash = r.ObjectName
 					break
@@ -200,11 +203,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m = m.tryHEADJump()
 		}
-		var cmd tea.Cmd
-		m.refs, cmd = m.refs.Update(msg)
-		return m, cmd
-
-	case refsLoadFailedMsg:
 		var cmd tea.Cmd
 		m.refs, cmd = m.refs.Update(msg)
 		return m, cmd
@@ -275,35 +273,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case fetchSucceededMsg:
 		m.fetchInFlight = false
-		// While a pull is still in flight its "pulling…" status outranks
-		// fetch's outcome — the user pressed P after F and cares about pull.
-		if !m.pullInFlight {
-			m.status = "fetch: done"
-			m.statusStyle = statusOkS
+		// While a pull is still in flight, its "pulling…" status outranks
+		// fetch's outcome and the pending pullSucceededMsg / pullConflictMsg
+		// will reload. Skip status overwrite + the redundant reload.
+		if m.pullInFlight {
+			return m, nil
 		}
+		m.status = "fetch: done"
+		m.statusStyle = statusOkS
 		return m, m.reloadCmd()
 
 	case fetchFailedMsg:
 		m.fetchInFlight = false
-		if !m.pullInFlight {
-			m.status = "fetch failed: " + msg.err.Error()
-			m.statusStyle = statusErrS
+		if m.pullInFlight {
+			return m, nil
 		}
+		m.status = "fetch failed: " + msg.err.Error()
+		m.statusStyle = statusErrS
 		return m, nil
 
 	case pullSucceededMsg:
 		m.pullInFlight = false
 		m.status = "pull: done"
 		m.statusStyle = statusOkS
-		m.pendingHEADJump = true
-		m.pendingHEADHash = ""
+		m.pendingHEADHash = pendingHEADSentinel
 		return m, m.reloadCmd()
 
 	case pullConflictMsg:
 		m.pullInFlight = false
 		m.status = "pull: CONFLICT — resolve in your terminal"
 		m.statusStyle = statusErrS
-		// reload so refs (HEAD may now sit on a half-merged commit) and the
+		// Reload so refs (HEAD may now sit on a half-merged commit) and the
 		// graph reflect post-pull state. No HEAD jump — user is mid-conflict.
 		return m, m.reloadCmd()
 
@@ -352,7 +352,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pullInFlight = true
 			m.status = "pulling…"
 			m.statusStyle = statusBusyS
-			return m, pullCmdFactory("", m.pullPrefStrategy)
+			return m, pullCmd("", m.pullPrefStrategy)
 		case "r":
 			return m, m.reloadCmd()
 		case "ctrl+up":
@@ -492,13 +492,12 @@ func (m *Model) beginDiffStat(hash string) tea.Cmd {
 // captured from the post-pull refsLoadedMsg. JumpToHash returns false until
 // the matching commit has actually streamed in, so the caller invokes this
 // from both refsLoadedMsg and commitsStreamDoneMsg — whichever arrives
-// second wins. Clears both pending flags only on a successful jump.
+// second wins. Empty / sentinel pendingHEADHash → no-op.
 func (m Model) tryHEADJump() Model {
-	if m.pendingHEADHash == "" {
+	if m.pendingHEADHash == "" || m.pendingHEADHash == pendingHEADSentinel {
 		return m
 	}
 	if m.graph.JumpToHash(m.pendingHEADHash) {
-		m.pendingHEADJump = false
 		m.pendingHEADHash = ""
 	}
 	return m

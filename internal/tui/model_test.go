@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -474,12 +475,6 @@ func TestModelFKeyDispatchesFetch(t *testing.T) {
 }
 
 func TestModelPKeyDispatchesPull(t *testing.T) {
-	prev := pullCmdFactory
-	defer func() { pullCmdFactory = prev }()
-	pullCmdFactory = func(string, string) tea.Cmd {
-		return func() tea.Msg { return nil }
-	}
-
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -507,12 +502,6 @@ func TestModelPKeyDispatchesPull(t *testing.T) {
 }
 
 func TestModelPullSucceededReloadsAndJumpsHEAD(t *testing.T) {
-	prev := pullCmdFactory
-	defer func() { pullCmdFactory = prev }()
-	pullCmdFactory = func(string, string) tea.Cmd {
-		return func() tea.Msg { return nil }
-	}
-
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -528,8 +517,8 @@ func TestModelPullSucceededReloadsAndJumpsHEAD(t *testing.T) {
 	if m.status != "pull: done" {
 		t.Errorf("status = %q, want pull: done", m.status)
 	}
-	if !m.pendingHEADJump {
-		t.Error("pullSucceededMsg should arm pendingHEADJump")
+	if m.pendingHEADHash != pendingHEADSentinel {
+		t.Errorf("pullSucceededMsg should arm pendingHEADHash with sentinel, got %q", m.pendingHEADHash)
 	}
 	if cmd == nil {
 		t.Fatal("pullSucceededMsg should batch a refs+log reload cmd")
@@ -541,6 +530,8 @@ func TestModelPullSucceededReloadsAndJumpsHEAD(t *testing.T) {
 		{FullName: "refs/heads/main", ShortName: "main", Kind: git.RefKindLocal, ObjectName: "deadbee", IsHead: true},
 	}})
 	m = updated.(Model)
+	// Before the matching commit streams in, the hash is captured but the
+	// jump can't land yet — so pendingHEADHash holds the real hash.
 	if m.pendingHEADHash != "deadbee" {
 		t.Errorf("pendingHEADHash = %q, want deadbee", m.pendingHEADHash)
 	}
@@ -553,8 +544,8 @@ func TestModelPullSucceededReloadsAndJumpsHEAD(t *testing.T) {
 	updated, _ = m.Update(commitsStreamDoneMsg{reqID: postReqID})
 	m = updated.(Model)
 
-	if m.pendingHEADJump {
-		t.Error("pendingHEADJump should clear after the row is found")
+	if m.pendingHEADHash != "" {
+		t.Errorf("pendingHEADHash should clear after the row is found, got %q", m.pendingHEADHash)
 	}
 	c, ok := m.graph.Selected()
 	if !ok {
@@ -570,11 +561,6 @@ func TestModelPullConflictSurfacesMessage(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	prev := pullCmdFactory
-	defer func() { pullCmdFactory = prev }()
-	pullCmdFactory = func(string, string) tea.Cmd {
-		return func() tea.Msg { return nil }
-	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
 	m = updated.(Model)
 
@@ -595,8 +581,8 @@ func TestModelPullConflictSurfacesMessage(t *testing.T) {
 	if cmd == nil {
 		t.Error("pullConflictMsg should still trigger a refs+log reload")
 	}
-	if m.pendingHEADJump {
-		t.Error("conflict should not arm a HEAD jump — user is mid-merge")
+	if m.pendingHEADHash != "" {
+		t.Errorf("conflict should not arm a HEAD jump — user is mid-merge, got pendingHEADHash=%q", m.pendingHEADHash)
 	}
 }
 
@@ -605,11 +591,6 @@ func TestModelPullFailedSurfacesError(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	prev := pullCmdFactory
-	defer func() { pullCmdFactory = prev }()
-	pullCmdFactory = func(string, string) tea.Cmd {
-		return func() tea.Msg { return nil }
-	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
 	m = updated.(Model)
 
@@ -624,18 +605,12 @@ func TestModelPullFailedSurfacesError(t *testing.T) {
 	if cmd != nil {
 		t.Error("pull failure should not auto-reload")
 	}
-	if m.pendingHEADJump {
-		t.Error("failure should not arm a HEAD jump")
+	if m.pendingHEADHash != "" {
+		t.Errorf("failure should not arm a HEAD jump, got pendingHEADHash=%q", m.pendingHEADHash)
 	}
 }
 
 func TestModelPullAndFetchConcurrent(t *testing.T) {
-	prev := pullCmdFactory
-	defer func() { pullCmdFactory = prev }()
-	pullCmdFactory = func(string, string) tea.Cmd {
-		return func() tea.Msg { return nil }
-	}
-
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -651,7 +626,7 @@ func TestModelPullAndFetchConcurrent(t *testing.T) {
 		t.Errorf("status = %q, want pulling… (P should overwrite fetching…)", m.status)
 	}
 
-	updated, _ = m.Update(fetchSucceededMsg{})
+	updated, cmd := m.Update(fetchSucceededMsg{})
 	m = updated.(Model)
 	if m.fetchInFlight {
 		t.Error("fetchInFlight should clear after fetchSucceededMsg")
@@ -659,31 +634,44 @@ func TestModelPullAndFetchConcurrent(t *testing.T) {
 	if m.status != "pulling…" {
 		t.Errorf("status = %q, want pulling… preserved while pull is still in flight", m.status)
 	}
+	if cmd != nil {
+		t.Error("fetch success during pull-in-flight should skip its reload — pull's own reload will run")
+	}
 }
 
 func TestModelPullPrefStrategyPropagatesToCmd(t *testing.T) {
-	prev := pullCmdFactory
-	defer func() { pullCmdFactory = prev }()
+	prevResolve := pullResolveStrategy
+	prevExec := pullExec
+	defer func() {
+		pullResolveStrategy = prevResolve
+		pullExec = prevExec
+	}()
 	var seenDir, seenPrefs string
-	pullCmdFactory = func(dir string, prefs string) tea.Cmd {
+	pullResolveStrategy = func(_ context.Context, dir, prefs string) (git.PullStrategy, error) {
 		seenDir = dir
 		seenPrefs = prefs
-		return func() tea.Msg { return nil }
+		return git.PullStrategyFFOnly, nil
 	}
+	pullExec = func(context.Context, string, git.PullStrategy) error { return nil }
 
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	m.pullPrefStrategy = "rebase"
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
 	_ = updated.(Model)
+	if cmd == nil {
+		t.Fatal("P should return a pullCmd")
+	}
+	// Invoke the cmd so the stubbed pullResolveStrategy runs.
+	_ = cmd()
 
 	if seenPrefs != "rebase" {
-		t.Errorf("pullCmdFactory got prefs=%q, want rebase", seenPrefs)
+		t.Errorf("pullResolveStrategy got prefs=%q, want rebase", seenPrefs)
 	}
 	if seenDir != "" {
-		t.Errorf("pullCmdFactory got dir=%q, want empty (cwd)", seenDir)
+		t.Errorf("pullResolveStrategy got dir=%q, want empty (cwd)", seenDir)
 	}
 }
 

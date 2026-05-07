@@ -4,28 +4,25 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os/exec"
 	"strings"
 	"time"
 )
 
 // pullStrategyConfigTimeout caps the `git config --get` lookups used while
-// resolving the pull strategy. The fetch / pull commands have their own
-// generous budgets; this is just a guard against a hung config read.
+// resolving the pull strategy. Independent of fetch / pull's own timeouts.
 const pullStrategyConfigTimeout = 5 * time.Second
 
 // ResolvePullStrategy decides which PullStrategy to apply, in priority order:
 //
 //  1. user prefs ("ff-only" / "merge" / "rebase")
 //  2. `git config --get pull.rebase` == "true"  → rebase
-//  3. `git config --get pull.ff`     == "only"  → ff-only
-//  4. final fallback: ff-only
+//  3. final fallback: ff-only
 //
-// `git config --get` returns exit code 1 with empty stdout when the key is
-// unset; we treat that as "no preference" and fall through. Any other
-// non-zero exit (≥ 2) bubbles up as an error so callers can surface a real
-// problem instead of silently picking ff-only.
+// `pull.ff` is intentionally not consulted: the only setting (`only`) maps to
+// the same final fallback, so reading it would be a subprocess for no
+// behavior change. Restore the read here when the fallback shifts away from
+// ff-only.
 func ResolvePullStrategy(ctx context.Context, dir string, prefs string) (PullStrategy, error) {
 	if s, ok := pullStrategyFromPrefs(prefs); ok {
 		return s, nil
@@ -41,25 +38,16 @@ func ResolvePullStrategy(ctx context.Context, dir string, prefs string) (PullStr
 	if rebase == "true" {
 		return PullStrategyRebase, nil
 	}
-
-	ff, err := readGitConfig(cfgCtx, dir, "pull.ff")
-	if err != nil {
-		return PullStrategyFFOnly, err
-	}
-	if ff == "only" {
-		return PullStrategyFFOnly, nil
-	}
-
 	return PullStrategyFFOnly, nil
 }
 
 func pullStrategyFromPrefs(prefs string) (PullStrategy, bool) {
 	switch strings.TrimSpace(prefs) {
-	case "ff-only":
+	case PrefStrategyFFOnly:
 		return PullStrategyFFOnly, true
-	case "merge":
+	case PrefStrategyMerge:
 		return PullStrategyMerge, true
-	case "rebase":
+	case PrefStrategyRebase:
 		return PullStrategyRebase, true
 	default:
 		return PullStrategyFFOnly, false
@@ -67,10 +55,11 @@ func pullStrategyFromPrefs(prefs string) (PullStrategy, bool) {
 }
 
 // readGitConfig returns the value of `git config --get <key>` in dir. Missing
-// key → empty string + nil error. Any other failure → wrapped error with
-// stderr.
+// key (`git config` exits 1 with empty stdout) → empty string + nil error.
+// Any other failure → wrapped error with stderr.
 func readGitConfig(ctx context.Context, dir, key string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", key)
+	cmd := exec.CommandContext(ctx, "git", "config", "--get", key)
+	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -80,12 +69,7 @@ func readGitConfig(ctx context.Context, dir, key string) (string, error) {
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		// missing key — git config conventional "no such entry"
 		return "", nil
 	}
-	msg := strings.TrimSpace(stderr.String())
-	if msg == "" {
-		return "", fmt.Errorf("git config --get %s: %w", key, err)
-	}
-	return "", fmt.Errorf("git config --get %s: %w: %s", key, err, msg)
+	return "", wrapGitErr("git config --get "+key, err, stderr.String())
 }

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 
 	"github.com/BurntSushi/toml"
 )
@@ -35,7 +34,7 @@ func LoadPrefs() (Prefs, error) {
 	}
 	var prefs Prefs
 	if _, err := toml.DecodeFile(path, &prefs); err != nil {
-		if errors.Is(err, fs.ErrNotExist) || os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return Prefs{}, nil
 		}
 		return Prefs{}, fmt.Errorf("decode %s: %w", path, err)

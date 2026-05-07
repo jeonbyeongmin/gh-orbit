@@ -4,7 +4,6 @@ package tui
 
 import (
 	"context"
-	"strings"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
@@ -65,11 +64,6 @@ const (
 	// keys, and every key except s/a/esc/ctrl+c is swallowed.
 	viewModeCheckoutConfirm
 )
-
-// pendingCheckoutZero is the empty value of pendingCheckout — explicit so
-// callers don't need to construct an unnamed struct literal in cleanup
-// paths after the modal closes.
-var pendingCheckoutZero = pendingCheckout{}
 
 // pendingCheckout remembers what the user was trying to check out so the
 // "[s]tash & checkout" branch in the confirm modal can re-issue the same
@@ -238,19 +232,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case refCheckoutRequestedMsg:
-		name := localBranchNameFromRef(msg.ref)
 		var cmd tea.Cmd
-		m, cmd = m.beginCheckout(name, false)
+		m, cmd = m.beginCheckout(git.CheckoutTarget(msg.ref), false)
 		return m, cmd
 
 	case checkoutSucceededMsg:
 		m.checkoutInFlight = false
-		m.pendingCheckout = pendingCheckoutZero
-		if msg.detached {
-			m.status = "checkout: detached at " + shortHash(msg.ref)
-		} else {
-			m.status = "checkout: " + msg.ref
-		}
+		m.pendingCheckout = pendingCheckout{}
+		m.status = checkoutLabel(msg.ref, msg.detached)
 		m.statusStyle = statusOkS
 		m.pendingHEADHash = pendingHEADSentinel
 		return m, m.reloadCmd()
@@ -267,21 +256,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case checkoutFailedMsg:
 		m.checkoutInFlight = false
-		m.pendingCheckout = pendingCheckoutZero
+		m.pendingCheckout = pendingCheckout{}
 		m.status = "checkout failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
 
 	case stashThenCheckoutMsg:
 		m.checkoutInFlight = false
-		m.pendingCheckout = pendingCheckoutZero
-		var label string
-		if msg.detached {
-			label = "checkout: detached at " + shortHash(msg.ref)
-		} else {
-			label = "checkout: " + msg.ref
-		}
-		m.status = label + " (stashed before checkout: " + msg.stashLabel + ")"
+		m.pendingCheckout = pendingCheckout{}
+		m.status = checkoutLabel(msg.ref, msg.detached) +
+			" (stashed before checkout: " + msg.stashLabel + ")"
 		m.statusStyle = statusOkS
 		m.pendingHEADHash = pendingHEADSentinel
 		return m, m.reloadCmd()
@@ -420,7 +404,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, stashThenCheckoutCmd("", ref, detached)
 			case "a", "esc":
 				m.mode = viewModeNormal
-				m.pendingCheckout = pendingCheckoutZero
+				m.pendingCheckout = pendingCheckout{}
 				m.status = "checkout: aborted"
 				m.statusStyle = statusOkS
 				return m, nil
@@ -469,11 +453,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// sub-model. Reserved for a future Rebase action.
 			return m, nil
 		case "C":
-			// Capital C is the graph-pane sibling of refs Enter: detach HEAD
-			// onto the cursor commit. Gated on focus so a stray 'C' typed
-			// while the refs pane is focused doesn't accidentally detach the
-			// user — there's a separate refs Enter path for named-ref
-			// checkout already.
+			// Gate on graph focus so a stray 'C' on the refs pane doesn't detach.
 			if m.focused != paneGraph {
 				return m, nil
 			}
@@ -603,27 +583,19 @@ func (m Model) beginCheckout(ref string, detached bool) (Model, tea.Cmd) {
 	}
 	m.checkoutInFlight = true
 	m.pendingCheckout = pendingCheckout{ref: ref, detached: detached}
-	if detached {
-		m.status = "checkout: detached at " + shortHash(ref) + " …"
-	} else {
-		m.status = "checkout: " + ref + " …"
-	}
+	m.status = checkoutLabel(ref, detached) + " …"
 	m.statusStyle = statusBusyS
 	return m, checkoutCmd("", ref, detached)
 }
 
-// localBranchNameFromRef picks the right `git checkout` argument for a
-// refs-pane Enter. Local branches and tags pass through; remote-tracking
-// refs ("origin/feat") get the first slash-segment stripped so git's dwim
-// rule creates a local tracking branch.
-func localBranchNameFromRef(r git.Ref) string {
-	if r.Kind != git.RefKindRemote {
-		return r.ShortName
+// checkoutLabel renders the user-facing "checkout: …" prefix shared by the
+// busy / success / stash-then-success status lines. Detached checkouts
+// short-hash the ref since the user picked a commit, not a name.
+func checkoutLabel(ref string, detached bool) string {
+	if detached {
+		return "checkout: detached at " + shortHash(ref)
 	}
-	if i := strings.IndexByte(r.ShortName, '/'); i >= 0 {
-		return r.ShortName[i+1:]
-	}
-	return r.ShortName
+	return "checkout: " + ref
 }
 
 // beginDiffStat advances the request id, marks both Changes and Commit
@@ -772,14 +744,9 @@ var (
 	helpRenderedDiffWindow = help.Render(helpTextDiffWindow)
 )
 
-// confirmPromptS is the warning-tinted style for the dirty-tree checkout
-// modal prompt. Bold so the user notices the screen is gated even though
-// the 3-pane background looks normal. statusErrS would also work, but the
-// bold weight is what signals "this is an active prompt" rather than "an
-// error message just landed".
-var confirmPromptS = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("214")).
-	Bold(true)
+// confirmPromptS reuses the busy color and adds bold so the modal prompt
+// reads as "active dialog" rather than "an error just landed".
+var confirmPromptS = statusBusyS.Bold(true)
 
 func (m Model) View() string {
 	if m.width == 0 {

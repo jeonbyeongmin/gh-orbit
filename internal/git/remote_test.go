@@ -123,6 +123,28 @@ func TestPullIntegrationFastForward(t *testing.T) {
 	}
 }
 
+func TestCheckoutTarget(t *testing.T) {
+	cases := []struct {
+		name string
+		ref  Ref
+		want string
+	}{
+		{"local", Ref{ShortName: "main", Kind: RefKindLocal}, "main"},
+		{"local with slash", Ref{ShortName: "feat/foo", Kind: RefKindLocal}, "feat/foo"},
+		{"tag", Ref{ShortName: "v1.0", Kind: RefKindTag}, "v1.0"},
+		{"remote single segment", Ref{ShortName: "origin/feat", Kind: RefKindRemote}, "feat"},
+		{"remote nested", Ref{ShortName: "origin/feat/foo", Kind: RefKindRemote}, "feat/foo"},
+		{"remote no slash (degenerate)", Ref{ShortName: "weird", Kind: RefKindRemote}, "weird"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := CheckoutTarget(c.ref); got != c.want {
+				t.Errorf("CheckoutTarget(%+v) = %q, want %q", c.ref, got, c.want)
+			}
+		})
+	}
+}
+
 func TestCheckoutReturnsErrorOutsideRepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -224,9 +246,7 @@ func TestCheckoutIntegrationRemoteTrackingDWIM(t *testing.T) {
 
 	gitRun(t, work, "fetch", "origin")
 	// dwim: "git checkout feat" with no local branch but exactly one
-	// "<remote>/feat" creates a local tracking branch. The TUI is expected
-	// to strip the "origin/" prefix from a Kind=RefKindRemote ShortName
-	// before calling Checkout — that contract is exercised here.
+	// "<remote>/feat" creates a local tracking branch.
 	if err := Checkout(context.Background(), work, "feat"); err != nil {
 		t.Fatalf("dwim checkout: %v", err)
 	}

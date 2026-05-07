@@ -1,6 +1,3 @@
-// Background `git checkout` (and the stash-then-checkout combo) dispatch.
-// Same tea.Cmd → tea.Msg pattern as fetchCmd / pullCmd so the TUI never
-// blocks on the index.lock contention checkout can incur.
 package tui
 
 import (

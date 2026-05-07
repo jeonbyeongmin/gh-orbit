@@ -1327,25 +1327,3 @@ func TestModelGraphCNoOpWhenRefsFocused(t *testing.T) {
 		t.Error("checkoutInFlight should not latch on refs-focused 'C'")
 	}
 }
-
-func TestModelLocalBranchNameFromRef(t *testing.T) {
-	cases := []struct {
-		name string
-		ref  git.Ref
-		want string
-	}{
-		{"local", git.Ref{ShortName: "main", Kind: git.RefKindLocal}, "main"},
-		{"local with slash", git.Ref{ShortName: "feat/foo", Kind: git.RefKindLocal}, "feat/foo"},
-		{"tag", git.Ref{ShortName: "v1.0", Kind: git.RefKindTag}, "v1.0"},
-		{"remote single", git.Ref{ShortName: "origin/feat", Kind: git.RefKindRemote}, "feat"},
-		{"remote nested", git.Ref{ShortName: "origin/feat/foo", Kind: git.RefKindRemote}, "feat/foo"},
-		{"remote no slash (degenerate)", git.Ref{ShortName: "weird", Kind: git.RefKindRemote}, "weird"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := localBranchNameFromRef(c.ref); got != c.want {
-				t.Errorf("localBranchNameFromRef(%+v) = %q, want %q", c.ref, got, c.want)
-			}
-		})
-	}
-}

@@ -34,8 +34,7 @@ type refsLoadedMsg struct{ refs []git.Ref }
 type refsLoadFailedMsg struct{ err error }
 
 // refSelectedMsg is emitted when the user presses 'o' on a ref. The root
-// model uses it to jump the graph cursor onto the ref's tip commit. (This
-// used to be Enter's job; Enter now triggers checkout.)
+// model uses it to jump the graph cursor onto the ref's tip commit.
 type refSelectedMsg struct{ ref git.Ref }
 
 // refCheckoutRequestedMsg is emitted when the user presses Enter on a ref.

@@ -120,12 +120,24 @@ func Pull(ctx context.Context, dir string, strategy PullStrategy) error {
 	return wrapGitErr("git pull", runErr, msg)
 }
 
-// Checkout runs `git checkout <name>`. Pass the *local* branch name the
-// user wants to end up on — for a remote-tracking ref the caller should
-// strip the "<remote>/" prefix first, so git's dwim rule kicks in and
-// creates a local tracking branch (e.g. pass "feat" not "origin/feat").
-// Tags pass through and yield a detached HEAD, which is the expected
-// behavior when the user picks a tag.
+// CheckoutTarget translates a Ref into the local-name argument that
+// Checkout expects. Remote-tracking refs lose their "<remote>/" segment
+// so git's dwim rule creates a local tracking branch; local branches and
+// tags pass through. Living in internal/git keeps the per-Kind rule next
+// to Checkout itself rather than leaking it into the TUI layer.
+func CheckoutTarget(ref Ref) string {
+	if ref.Kind != RefKindRemote {
+		return ref.ShortName
+	}
+	if i := strings.IndexByte(ref.ShortName, '/'); i >= 0 {
+		return ref.ShortName[i+1:]
+	}
+	return ref.ShortName
+}
+
+// Checkout runs `git checkout <name>`. Pass CheckoutTarget(ref) for a
+// refs-pane selection so dwim picks up remote-tracking refs; tags pass
+// through to a detached HEAD on the tagged commit.
 //
 // Dirty working tree errors (git refuses with "Please commit your changes
 // or stash them" / "would be overwritten") are wrapped with

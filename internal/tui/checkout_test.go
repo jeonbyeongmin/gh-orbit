@@ -130,8 +130,8 @@ func TestStashThenCheckoutCmdSuccess(t *testing.T) {
 	if !ok {
 		t.Fatalf("msg = %T, want stashThenCheckoutMsg", msg)
 	}
-	if got.stashLabel != "stash@{0}" {
-		t.Errorf("stashLabel = %q, want stash@{0}", got.stashLabel)
+	if got.stashLabel != stashLabelHEAD {
+		t.Errorf("stashLabel = %q, want %q", got.stashLabel, stashLabelHEAD)
 	}
 }
 

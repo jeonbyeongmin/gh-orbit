@@ -82,8 +82,8 @@ right). `File Tree` is reserved for a follow-up backlog.
 | `ctrl+d` / `ctrl+u` | Changes tab | scroll the patch follower viewport             |
 | `h` / `l` / `←` / `→` | tab pane | switch between Commit and Changes (toggle, wraps) |
 | `ctrl+↑` / `ctrl+↓` | global    | resize graph/tab split (5% per press)          |
-| `enter`         | refs          | checkout the cursor ref (Local: switch · Tag: detached · Remote: dwim creates local tracking branch) |
-| `o`             | refs          | jump graph cursor to ref tip (used to be `enter`) |
+| `enter`         | refs          | checkout the cursor ref (see "Checkout Behavior") |
+| `o`             | refs          | jump graph cursor to ref tip                   |
 | `a`             | refs          | show every ref's commits (unified `--all`)     |
 | `C`             | graph         | checkout cursor commit as detached HEAD        |
 | `y`             | Commit tab    | copy full hash to clipboard                    |
@@ -96,8 +96,8 @@ right). `File Tree` is reserved for a follow-up backlog.
 
 Inside the `d` patch overlay only `j` / `k` / `pgup` / `pgdn` / `esc` / `q`
 are accepted — the rest of the keymap is gated on normal mode. The
-checkout-confirm prompt (uncommitted changes block a checkout) accepts
-only `s` (stash & checkout) / `a` / `esc` (abort) / `ctrl+c` (quit).
+dirty-tree checkout-confirm prompt has its own gated keymap (see
+"Checkout Behavior" below).
 
 Bubble Tea conventions for this codebase:
 

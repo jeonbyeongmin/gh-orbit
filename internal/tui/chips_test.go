@@ -41,13 +41,13 @@ func TestBuildChipsLocalRemotePairCollapses(t *testing.T) {
 		t.Errorf("plain=%q must contain HEAD chip", plain)
 	}
 	// paired chip 은 더 이상 "↑" 마커를 붙이지 않고, chipLocalPairedStyle 의
-	// 좌/우 점선 border (`┊`) 가 시각 신호다. ansi.Strip 이 일반 룬은 보존하므로
-	// 두 개의 `┊` 가 stripped 출력에 그대로 남아 있어야 한다.
+	// 왼쪽 accent stripe (`▌`) 가 시각 신호다. ansi.Strip 이 일반 룬은 보존하므로
+	// 한 개의 `▌` 가 stripped 출력에 그대로 남아 있어야 한다.
 	if strings.Contains(plain, "↑") {
 		t.Errorf("plain=%q must not contain stale '↑' marker", plain)
 	}
-	if got := strings.Count(plain, "┊"); got != 2 {
-		t.Errorf("paired chip should carry exactly two '┊' border glyphs (left+right); got %d in %q", got, plain)
+	if got := strings.Count(plain, "▌"); got != 1 {
+		t.Errorf("paired chip should carry exactly one '▌' left accent stripe; got %d in %q", got, plain)
 	}
 }
 
@@ -162,8 +162,8 @@ func TestBuildChipsTruncatedNamePreservesPairBorder(t *testing.T) {
 	if strings.Contains(plain, "…↑") {
 		t.Errorf("plain=%q must not contain stale '…↑' marker", plain)
 	}
-	if got := strings.Count(plain, "┊"); got != 2 {
-		t.Errorf("paired chip should carry exactly two '┊' border glyphs; got %d in %q", got, plain)
+	if got := strings.Count(plain, "▌"); got != 1 {
+		t.Errorf("paired chip should carry exactly one '▌' left accent stripe; got %d in %q", got, plain)
 	}
 }
 

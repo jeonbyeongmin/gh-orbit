@@ -17,10 +17,8 @@ const (
 	colorChipLocal  = "39"
 	colorChipRemote = "207"
 	colorChipTag    = "220"
-	colorChipHead   = "196"
 	colorChipMore   = "240"
 	colorChipFG     = "232"
-	colorChipHeadFG = "231"
 
 	// maxChipTextWidth caps a single chip's text so a really long branch
 	// name doesn't push the subject off the row. Branch names longer than
@@ -39,7 +37,6 @@ var (
 	chipLocalStyle    = newChipStyle(colorChipLocal, colorChipFG)
 	chipRemoteStyle   = newChipStyle(colorChipRemote, colorChipFG)
 	chipTagStyle      = newChipStyle(colorChipTag, colorChipFG)
-	chipHeadStyle     = newChipStyle(colorChipHead, colorChipHeadFG).Bold(true)
 	chipMoreStyle     = newChipStyle(colorChipMore, colorChipFG)
 	chipSelectedStyle = newChipStyle(colorSelected, colorChipFG)
 )
@@ -54,30 +51,18 @@ const pairedPrefix = "☁ "
 // buildChips renders the chip cluster for one commit row. Returns ("", 0)
 // when there's nothing to draw.
 //
-// Layout: optional HEAD chip + up to N body chips + optional "+M" chip.
-// N is 1 when HEAD is present, 2 otherwise. selected=true paints every chip
-// with the row's cursor color, deliberately overriding the kind palette.
+// Layout: up to 2 body chips + optional "+M" overflow chip. HEAD is no
+// longer drawn as its own chip — the graph dim boundary at the HEAD row
+// carries that information instead. selected=true paints every chip with
+// the row's cursor color, deliberately overriding the kind palette.
 func buildChips(refNames []string, selected bool) (string, int) {
-	refs, headDetached := git.ParseDecoration(refNames)
+	refs, _ := git.ParseDecoration(refNames)
 	chips := git.MergeLocalRemotePairs(refs)
-
-	hasHeadChip := headDetached
-	if !hasHeadChip {
-		for _, c := range chips {
-			if c.IsHead {
-				hasHeadChip = true
-				break
-			}
-		}
-	}
-	if !hasHeadChip && len(chips) == 0 {
+	if len(chips) == 0 {
 		return "", 0
 	}
 
-	bodyCap := 2
-	if hasHeadChip {
-		bodyCap = 1
-	}
+	const bodyCap = 2
 	overflow := 0
 	visible := chips
 	if len(visible) > bodyCap {
@@ -98,9 +83,6 @@ func buildChips(refNames []string, selected bool) (string, int) {
 		totalW += runewidth.StringWidth(text) + 2
 	}
 
-	if hasHeadChip {
-		add("HEAD", chipHeadStyle)
-	}
 	for _, c := range visible {
 		add(chipDisplay(c), chipStyleFor(c))
 	}

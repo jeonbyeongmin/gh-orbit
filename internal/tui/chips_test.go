@@ -32,13 +32,13 @@ func TestBuildChipsLocalOnly(t *testing.T) {
 func TestBuildChipsLocalRemotePairCollapses(t *testing.T) {
 	s, _ := buildChips([]string{"HEAD -> main", "origin/main"}, false)
 	plain := ansi.Strip(s)
-	// HEAD chip + paired-main chip 두 개. "main" 은 한 번만 — pair merging 이 안 됐으면
-	// "main" 이 HEAD -> main 분리로 두 번 등장한다.
+	// paired-main chip 만 — HEAD 는 더 이상 chip 으로 그리지 않는다.
+	// "main" 은 한 번만 — pair merging 이 안 됐으면 두 번 등장한다.
 	if strings.Count(plain, "main") != 1 {
 		t.Errorf("plain=%q should contain 'main' exactly once", plain)
 	}
-	if !strings.Contains(plain, "HEAD") {
-		t.Errorf("plain=%q must contain HEAD chip", plain)
+	if strings.Contains(plain, "HEAD") {
+		t.Errorf("plain=%q must NOT contain HEAD chip (HEAD-as-dim-boundary now)", plain)
 	}
 	// paired chip 의 시각 신호는 이름 앞의 `☁ ` prefix — 이전에 default 로
 	// 나간 적 있는 `↑` 마커가 다시 새지 않게 회귀 가드. ansi.Strip 이 일반 룬은
@@ -86,14 +86,25 @@ func TestBuildChipsTagStripsPrefix(t *testing.T) {
 	}
 }
 
-func TestBuildChipsDetachedHead(t *testing.T) {
+func TestBuildChipsDetachedHeadEmitsNothing(t *testing.T) {
+	// Detached HEAD has only the bare `HEAD` token and no other refs.
+	// HEAD-as-dim-boundary supersedes the chip — buildChips returns nothing.
 	s, w := buildChips([]string{"HEAD"}, false)
-	plain := ansi.Strip(s)
-	if !strings.Contains(plain, "HEAD") {
-		t.Errorf("plain=%q must contain HEAD chip", plain)
+	if s != "" || w != 0 {
+		t.Errorf("detached HEAD alone should render no chip; got (%q, %d)", s, w)
 	}
-	if w == 0 {
-		t.Errorf("width=0 for detached HEAD chip")
+}
+
+func TestBuildChipsHeadArrowSuppressesHEADToken(t *testing.T) {
+	// `HEAD -> main` produces only a `main` chip — the HEAD prefix no longer
+	// emits its own chip slot.
+	s, _ := buildChips([]string{"HEAD -> main"}, false)
+	plain := ansi.Strip(s)
+	if strings.Contains(plain, "HEAD") {
+		t.Errorf("plain=%q must NOT contain HEAD chip", plain)
+	}
+	if !strings.Contains(plain, "main") {
+		t.Errorf("plain=%q must contain main chip", plain)
 	}
 }
 
@@ -112,20 +123,24 @@ func TestBuildChipsTruncatesAfterTwoWithoutHead(t *testing.T) {
 	}
 }
 
-func TestBuildChipsTruncatesKeepsHeadChip(t *testing.T) {
+func TestBuildChipsTruncatesAfterTwoEvenWithHeadInput(t *testing.T) {
 	s, _ := buildChips([]string{"HEAD -> main", "tag: v1", "tag: v2", "tag: v3"}, false)
 	plain := ansi.Strip(s)
-	// HEAD chip + main + +2  (main 은 IsHead 이므로 첫 body chip).
-	// tag v1 v2 v3 가 합쳐서 +2 가 되려면 본문에서 chip 수 = main + v1 + v2 + v3 = 4
-	// → bodyCap=1 → main 만 보이고 +3 (v1, v2, v3) 가 overflow.
-	if !strings.Contains(plain, "HEAD") {
-		t.Errorf("plain=%q must contain HEAD chip", plain)
+	// HEAD 칩 제거 후 bodyCap=2: main + v1 가 보이고 v2, v3 가 +2 overflow 로 합쳐진다.
+	if strings.Contains(plain, "HEAD") {
+		t.Errorf("plain=%q must NOT contain HEAD chip", plain)
 	}
 	if !strings.Contains(plain, "main") {
 		t.Errorf("plain=%q must contain main chip", plain)
 	}
-	if !strings.Contains(plain, "+3") {
-		t.Errorf("plain=%q must contain '+3' overflow", plain)
+	if !strings.Contains(plain, "v1") {
+		t.Errorf("plain=%q must contain v1 chip", plain)
+	}
+	if !strings.Contains(plain, "+2") {
+		t.Errorf("plain=%q must contain '+2' overflow", plain)
+	}
+	if strings.Contains(plain, "v3") {
+		t.Errorf("plain=%q must not contain truncated v3 chip", plain)
 	}
 }
 

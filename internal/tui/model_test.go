@@ -976,3 +976,354 @@ func TestPaneTabCommit_CtrlDIsNoOp(t *testing.T) {
 		t.Errorf("ctrl+u on Commit tab must be a no-op, YOffset = %d", m.commitDetail.viewport.YOffset)
 	}
 }
+
+func stubCheckout(t *testing.T) (
+	getRef func() (string, bool),
+	getStash func() (string, bool),
+	getDetached func() (string, bool),
+) {
+	t.Helper()
+	prevC, prevCD, prevS := checkoutExec, checkoutDetachedExec, stashExec
+	t.Cleanup(func() {
+		checkoutExec = prevC
+		checkoutDetachedExec = prevCD
+		stashExec = prevS
+	})
+	var ref, stashMsg, detachedRef string
+	var refSet, stashSet, detachedSet bool
+	checkoutExec = func(_ context.Context, _, r string) error {
+		ref, refSet = r, true
+		return nil
+	}
+	checkoutDetachedExec = func(_ context.Context, _, r string) error {
+		detachedRef, detachedSet = r, true
+		return nil
+	}
+	stashExec = func(_ context.Context, _, m string) error {
+		stashMsg, stashSet = m, true
+		return nil
+	}
+	return func() (string, bool) { return ref, refSet },
+		func() (string, bool) { return stashMsg, stashSet },
+		func() (string, bool) { return detachedRef, detachedSet }
+}
+
+func TestModelRefCheckoutEnterDispatchesLocalShortName(t *testing.T) {
+	getRef, _, _ := stubCheckout(t)
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(refCheckoutRequestedMsg{ref: git.Ref{
+		ShortName: "feat/foo",
+		FullName:  "refs/heads/feat/foo",
+		Kind:      git.RefKindLocal,
+	}})
+	m = updated.(Model)
+
+	if !m.checkoutInFlight {
+		t.Error("checkoutInFlight should latch on refCheckoutRequestedMsg")
+	}
+	if m.pendingCheckout.ref != "feat/foo" || m.pendingCheckout.detached {
+		t.Errorf("pendingCheckout = %+v, want {feat/foo false}", m.pendingCheckout)
+	}
+	if cmd == nil {
+		t.Fatal("refCheckoutRequestedMsg should return a checkoutCmd")
+	}
+	_ = cmd()
+	if got, ok := getRef(); !ok || got != "feat/foo" {
+		t.Errorf("checkoutExec ref = %q ok=%v, want feat/foo", got, ok)
+	}
+}
+
+func TestModelRefCheckoutEnterStripsRemotePrefix(t *testing.T) {
+	getRef, _, _ := stubCheckout(t)
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(refCheckoutRequestedMsg{ref: git.Ref{
+		ShortName: "origin/feat",
+		FullName:  "refs/remotes/origin/feat",
+		Kind:      git.RefKindRemote,
+	}})
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected a checkoutCmd")
+	}
+	_ = cmd()
+	got, ok := getRef()
+	if !ok || got != "feat" {
+		t.Errorf("checkoutExec ref = %q ok=%v, want %q (dwim DWIM)", got, ok, "feat")
+	}
+	if m.pendingCheckout.ref != "feat" {
+		t.Errorf("pendingCheckout.ref = %q, want feat", m.pendingCheckout.ref)
+	}
+}
+
+func TestModelCheckoutInFlightGate(t *testing.T) {
+	stubCheckout(t)
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.checkoutInFlight = true
+
+	updated, cmd := m.Update(refCheckoutRequestedMsg{ref: git.Ref{
+		ShortName: "feat", Kind: git.RefKindLocal,
+	}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Errorf("second Enter while checkoutInFlight should be a no-op, got cmd=%v", cmd)
+	}
+}
+
+func TestModelCheckoutSucceededReloadsAndArmsHEAD(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.checkoutInFlight = true
+	m.pendingCheckout = pendingCheckout{ref: "feat", detached: false}
+
+	updated, cmd := m.Update(checkoutSucceededMsg{ref: "feat"})
+	m = updated.(Model)
+
+	if m.checkoutInFlight {
+		t.Error("checkoutInFlight should clear after success")
+	}
+	if (m.pendingCheckout != pendingCheckout{}) {
+		t.Errorf("pendingCheckout should clear, got %+v", m.pendingCheckout)
+	}
+	if m.status != "checkout: feat" {
+		t.Errorf("status = %q, want checkout: feat", m.status)
+	}
+	if m.pendingHEADHash != pendingHEADSentinel {
+		t.Errorf("pendingHEADHash = %q, want sentinel", m.pendingHEADHash)
+	}
+	if cmd == nil {
+		t.Fatal("checkoutSucceededMsg should batch a reload cmd")
+	}
+}
+
+func TestModelCheckoutSucceededDetachedFormatsHash(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(checkoutSucceededMsg{ref: "abcdef1234567890", detached: true})
+	m = updated.(Model)
+	if !strings.Contains(m.status, "detached at") {
+		t.Errorf("status = %q, want it to mention 'detached at'", m.status)
+	}
+}
+
+func TestModelCheckoutNeedsCleanTreeEntersConfirmMode(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.checkoutInFlight = true
+	m.pendingCheckout = pendingCheckout{ref: "feat"}
+
+	updated, _ = m.Update(checkoutNeedsCleanTreeMsg{ref: "feat"})
+	m = updated.(Model)
+
+	if m.mode != viewModeCheckoutConfirm {
+		t.Errorf("mode = %v, want viewModeCheckoutConfirm", m.mode)
+	}
+	if m.checkoutInFlight {
+		t.Error("checkoutInFlight should release while modal owns the next decision")
+	}
+	if (m.pendingCheckout == pendingCheckout{}) {
+		t.Error("pendingCheckout must be retained — modal 's' branch needs it")
+	}
+}
+
+func TestModelCheckoutFailedSurfacesError(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.checkoutInFlight = true
+	m.pendingCheckout = pendingCheckout{ref: "feat"}
+
+	updated, _ = m.Update(checkoutFailedMsg{err: errors.New("ref vanished")})
+	m = updated.(Model)
+
+	if m.checkoutInFlight {
+		t.Error("checkoutInFlight should clear on failure")
+	}
+	if !strings.Contains(m.status, "checkout failed") {
+		t.Errorf("status = %q, want it to start with 'checkout failed'", m.status)
+	}
+}
+
+func TestModelStashThenCheckoutMsgIncludesStashLabel(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(stashThenCheckoutMsg{ref: "feat", stashLabel: "stash@{0}"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.status, "stash@{0}") {
+		t.Errorf("status = %q, want it to surface the stash label", m.status)
+	}
+	if m.pendingHEADHash != pendingHEADSentinel {
+		t.Errorf("pendingHEADHash = %q, want sentinel", m.pendingHEADHash)
+	}
+	if cmd == nil {
+		t.Fatal("stashThenCheckoutMsg should also batch a reload cmd")
+	}
+}
+
+func TestModelCheckoutConfirmStashKeyDispatches(t *testing.T) {
+	_, getStash, _ := stubCheckout(t)
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeCheckoutConfirm
+	m.pendingCheckout = pendingCheckout{ref: "feat"}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = updated.(Model)
+
+	if m.mode != viewModeNormal {
+		t.Errorf("mode after 's' = %v, want viewModeNormal", m.mode)
+	}
+	if !m.checkoutInFlight {
+		t.Error("checkoutInFlight should re-arm on 's' (stashing…)")
+	}
+	if cmd == nil {
+		t.Fatal("'s' should dispatch stashThenCheckoutCmd")
+	}
+	_ = cmd()
+	if msg, ok := getStash(); !ok || !strings.Contains(msg, "feat") {
+		t.Errorf("stashExec called with %q ok=%v, want a message mentioning the ref", msg, ok)
+	}
+}
+
+func TestModelCheckoutConfirmAbortClears(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeCheckoutConfirm
+	m.pendingCheckout = pendingCheckout{ref: "feat"}
+
+	for _, key := range []rune{'a'} {
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		m = updated.(Model)
+		if cmd != nil {
+			t.Errorf("abort key %q should not return a cmd", string(key))
+		}
+		if m.mode != viewModeNormal {
+			t.Errorf("mode after %q = %v, want viewModeNormal", string(key), m.mode)
+		}
+		if (m.pendingCheckout != pendingCheckout{}) {
+			t.Errorf("pendingCheckout after abort = %+v, want zero", m.pendingCheckout)
+		}
+		if !strings.Contains(m.status, "aborted") {
+			t.Errorf("status after abort = %q, want it to mention 'aborted'", m.status)
+		}
+	}
+}
+
+func TestModelCheckoutConfirmEscAlsoAborts(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeCheckoutConfirm
+	m.pendingCheckout = pendingCheckout{ref: "feat"}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Errorf("mode after esc = %v, want viewModeNormal", m.mode)
+	}
+}
+
+func TestModelCheckoutConfirmSwallowsOtherKeys(t *testing.T) {
+	stubCheckout(t)
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeCheckoutConfirm
+	m.pendingCheckout = pendingCheckout{ref: "feat"}
+
+	for _, k := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'j'}},
+		{Type: tea.KeyTab},
+		{Type: tea.KeyRunes, Runes: []rune{'F'}},
+		{Type: tea.KeyRunes, Runes: []rune{'P'}},
+		{Type: tea.KeyRunes, Runes: []rune{'d'}},
+		{Type: tea.KeyEnter},
+	} {
+		updated, cmd := m.Update(k)
+		m = updated.(Model)
+		if m.mode != viewModeCheckoutConfirm {
+			t.Errorf("modal closed on swallowed key %v, mode = %v", k, m.mode)
+		}
+		if cmd != nil {
+			t.Errorf("swallowed key %v should not return cmd, got %v", k, cmd)
+		}
+		if m.fetchInFlight || m.pullInFlight || m.checkoutInFlight {
+			t.Errorf("swallowed key %v leaked into a dispatch (fetch=%v pull=%v checkout=%v)",
+				k, m.fetchInFlight, m.pullInFlight, m.checkoutInFlight)
+		}
+	}
+}
+
+func TestModelGraphCDispatchesDetachedCheckout(t *testing.T) {
+	_, _, getDetached := stubCheckout(t)
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.focused = paneGraph
+
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+	updated, _ = m.Update(commitsStreamDoneMsg{reqID: 1})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	m = updated.(Model)
+
+	if !m.checkoutInFlight {
+		t.Error("'C' should latch checkoutInFlight")
+	}
+	if !m.pendingCheckout.detached {
+		t.Errorf("pendingCheckout = %+v, want detached=true", m.pendingCheckout)
+	}
+	if m.pendingCheckout.ref != "abc1234" {
+		t.Errorf("pendingCheckout.ref = %q, want abc1234 (graph hash)", m.pendingCheckout.ref)
+	}
+	if cmd == nil {
+		t.Fatal("'C' should return a checkoutCmd")
+	}
+	_ = cmd()
+	if got, ok := getDetached(); !ok || got != "abc1234" {
+		t.Errorf("checkoutDetachedExec ref = %q ok=%v, want abc1234", got, ok)
+	}
+}
+
+func TestModelGraphCNoOpWhenRefsFocused(t *testing.T) {
+	stubCheckout(t)
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.focused = paneRefs
+
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Errorf("'C' on refs pane should be a no-op, got cmd=%v", cmd)
+	}
+	if m.checkoutInFlight {
+		t.Error("checkoutInFlight should not latch on refs-focused 'C'")
+	}
+}

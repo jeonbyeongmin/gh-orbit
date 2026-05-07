@@ -143,7 +143,7 @@ func TestRefModelCursorSkipsHeadersAndEmpty(t *testing.T) {
 	}
 }
 
-func TestRefModelEnterEmitsSelectedMsg(t *testing.T) {
+func TestRefModelEnterEmitsCheckoutRequestedMsg(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 10)
 	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
@@ -152,6 +152,26 @@ func TestRefModelEnterEmitsSelectedMsg(t *testing.T) {
 	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("enter on a ref should return a non-nil cmd")
+	}
+	msg := cmd()
+	sel, ok := msg.(refCheckoutRequestedMsg)
+	if !ok {
+		t.Fatalf("cmd produced %T, want refCheckoutRequestedMsg", msg)
+	}
+	if sel.ref.FullName != "refs/heads/main" {
+		t.Errorf("refCheckoutRequestedMsg.ref.FullName = %q, want refs/heads/main", sel.ref.FullName)
+	}
+}
+
+func TestRefModelOEmitsSelectedMsg(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 10)
+	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
+		{ShortName: "main", FullName: "refs/heads/main", Kind: git.RefKindLocal, IsHead: true},
+	}})
+	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd == nil {
+		t.Fatal("'o' on a ref should return a non-nil cmd (jump-to-tip)")
 	}
 	msg := cmd()
 	sel, ok := msg.(refSelectedMsg)
@@ -163,13 +183,17 @@ func TestRefModelEnterEmitsSelectedMsg(t *testing.T) {
 	}
 }
 
-func TestRefModelEnterOnEmptyDoesNothing(t *testing.T) {
+func TestRefModelEnterAndOOnEmptyDoNothing(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 10)
 	r, _ = r.Update(refsLoadedMsg{refs: nil})
 	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {
 		t.Errorf("enter with no selectable ref should not emit a cmd, got %v", cmd())
+	}
+	_, cmd = r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd != nil {
+		t.Errorf("'o' with no selectable ref should not emit a cmd, got %v", cmd())
 	}
 }
 

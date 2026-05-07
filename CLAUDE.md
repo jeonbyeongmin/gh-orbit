@@ -82,8 +82,10 @@ right). `File Tree` is reserved for a follow-up backlog.
 | `ctrl+d` / `ctrl+u` | Changes tab | scroll the patch follower viewport             |
 | `h` / `l` / `←` / `→` | tab pane | switch between Commit and Changes (toggle, wraps) |
 | `ctrl+↑` / `ctrl+↓` | global    | resize graph/tab split (5% per press)          |
-| `enter`         | refs          | jump graph cursor to ref tip                   |
+| `enter`         | refs          | checkout the cursor ref (see "Checkout Behavior") |
+| `o`             | refs          | jump graph cursor to ref tip                   |
 | `a`             | refs          | show every ref's commits (unified `--all`)     |
+| `C`             | graph         | checkout cursor commit as detached HEAD        |
 | `y`             | Commit tab    | copy full hash to clipboard                    |
 | `d`             | global        | open the focused commit's full patch overlay   |
 | `F`             | global        | `git fetch --all` in the background            |
@@ -93,7 +95,9 @@ right). `File Tree` is reserved for a follow-up backlog.
 | `R`             | global        | reserved for a future Rebase action            |
 
 Inside the `d` patch overlay only `j` / `k` / `pgup` / `pgdn` / `esc` / `q`
-are accepted — the rest of the keymap is gated on normal mode.
+are accepted — the rest of the keymap is gated on normal mode. The
+dirty-tree checkout-confirm prompt has its own gated keymap (see
+"Checkout Behavior" below).
 
 Bubble Tea conventions for this codebase:
 
@@ -137,3 +141,20 @@ strategy = "rebase"   # "ff-only" | "merge" | "rebase"
 ```
 
 `P` resolves the strategy in this order: prefs `[pull] strategy` → git config `pull.rebase` (`true` → rebase) → git config `pull.ff` (`only` → ff-only) → final fallback `--ff-only`. A pull conflict surfaces "pull: CONFLICT — resolve in your terminal" in the status bar; resolve with the user's normal git workflow outside the TUI.
+
+## Checkout Behavior
+
+`enter` on the refs pane translates the cursor ref into a local-name argument before invoking `git checkout`:
+
+- Local branch — pass `ShortName` (`main`, `feat/foo`).
+- Tag — pass `ShortName`. Result is a detached HEAD on the tag's commit, which is what the user picked.
+- Remote-tracking ref — strip the `<remote>/` prefix and pass the inner branch name (`origin/feat` → `feat`). Git's dwim rule then creates a local tracking branch when no same-name local exists; the wrapper does **not** invoke `--track` explicitly.
+
+`C` on the graph pane invokes `git checkout --detach <hash>` against the cursor commit and lands on a detached HEAD.
+
+Dirty working tree handling:
+
+- The wrapper does **not** pre-flight `git status` before checkout. Instead it runs the checkout and matches git's stderr ("Please commit your changes or stash them" / "would be overwritten" / "Your local changes") to wrap the failure with `ErrCheckoutNeedsCleanTree`. No race window exists between detection and the actual command.
+- On `ErrCheckoutNeedsCleanTree`, the TUI enters a confirm prompt (mode `viewModeCheckoutConfirm`) where only `s` / `a` / `esc` / `ctrl+c` work; every other key is swallowed.
+- `s` runs `git stash push -m "gh-orbit: before checkout <ref>"` (no `-u`, so untracked files stay in the working tree) and then re-issues the checkout. The stash is **not** popped automatically — the status bar surfaces the conventional `stash@{0}` label so the user can resolve it on their own time.
+- `a` / `esc` clear `pendingCheckout` and leave the working tree alone.

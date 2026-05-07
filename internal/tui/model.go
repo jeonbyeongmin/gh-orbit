@@ -11,6 +11,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/config"
+	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
 // clipboardWrite is the package-level seam for OS clipboard writes. Tests
@@ -56,7 +57,22 @@ type viewMode int
 const (
 	viewModeNormal viewMode = iota
 	viewModeDiffWindow
+	// viewModeCheckoutConfirm gates the screen on a "stash & checkout vs.
+	// abort" prompt while pendingCheckout holds the ref the user picked.
+	// The 3-pane layout stays visible underneath (so the user keeps their
+	// context); only the help/status line below switches to the choice
+	// keys, and every key except s/a/esc/ctrl+c is swallowed.
+	viewModeCheckoutConfirm
 )
+
+// pendingCheckout remembers what the user was trying to check out so the
+// "[s]tash & checkout" branch in the confirm modal can re-issue the same
+// request after stashing. detached=true means graph 'C' (CheckoutDetached);
+// detached=false means a refs-pane Enter (named ref).
+type pendingCheckout struct {
+	ref      string
+	detached bool
+}
 
 type Model struct {
 	width, height int
@@ -111,6 +127,14 @@ type Model struct {
 	// statusStyle decides the color; zero value renders without color.
 	status      string
 	statusStyle lipgloss.Style
+	// checkoutInFlight gates Enter on the refs pane and 'C' on the graph
+	// while a background checkout is running. fetch/pull have their own
+	// gates; git's .git/index.lock is the real serialization point.
+	checkoutInFlight bool
+	// pendingCheckout is set the moment beginCheckout fires so the dirty-
+	// tree confirm modal can re-issue the same request (with stashing) on
+	// 's', or drop the slot on 'a'/esc.
+	pendingCheckout pendingCheckout
 }
 
 func New() Model {
@@ -206,6 +230,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.refs, cmd = m.refs.Update(msg)
 		return m, cmd
+
+	case refCheckoutRequestedMsg:
+		var cmd tea.Cmd
+		m, cmd = m.beginCheckout(git.CheckoutTarget(msg.ref), false)
+		return m, cmd
+
+	case checkoutSucceededMsg:
+		m.checkoutInFlight = false
+		m.pendingCheckout = pendingCheckout{}
+		m.status = checkoutLabel(msg.ref, msg.detached)
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case checkoutNeedsCleanTreeMsg:
+		// Modal owns the next decision; release the in-flight gate so
+		// 's' → stashThenCheckoutCmd can re-arm it without colliding.
+		// pendingCheckout stays intact so 's' can re-issue the same request.
+		m.checkoutInFlight = false
+		m.mode = viewModeCheckoutConfirm
+		m.status = "checkout: " + msg.ref + " — uncommitted changes"
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case checkoutFailedMsg:
+		m.checkoutInFlight = false
+		m.pendingCheckout = pendingCheckout{}
+		m.status = "checkout failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case stashThenCheckoutMsg:
+		m.checkoutInFlight = false
+		m.pendingCheckout = pendingCheckout{}
+		m.status = checkoutLabel(msg.ref, msg.detached) +
+			" (stashed before checkout: " + msg.stashLabel + ")"
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
 
 	case refSelectedMsg:
 		// Unified graph: Enter no longer reloads; it jumps the graph cursor
@@ -330,6 +393,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.mode == viewModeCheckoutConfirm {
+			switch msg.String() {
+			case "s":
+				ref, detached := m.pendingCheckout.ref, m.pendingCheckout.detached
+				m.mode = viewModeNormal
+				m.checkoutInFlight = true
+				m.status = "checkout: " + ref + " (stashing…)"
+				m.statusStyle = statusBusyS
+				return m, stashThenCheckoutCmd("", ref, detached)
+			case "a", "esc":
+				m.mode = viewModeNormal
+				m.pendingCheckout = pendingCheckout{}
+				m.status = "checkout: aborted"
+				m.statusStyle = statusOkS
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.cancelStream()
@@ -368,6 +452,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Swallow so capital R doesn't fall through to the focused
 			// sub-model. Reserved for a future Rebase action.
 			return m, nil
+		case "C":
+			// Gate on graph focus so a stray 'C' on the refs pane doesn't detach.
+			if m.focused != paneGraph {
+				return m, nil
+			}
+			c, ok := m.graph.Selected()
+			if !ok {
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m, cmd = m.beginCheckout(c.Hash, true)
+			return m, cmd
 		case "d":
 			c, ok := m.graph.Selected()
 			if !ok {
@@ -474,6 +570,32 @@ func (m Model) copyHashFromCommitTab() Model {
 	m.status = "copied " + shortHash(hash)
 	m.statusStyle = statusOkS
 	return m
+}
+
+// beginCheckout dispatches a checkout for ref and arms checkoutInFlight +
+// pendingCheckout. The dirty-tree confirm modal needs pendingCheckout
+// later if git rejects, so we set it before the cmd fires. Repeat presses
+// while a checkout is in flight are dropped — git holds index.lock and a
+// second invocation would just block.
+func (m Model) beginCheckout(ref string, detached bool) (Model, tea.Cmd) {
+	if m.checkoutInFlight {
+		return m, nil
+	}
+	m.checkoutInFlight = true
+	m.pendingCheckout = pendingCheckout{ref: ref, detached: detached}
+	m.status = checkoutLabel(ref, detached) + " …"
+	m.statusStyle = statusBusyS
+	return m, checkoutCmd("", ref, detached)
+}
+
+// checkoutLabel renders the user-facing "checkout: …" prefix shared by the
+// busy / success / stash-then-success status lines. Detached checkouts
+// short-hash the ref since the user picked a commit, not a name.
+func checkoutLabel(ref string, detached bool) string {
+	if detached {
+		return "checkout: detached at " + shortHash(ref)
+	}
+	return "checkout: " + ref
 }
 
 // beginDiffStat advances the request id, marks both Changes and Commit
@@ -611,7 +733,7 @@ var (
 )
 
 const (
-	helpTextNormal     = "tab focus · h/l switch tab · j/k navigate · ctrl+↑/↓ resize · enter jump ref · y copy hash · d patch · F fetch · P pull · r reload · q quit"
+	helpTextNormal     = "tab focus · h/l switch tab · j/k nav · ctrl+↑/↓ resize · enter checkout · o jump ref · C detach · y copy · d patch · F fetch · P pull · r reload · q quit"
 	helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
 )
 
@@ -621,6 +743,10 @@ var (
 	helpRenderedNormal     = help.Render(helpTextNormal)
 	helpRenderedDiffWindow = help.Render(helpTextDiffWindow)
 )
+
+// confirmPromptS reuses the busy color and adds bold so the modal prompt
+// reads as "active dialog" rather than "an error just landed".
+var confirmPromptS = statusBusyS.Bold(true)
 
 func (m Model) View() string {
 	if m.width == 0 {
@@ -663,7 +789,15 @@ func (m Model) tabBody() string {
 // renderHelpStatus lays out the bottom line as "help … status". When the
 // terminal is too narrow to fit both, status wins — the user just triggered
 // an action and seeing its outcome matters more than the help reminder.
+// The dirty-tree checkout modal replaces the whole line with its prompt
+// so the available choice keys are unambiguous.
 func (m Model) renderHelpStatus() string {
+	if m.mode == viewModeCheckoutConfirm {
+		return confirmPromptS.Render(
+			"Uncommitted changes — checkout '" + m.pendingCheckout.ref +
+				"'? · [s] stash & checkout · [a] abort · [esc] cancel",
+		)
+	}
 	if m.status == "" {
 		return helpRenderedNormal
 	}

@@ -473,6 +473,220 @@ func TestModelFKeyDispatchesFetch(t *testing.T) {
 	}
 }
 
+func TestModelPKeyDispatchesPull(t *testing.T) {
+	prev := pullCmdFactory
+	defer func() { pullCmdFactory = prev }()
+	pullCmdFactory = func(string, string) tea.Cmd {
+		return func() tea.Msg { return nil }
+	}
+
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("P should return a pullCmd")
+	}
+	if !m.pullInFlight {
+		t.Error("P should set pullInFlight=true")
+	}
+	if m.status != "pulling…" {
+		t.Errorf("status = %q, want pulling…", m.status)
+	}
+
+	updated, cmd2 := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	m = updated.(Model)
+	if cmd2 != nil {
+		t.Error("second P should not dispatch a parallel pull")
+	}
+	if m.status != "pulling…" {
+		t.Errorf("status should still be pulling…, got %q", m.status)
+	}
+}
+
+func TestModelPullSucceededReloadsAndJumpsHEAD(t *testing.T) {
+	prev := pullCmdFactory
+	defer func() { pullCmdFactory = prev }()
+	pullCmdFactory = func(string, string) tea.Cmd {
+		return func() tea.Msg { return nil }
+	}
+
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(pullSucceededMsg{})
+	m = updated.(Model)
+	if m.pullInFlight {
+		t.Error("pullInFlight should clear after success")
+	}
+	if m.status != "pull: done" {
+		t.Errorf("status = %q, want pull: done", m.status)
+	}
+	if !m.pendingHEADJump {
+		t.Error("pullSucceededMsg should arm pendingHEADJump")
+	}
+	if cmd == nil {
+		t.Fatal("pullSucceededMsg should batch a refs+log reload cmd")
+	}
+
+	postReqID := m.streamReqID
+
+	updated, _ = m.Update(refsLoadedMsg{refs: []git.Ref{
+		{FullName: "refs/heads/main", ShortName: "main", Kind: git.RefKindLocal, ObjectName: "deadbee", IsHead: true},
+	}})
+	m = updated.(Model)
+	if m.pendingHEADHash != "deadbee" {
+		t.Errorf("pendingHEADHash = %q, want deadbee", m.pendingHEADHash)
+	}
+
+	updated, _ = m.Update(commitsAppendedMsg{reqID: postReqID, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "cafebab", Subject: "first", AuthorTime: time.Now()}},
+		{commit: git.Commit{Hash: "deadbee", Subject: "head", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+	updated, _ = m.Update(commitsStreamDoneMsg{reqID: postReqID})
+	m = updated.(Model)
+
+	if m.pendingHEADJump {
+		t.Error("pendingHEADJump should clear after the row is found")
+	}
+	c, ok := m.graph.Selected()
+	if !ok {
+		t.Fatal("graph should have a selected row after HEAD jump")
+	}
+	if c.Hash != "deadbee" {
+		t.Errorf("selected hash = %q, want deadbee (HEAD)", c.Hash)
+	}
+}
+
+func TestModelPullConflictSurfacesMessage(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	prev := pullCmdFactory
+	defer func() { pullCmdFactory = prev }()
+	pullCmdFactory = func(string, string) tea.Cmd {
+		return func() tea.Msg { return nil }
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(pullConflictMsg{err: errors.New("git pull: pull conflict: CONFLICT (content): Merge conflict in foo.go")})
+	m = updated.(Model)
+	if m.pullInFlight {
+		t.Error("pullInFlight should clear on conflict")
+	}
+	if !strings.Contains(m.status, "CONFLICT") {
+		t.Errorf("status %q should mention CONFLICT", m.status)
+	}
+	if !strings.Contains(m.status, "resolve") {
+		t.Errorf("status %q should hint to resolve in terminal", m.status)
+	}
+	if m.statusStyle.GetForeground() != statusErrS.GetForeground() {
+		t.Error("conflict status should use error style")
+	}
+	if cmd == nil {
+		t.Error("pullConflictMsg should still trigger a refs+log reload")
+	}
+	if m.pendingHEADJump {
+		t.Error("conflict should not arm a HEAD jump — user is mid-merge")
+	}
+}
+
+func TestModelPullFailedSurfacesError(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	prev := pullCmdFactory
+	defer func() { pullCmdFactory = prev }()
+	pullCmdFactory = func(string, string) tea.Cmd {
+		return func() tea.Msg { return nil }
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(pullFailedMsg{err: errors.New("git pull: exit status 128: could not resolve host github.com")})
+	m = updated.(Model)
+	if m.pullInFlight {
+		t.Error("pullInFlight should clear on failure")
+	}
+	if !strings.Contains(m.status, "could not resolve host") {
+		t.Errorf("status %q should include stderr", m.status)
+	}
+	if cmd != nil {
+		t.Error("pull failure should not auto-reload")
+	}
+	if m.pendingHEADJump {
+		t.Error("failure should not arm a HEAD jump")
+	}
+}
+
+func TestModelPullAndFetchConcurrent(t *testing.T) {
+	prev := pullCmdFactory
+	defer func() { pullCmdFactory = prev }()
+	pullCmdFactory = func(string, string) tea.Cmd {
+		return func() tea.Msg { return nil }
+	}
+
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	m = updated.(Model)
+	if !m.fetchInFlight || !m.pullInFlight {
+		t.Fatalf("both flags should be true after F+P, got fetch=%v pull=%v", m.fetchInFlight, m.pullInFlight)
+	}
+	if m.status != "pulling…" {
+		t.Errorf("status = %q, want pulling… (P should overwrite fetching…)", m.status)
+	}
+
+	updated, _ = m.Update(fetchSucceededMsg{})
+	m = updated.(Model)
+	if m.fetchInFlight {
+		t.Error("fetchInFlight should clear after fetchSucceededMsg")
+	}
+	if m.status != "pulling…" {
+		t.Errorf("status = %q, want pulling… preserved while pull is still in flight", m.status)
+	}
+}
+
+func TestModelPullPrefStrategyPropagatesToCmd(t *testing.T) {
+	prev := pullCmdFactory
+	defer func() { pullCmdFactory = prev }()
+	var seenDir, seenPrefs string
+	pullCmdFactory = func(dir string, prefs string) tea.Cmd {
+		seenDir = dir
+		seenPrefs = prefs
+		return func() tea.Msg { return nil }
+	}
+
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.pullPrefStrategy = "rebase"
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	_ = updated.(Model)
+
+	if seenPrefs != "rebase" {
+		t.Errorf("pullCmdFactory got prefs=%q, want rebase", seenPrefs)
+	}
+	if seenDir != "" {
+		t.Errorf("pullCmdFactory got dir=%q, want empty (cwd)", seenDir)
+	}
+}
+
 func TestModelFetchSucceededReloadsBothPanes(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

@@ -18,7 +18,8 @@ type DecoratedRef struct {
 
 // ChipRef is what the renderer ultimately draws: at most one entry per visual
 // chip slot. Local + remote pairs that point at the same commit collapse into
-// a single ChipRef with PairedRemote=true (rendered as "main↑").
+// a single ChipRef with PairedRemote=true; the renderer decides how to mark
+// the paired state.
 type ChipRef struct {
 	Kind         RefKind
 	DisplayName  string

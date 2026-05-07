@@ -310,10 +310,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		case paneTab:
 			switch msg.String() {
-			case "h":
+			case "h", "left":
 				m.tabs.Prev()
 				return m, nil
-			case "l":
+			case "l", "right":
 				m.tabs.Next()
 				return m, nil
 			case "ctrl+d", "ctrl+u", "pgdown", "pgup":

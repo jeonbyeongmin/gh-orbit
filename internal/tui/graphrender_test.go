@@ -119,6 +119,60 @@ func TestRenderConnectorPipesNoHorizontal(t *testing.T) {
 	}
 }
 
+// Trailing CellEmpty slots are dropped — the graph cell shrinks to the
+// rightmost non-empty cell so the message column hugs the graph.
+func TestRenderGraphRowTrimsTrailingEmpty(t *testing.T) {
+	row := lanes.Row{
+		Cells: []lanes.Cell{
+			{Kind: lanes.CellPipe, Lane: 0},
+			{Kind: lanes.CellCommit, Lane: 1},
+			{Kind: lanes.CellEmpty},
+			{Kind: lanes.CellEmpty},
+		},
+		CommitLane: 1,
+	}
+	_, w := renderGraphRow(row)
+	if want := 2 * cellWidth; w != want {
+		t.Errorf("visualWidth = %d, want %d (trailing empty trimmed)", w, want)
+	}
+}
+
+// Active lanes to the right of the commit (e.g., another branch's pipe)
+// must be preserved — only trailing empties get trimmed.
+func TestRenderGraphRowKeepsActiveLanesAfterCommit(t *testing.T) {
+	row := lanes.Row{
+		Cells: []lanes.Cell{
+			{Kind: lanes.CellPipe, Lane: 0},
+			{Kind: lanes.CellCommit, Lane: 1},
+			{Kind: lanes.CellPipe, Lane: 2},
+		},
+		CommitLane: 1,
+	}
+	text, w := renderGraphRow(row)
+	if want := 3 * cellWidth; w != want {
+		t.Errorf("visualWidth = %d, want %d (active lane 2 must stay)", w, want)
+	}
+	stripped := ansi.Strip(text)
+	if strings.Count(stripped, "│") != 2 {
+		t.Errorf("stripped = %q, want both lane 0 and lane 2 pipes preserved", stripped)
+	}
+}
+
+// An entirely empty row renders as zero width.
+func TestRenderGraphRowAllEmptyIsZeroWidth(t *testing.T) {
+	row := lanes.Row{
+		Cells: []lanes.Cell{
+			{Kind: lanes.CellEmpty},
+			{Kind: lanes.CellEmpty},
+		},
+		CommitLane: -1,
+	}
+	text, w := renderGraphRow(row)
+	if w != 0 || text != "" {
+		t.Errorf("all-empty row should render as zero width; got w=%d text=%q", w, text)
+	}
+}
+
 // All glyphs we emit must be single-cell so visual width math stays honest.
 func TestGlyphsAreSingleCell(t *testing.T) {
 	for _, k := range []lanes.CellKind{

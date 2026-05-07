@@ -84,8 +84,12 @@ func isRightOpen(k lanes.CellKind) bool { return cellSides[k].right }
 func isLeftOpen(k lanes.CellKind) bool  { return cellSides[k].left }
 
 // renderGraphRow returns the colored prefix for one row plus its visual
-// column width. Width is len(Cells) * cellWidth — having it up front lets
-// the commit-line renderer pad without re-parsing ANSI escapes.
+// column width. Width is (last+1)*cellWidth where `last` is the rightmost
+// non-empty cell — trailing CellEmpty slots that the lane allocator may
+// keep around contribute neither glyph nor width, so the message column
+// hugs the graph instead of sitting after a stretch of blank cells.
+// In-the-middle CellEmpty cells (between active lanes) are preserved so
+// lane lifelines stay visually consistent.
 //
 // The trailing column for each cell is `─` when both this cell and the
 // next one have their facing sides open (e.g., `├` followed by `╮`); else
@@ -94,9 +98,21 @@ func renderGraphRow(row lanes.Row) (text string, visualWidth int) {
 	if len(row.Cells) == 0 {
 		return "", 0
 	}
+	last := -1
+	for i := len(row.Cells) - 1; i >= 0; i-- {
+		if row.Cells[i].Kind != lanes.CellEmpty {
+			last = i
+			break
+		}
+	}
+	if last < 0 {
+		return "", 0
+	}
+
 	var b strings.Builder
-	b.Grow(len(row.Cells) * (cellWidth + 8))
-	for i, cell := range row.Cells {
+	b.Grow((last + 1) * (cellWidth + 8))
+	for i := 0; i <= last; i++ {
+		cell := row.Cells[i]
 		if cell.Kind == lanes.CellEmpty {
 			b.WriteString("  ")
 			continue
@@ -106,7 +122,7 @@ func renderGraphRow(row lanes.Row) (text string, visualWidth int) {
 
 		// Trailing column: ─ if this cell connects right and the next
 		// cell connects left; else a plain space.
-		if i < len(row.Cells)-1 &&
+		if i < last &&
 			isRightOpen(cell.Kind) &&
 			isLeftOpen(row.Cells[i+1].Kind) {
 			b.WriteString(style.Render("─"))
@@ -114,7 +130,7 @@ func renderGraphRow(row lanes.Row) (text string, visualWidth int) {
 			b.WriteByte(' ')
 		}
 	}
-	return b.String(), len(row.Cells) * cellWidth
+	return b.String(), (last + 1) * cellWidth
 }
 
 func laneColorIdx(lane int) int {

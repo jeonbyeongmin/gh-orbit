@@ -316,16 +316,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "l", "right":
 				m.tabs.Next()
 				return m, nil
-			case "ctrl+d", "ctrl+u", "pgdown", "pgup":
-				// Scroll the patch viewport without moving the file-list
-				// cursor; j/k stay on the file list and trigger a fresh
-				// patch load via changesModel.Update.
+			case "ctrl+d", "ctrl+u":
+				// Changes-tab patch viewport only — Commit tab intentionally
+				// no-ops on these so the bindings stay unambiguous between
+				// the two tabs (viewport's default keymap would otherwise
+				// claim them).
 				if m.tabs.Active() == tabChanges {
 					m.changes.ScrollPatch(msg)
 				}
 				return m, nil
-			}
-			if m.tabs.Active() == tabChanges {
+			case "j", "k", "down", "up", "pgdown", "pgup":
+				// Commit tab scrolls its body viewport; Changes tab moves
+				// the file-list cursor (which triggers a fresh patch load
+				// inside changesModel.Update). pgdown/pgup live here, not
+				// with ctrl+d/u above, because the Commit tab is supposed
+				// to honor them too.
+				if m.tabs.Active() == tabCommit {
+					return m, m.commitDetail.ScrollContent(msg)
+				}
+				var cmd tea.Cmd
+				m.changes, cmd = m.changes.Update(msg)
+				return m, cmd
+			case "g", "G":
+				// Commit tab: jump-to-top/bottom of the viewport. Changes
+				// tab: jump file-list cursor to first/last entry.
+				if m.tabs.Active() == tabCommit {
+					return m, m.commitDetail.ScrollContent(msg)
+				}
 				var cmd tea.Cmd
 				m.changes, cmd = m.changes.Update(msg)
 				return m, cmd

@@ -92,8 +92,17 @@ func (c commitDetailModel) CurrentHash() string { return c.hash }
 // ScrollContent forwards a pre-filtered scroll key to the viewport. The caller
 // (model.go paneTab dispatch) is responsible for whitelisting which keys reach
 // here so viewport's default keymap (which would otherwise claim ctrl+d/u for
-// itself) doesn't shadow the Changes-tab patch scroll bindings.
+// itself) doesn't shadow the Changes-tab patch scroll bindings. g/G are
+// special-cased because viewport's DefaultKeyMap doesn't bind them.
 func (c *commitDetailModel) ScrollContent(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "g":
+		c.viewport.GotoTop()
+		return nil
+	case "G":
+		c.viewport.GotoBottom()
+		return nil
+	}
 	var cmd tea.Cmd
 	c.viewport, cmd = c.viewport.Update(msg)
 	return cmd

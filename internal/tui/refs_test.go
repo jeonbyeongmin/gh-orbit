@@ -272,3 +272,119 @@ func TestRefModelCursorVisibleAtSmallHeight(t *testing.T) {
 		t.Errorf("at small height, cursor (%s) must remain visible; got %q", last, view)
 	}
 }
+
+// assertCursorVisible checks the cursor's flat-row sits inside the visible
+// viewport [yOffset, yOffset+height). Used by the section-boundary regression
+// suite where exact yOffset values depend on flatRows() layout details.
+func assertCursorVisible(t *testing.T, r refModel) {
+	t.Helper()
+	rows := r.flatRows()
+	cursorRow, ok := r.cursorFlatRow(rows)
+	if !ok {
+		t.Fatalf("no cursor row found")
+	}
+	if cursorRow < r.yOffset || cursorRow >= r.yOffset+r.height {
+		t.Errorf("cursor flat-row %d outside viewport [%d, %d)", cursorRow, r.yOffset, r.yOffset+r.height)
+	}
+}
+
+func TestRefModelScrollAcrossLocalRemoteBoundary(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 4)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 3, 0)})
+	for i := 0; i < 3; i++ {
+		r = pressKey(t, r, "j")
+	}
+	got, ok := r.Selected()
+	if !ok || got.ShortName != "remote-0" {
+		t.Fatalf("Selected after j×3 = %+v ok=%v, want remote-0", got, ok)
+	}
+	assertCursorVisible(t, r)
+	r = pressKey(t, r, "k")
+	if got, ok := r.Selected(); !ok || got.ShortName != "local-2" {
+		t.Fatalf("Selected after k×1 = %+v ok=%v, want local-2", got, ok)
+	}
+	assertCursorVisible(t, r)
+}
+
+func TestRefModelScrollAcrossLocalTagsBoundaryWhenRemoteEmpty(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 4)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 0, 3)})
+	// cursor +1 이지만 flat-row 는 gap+header(R)+empty(R)+gap+header(T) 만큼 +6 점프.
+	for i := 0; i < 3; i++ {
+		r = pressKey(t, r, "j")
+	}
+	got, ok := r.Selected()
+	if !ok || got.ShortName != "tag-0" {
+		t.Fatalf("Selected after j×3 = %+v ok=%v, want tag-0", got, ok)
+	}
+	assertCursorVisible(t, r)
+}
+
+func TestRefModelCursorStaysVisibleAtSmallHeightAcrossBoundary(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 3)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(2, 2, 0)})
+	for i := 0; i < 3; i++ {
+		r = pressKey(t, r, "j")
+		assertCursorVisible(t, r)
+	}
+	if got, ok := r.Selected(); !ok || got.ShortName != "remote-1" {
+		t.Fatalf("Selected after j×3 = %+v ok=%v, want remote-1", got, ok)
+	}
+}
+
+func TestRefModelScrollKeepsSectionHeaderAboveCursor(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 4)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(5, 5, 0)})
+	r = pressKey(t, r, "G")
+	for i := 0; i < 4; i++ {
+		r = pressKey(t, r, "k")
+	}
+	if got, ok := r.Selected(); !ok || got.ShortName != "remote-0" {
+		t.Fatalf("Selected after G then k×4 = %+v ok=%v, want remote-0", got, ok)
+	}
+	if view := ansi.Strip(r.View()); !strings.Contains(view, "Remote branches") {
+		t.Errorf("Remote branches header must be visible when cursor on remote-0; got:\n%s", view)
+	}
+	for i := 0; i < 5; i++ {
+		r = pressKey(t, r, "k")
+	}
+	if got, ok := r.Selected(); !ok || got.ShortName != "local-0" {
+		t.Fatalf("Selected after G then k×9 = %+v ok=%v, want local-0", got, ok)
+	}
+	if view := ansi.Strip(r.View()); !strings.Contains(view, "Local branches") {
+		t.Errorf("Local branches header must be visible when cursor on local-0; got:\n%s", view)
+	}
+}
+
+func TestRefModelKBackwardAcrossBoundariesPreservesLazyAndJumps(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 4)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 3, 3)})
+	r = pressKey(t, r, "G")
+	startOffset := r.yOffset
+	// 처음 두 k 는 Tags 섹션 내 — lazy invariant.
+	for i := 0; i < 2; i++ {
+		r = pressKey(t, r, "k")
+		if r.yOffset != startOffset {
+			t.Errorf("yOffset after G then k×%d = %d, want %d (lazy in-section)", i+1, r.yOffset, startOffset)
+		}
+		assertCursorVisible(t, r)
+	}
+	beforeOffset := r.yOffset
+	r = pressKey(t, r, "k")
+	if r.yOffset >= beforeOffset {
+		t.Errorf("yOffset after boundary-crossing k did not decrease: before=%d after=%d", beforeOffset, r.yOffset)
+	}
+	assertCursorVisible(t, r)
+	for i := 0; i < 5; i++ {
+		r = pressKey(t, r, "k")
+		assertCursorVisible(t, r)
+	}
+	if got, ok := r.Selected(); !ok || got.ShortName != "local-0" {
+		t.Fatalf("Selected after G then k all the way = %+v ok=%v, want local-0", got, ok)
+	}
+}

@@ -190,8 +190,8 @@ func TestRenderCommitLineWithPairedChip(t *testing.T) {
 	if strings.Count(stripped, "☁") != 1 {
 		t.Errorf("paired chip should carry exactly one '☁' sync prefix, got %q", stripped)
 	}
-	if !strings.Contains(stripped, "HEAD") {
-		t.Errorf("HEAD chip should appear, got %q", stripped)
+	if strings.Contains(stripped, "HEAD") {
+		t.Errorf("HEAD chip removed (boundary signaled by graph dim now), got %q", stripped)
 	}
 }
 
@@ -204,8 +204,11 @@ func TestRenderCommitLineWithDetachedHead(t *testing.T) {
 	}
 	line := renderCommitLine(c, "* ", 2, 2, 80, false)
 	stripped := ansi.Strip(line)
-	if !strings.Contains(stripped, "HEAD") {
-		t.Errorf("detached head should render standalone HEAD chip, got %q", stripped)
+	if strings.Contains(stripped, "HEAD") {
+		t.Errorf("detached HEAD must NOT render a chip — boundary lives on the graph dim pass, got %q", stripped)
+	}
+	if !strings.Contains(stripped, "detached") {
+		t.Errorf("subject must still render even when only HEAD token is present, got %q", stripped)
 	}
 }
 
@@ -840,5 +843,153 @@ func TestCommitDelegateRightAnchorStaysAcrossRows(t *testing.T) {
 	// the absolute column because list applies its own outer padding.
 	if saHash != sbHash {
 		t.Errorf("row A hash col %d != row B hash col %d (right anchor must hold across rows)", saHash, sbHash)
+	}
+}
+
+// renderDelegateRowRaw is renderDelegateRow but returns the ANSI-bearing
+// (commit) line so callers can assert on Faint / Reset codes used by the
+// HEAD-as-dim-boundary pass.
+func renderDelegateRowRaw(t *testing.T, d commitDelegate, items []list.Item, idx, outerWidth int) string {
+	t.Helper()
+	l := list.New(items, d, outerWidth, 10)
+	var buf strings.Builder
+	d.Render(&buf, l, idx, items[idx])
+	parts := strings.SplitN(buf.String(), "\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected connector + commit lines, got %q", buf.String())
+	}
+	return parts[1]
+}
+
+// faintSGR is the ANSI sequence lipgloss emits for Faint(true). Tests look
+// for it as the dim signal — concatenated with other attributes lipgloss
+// joins the SGR codes with ";", but the standalone "[2m" form appears
+// when Faint is the only attribute.
+const faintSGR = "\x1b[2m"
+
+func TestCommitDelegateDimAppliedAboveHEAD(t *testing.T) {
+	now := time.Now()
+	// Three rows; index 1 is HEAD. index 0 is "above HEAD" → dim.
+	items := []list.Item{
+		commitItem{c: git.Commit{Hash: "above01", Subject: "above-head", AuthorTime: now}, commitPrefix: "* ", commitGraphWidth: 2},
+		commitItem{c: git.Commit{Hash: "head002", Subject: "the-head", AuthorTime: now}, commitPrefix: "* ", commitGraphWidth: 2},
+		commitItem{c: git.Commit{Hash: "below03", Subject: "ancestor-of-head", AuthorTime: now}, commitPrefix: "* ", commitGraphWidth: 2},
+	}
+	d := commitDelegate{graphWidth: maxLaneCap * cellWidth, headRowIndex: 1, headAncestors: map[string]struct{}{
+		"head002": {},
+		"below03": {},
+	}}
+
+	above := renderDelegateRowRaw(t, d, items, 0, 80)
+	if !strings.Contains(above, faintSGR) {
+		t.Errorf("row above HEAD should carry Faint SGR; got %q", above)
+	}
+
+	head := renderDelegateRowRaw(t, d, items, 1, 80)
+	if strings.Contains(head, faintSGR) {
+		t.Errorf("HEAD row itself must not be dimmed; got %q", head)
+	}
+
+	below := renderDelegateRowRaw(t, d, items, 2, 80)
+	if strings.Contains(below, faintSGR) {
+		t.Errorf("row below HEAD must not be dimmed; got %q", below)
+	}
+}
+
+func TestCommitDelegateDimSkipsAncestorAboveHEAD(t *testing.T) {
+	// In an --all view, an ancestor of HEAD (e.g. an older common base) can
+	// appear *above* HEAD when topo-order interleaves another branch's tip.
+	// shouldDim must keep the ancestor row bright even though it sits above.
+	now := time.Now()
+	items := []list.Item{
+		commitItem{c: git.Commit{Hash: "sibl001", Subject: "sibling-tip", AuthorTime: now}, commitPrefix: "* ", commitGraphWidth: 2},
+		commitItem{c: git.Commit{Hash: "anc0002", Subject: "head-ancestor", AuthorTime: now}, commitPrefix: "* ", commitGraphWidth: 2},
+		commitItem{c: git.Commit{Hash: "head003", Subject: "the-head", AuthorTime: now}, commitPrefix: "* ", commitGraphWidth: 2},
+	}
+	d := commitDelegate{graphWidth: maxLaneCap * cellWidth, headRowIndex: 2, headAncestors: map[string]struct{}{
+		"head003": {},
+		"anc0002": {},
+	}}
+
+	sibling := renderDelegateRowRaw(t, d, items, 0, 80)
+	if !strings.Contains(sibling, faintSGR) {
+		t.Errorf("non-ancestor sibling above HEAD should be dimmed; got %q", sibling)
+	}
+	ancestor := renderDelegateRowRaw(t, d, items, 1, 80)
+	if strings.Contains(ancestor, faintSGR) {
+		t.Errorf("HEAD ancestor above HEAD must stay bright; got %q", ancestor)
+	}
+}
+
+func TestCommitDelegateDimSuppressedWhenHeadOutOfWindow(t *testing.T) {
+	// HEAD never showed up in the loaded window → headRowIndex stays at -1
+	// and the whole graph stays bright. This is the explicit policy from
+	// the interview: no signal beyond what the user already gets via
+	// status messages on ref-tip jumps.
+	now := time.Now()
+	items := []list.Item{
+		commitItem{c: git.Commit{Hash: "aaa0001", Subject: "row-a", AuthorTime: now}, commitPrefix: "* ", commitGraphWidth: 2},
+		commitItem{c: git.Commit{Hash: "bbb0002", Subject: "row-b", AuthorTime: now}, commitPrefix: "* ", commitGraphWidth: 2},
+	}
+	d := commitDelegate{graphWidth: maxLaneCap * cellWidth, headRowIndex: -1}
+	for i, it := range items {
+		raw := renderDelegateRowRaw(t, d, items, i, 80)
+		if strings.Contains(raw, faintSGR) {
+			t.Errorf("row %d (%v) must not be dimmed when HEAD is out of window; got %q", i, it, raw)
+		}
+	}
+}
+
+func TestCommitDelegateDimFallbackBeforeAncestorsArrive(t *testing.T) {
+	// Before `git rev-list HEAD` lands the delegate has headRowIndex but no
+	// ancestors set. Fallback: dim every row above HEAD so the boundary
+	// reads on first paint (precision arrives a moment later).
+	now := time.Now()
+	items := []list.Item{
+		commitItem{c: git.Commit{Hash: "above01", Subject: "above", AuthorTime: now}, commitPrefix: "* ", commitGraphWidth: 2},
+		commitItem{c: git.Commit{Hash: "head002", Subject: "head", AuthorTime: now}, commitPrefix: "* ", commitGraphWidth: 2},
+	}
+	d := commitDelegate{graphWidth: maxLaneCap * cellWidth, headRowIndex: 1, headAncestors: nil}
+
+	above := renderDelegateRowRaw(t, d, items, 0, 80)
+	if !strings.Contains(above, faintSGR) {
+		t.Errorf("fallback dim should apply when ancestors not yet loaded; got %q", above)
+	}
+	head := renderDelegateRowRaw(t, d, items, 1, 80)
+	if strings.Contains(head, faintSGR) {
+		t.Errorf("HEAD row itself must stay bright in fallback; got %q", head)
+	}
+}
+
+func TestGraphModelCaptureHeadRowFromDecoration(t *testing.T) {
+	// captureHeadRow must read both forms of HEAD encoding from %D:
+	// "HEAD -> main" (named) and bare "HEAD" (detached).
+	g := newGraphModel()
+	rows := []graphRow{
+		{commit: git.Commit{Hash: "aaa", RefNames: []string{"feature/x"}}},
+		{commit: git.Commit{Hash: "bbb", RefNames: []string{"HEAD -> main", "origin/main"}}},
+		{commit: git.Commit{Hash: "ccc"}},
+	}
+	g.captureHeadRow(rows, 0)
+	if g.headHash != "bbb" || g.headRowIndex != 1 {
+		t.Errorf("named HEAD: got hash=%q index=%d, want bbb / 1", g.headHash, g.headRowIndex)
+	}
+
+	g2 := newGraphModel()
+	rowsDet := []graphRow{
+		{commit: git.Commit{Hash: "ddd", RefNames: []string{"HEAD"}}},
+		{commit: git.Commit{Hash: "eee"}},
+	}
+	g2.captureHeadRow(rowsDet, 5) // baseIndex 5 simulates batch midstream
+	if g2.headHash != "ddd" || g2.headRowIndex != 5 {
+		t.Errorf("detached HEAD: got hash=%q index=%d, want ddd / 5", g2.headHash, g2.headRowIndex)
+	}
+
+	// A second batch must not overwrite once HEAD is captured.
+	g2.captureHeadRow([]graphRow{
+		{commit: git.Commit{Hash: "fff", RefNames: []string{"HEAD -> main"}}},
+	}, 10)
+	if g2.headHash != "ddd" || g2.headRowIndex != 5 {
+		t.Errorf("second-batch HEAD must not overwrite first-batch capture; got hash=%q index=%d", g2.headHash, g2.headRowIndex)
 	}
 }

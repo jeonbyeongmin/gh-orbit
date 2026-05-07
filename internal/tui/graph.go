@@ -143,7 +143,40 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	connectorLine := renderConnectorLine(connectorPrefix, connectorWidth, connectorColW, width)
 	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, commitColW, width, selected)
 
+	if d.shouldDim(index, ci.c.Hash) {
+		connectorLine = dimStyle.Render(connectorLine)
+		commitLine = dimStyle.Render(commitLine)
+	}
+
 	_, _ = fmt.Fprint(w, connectorLine+"\n"+commitLine)
+}
+
+// dimStyle is the single Faint pass applied to rows above HEAD that
+// aren't in HEAD's ancestry. ANSI dim (SGR 2) layers on top of the
+// per-row styled prefix so lane lifeline color information is preserved
+// while the row visibly recedes. If terminal-side rendering of Faint
+// turns out to be too subtle we can fall back to a graphPrefix-protected
+// dim of just the message segment — see plan §위험.
+var dimStyle = lipgloss.NewStyle().Faint(true)
+
+// shouldDim is the row-level decision for HEAD-as-dim-boundary. Returns
+// false when HEAD is out of the loaded window (-1) or for the HEAD row
+// itself / rows below it (older commits). Above HEAD, ancestry membership
+// keeps HEAD's reachable history bright; non-ancestors are dimmed. While
+// ancestry hasn't arrived yet (nil set) the fallback is "dim everything
+// above HEAD" so the boundary reads on first paint.
+func (d commitDelegate) shouldDim(index int, hash string) bool {
+	if d.headRowIndex < 0 {
+		return false
+	}
+	if index >= d.headRowIndex {
+		return false
+	}
+	if d.headAncestors == nil {
+		return true
+	}
+	_, isAncestor := d.headAncestors[hash]
+	return !isAncestor
 }
 
 var (

@@ -1271,6 +1271,63 @@ func TestModelCheckoutConfirmSwallowsOtherKeys(t *testing.T) {
 	}
 }
 
+func TestModelGraphCDispatchesDetachedCheckout(t *testing.T) {
+	_, _, getDetached := stubCheckout(t)
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.focused = paneGraph
+
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+	updated, _ = m.Update(commitsStreamDoneMsg{reqID: 1})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	m = updated.(Model)
+
+	if !m.checkoutInFlight {
+		t.Error("'C' should latch checkoutInFlight")
+	}
+	if !m.pendingCheckout.detached {
+		t.Errorf("pendingCheckout = %+v, want detached=true", m.pendingCheckout)
+	}
+	if m.pendingCheckout.ref != "abc1234" {
+		t.Errorf("pendingCheckout.ref = %q, want abc1234 (graph hash)", m.pendingCheckout.ref)
+	}
+	if cmd == nil {
+		t.Fatal("'C' should return a checkoutCmd")
+	}
+	_ = cmd()
+	if got, ok := getDetached(); !ok || got != "abc1234" {
+		t.Errorf("checkoutDetachedExec ref = %q ok=%v, want abc1234", got, ok)
+	}
+}
+
+func TestModelGraphCNoOpWhenRefsFocused(t *testing.T) {
+	stubCheckout(t)
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.focused = paneRefs
+
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Errorf("'C' on refs pane should be a no-op, got cmd=%v", cmd)
+	}
+	if m.checkoutInFlight {
+		t.Error("checkoutInFlight should not latch on refs-focused 'C'")
+	}
+}
+
 func TestModelLocalBranchNameFromRef(t *testing.T) {
 	cases := []struct {
 		name string

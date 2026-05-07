@@ -468,6 +468,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Swallow so capital R doesn't fall through to the focused
 			// sub-model. Reserved for a future Rebase action.
 			return m, nil
+		case "C":
+			// Capital C is the graph-pane sibling of refs Enter: detach HEAD
+			// onto the cursor commit. Gated on focus so a stray 'C' typed
+			// while the refs pane is focused doesn't accidentally detach the
+			// user — there's a separate refs Enter path for named-ref
+			// checkout already.
+			if m.focused != paneGraph {
+				return m, nil
+			}
+			c, ok := m.graph.Selected()
+			if !ok {
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m, cmd = m.beginCheckout(c.Hash, true)
+			return m, cmd
 		case "d":
 			c, ok := m.graph.Selected()
 			if !ok {

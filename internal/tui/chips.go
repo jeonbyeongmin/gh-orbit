@@ -35,12 +35,29 @@ func newChipStyle(bg, fg string) lipgloss.Style {
 		Padding(0, 1)
 }
 
+// pairedSideBorder draws a single-cell dotted glyph on the left and right of
+// a paired-local chip. Top/Bottom strings stay empty because the chip is
+// single-line; only BorderLeft/Right are enabled at the style level so the
+// visible width stays at text + 2 (Padding(0,0) + 1-cell border × 2) — the
+// same total cells a chip with Padding(0,1) takes, so totalW is unchanged.
+var pairedSideBorder = lipgloss.Border{Left: "┊", Right: "┊"}
+
 var (
-	chipLocalStyle    = newChipStyle(colorChipLocal, colorChipFG)
-	chipRemoteStyle   = newChipStyle(colorChipRemote, colorChipFG)
-	chipTagStyle      = newChipStyle(colorChipTag, colorChipFG)
-	chipHeadStyle     = newChipStyle(colorChipHead, colorChipHeadFG).Bold(true)
-	chipMoreStyle     = newChipStyle(colorChipMore, colorChipFG)
+	chipLocalStyle  = newChipStyle(colorChipLocal, colorChipFG)
+	chipRemoteStyle = newChipStyle(colorChipRemote, colorChipFG)
+	chipTagStyle    = newChipStyle(colorChipTag, colorChipFG)
+	chipHeadStyle   = newChipStyle(colorChipHead, colorChipHeadFG).Bold(true)
+	chipMoreStyle   = newChipStyle(colorChipMore, colorChipFG)
+	// chipLocalPairedStyle: same colors as chipLocalStyle but Padding(0,0) +
+	// dotted side-border to signal "local is in sync with origin/<same>"
+	// without the misleading "↑" marker the previous implementation appended.
+	chipLocalPairedStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color(colorChipLocal)).
+				Foreground(lipgloss.Color(colorChipFG)).
+				Padding(0, 0).
+				Border(pairedSideBorder, false, true, false, true).
+				BorderBackground(lipgloss.Color(colorChipLocal)).
+				BorderForeground(lipgloss.Color(colorChipFG))
 	chipSelectedStyle = newChipStyle(colorSelected, colorChipFG)
 )
 

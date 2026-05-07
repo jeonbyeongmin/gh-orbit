@@ -40,6 +40,12 @@ type changesModel struct {
 	// Stale-drop: messages whose reqID/hash/path no longer match are ignored
 	// so a slow `git show` for an old file doesn't paint over the current one.
 	fileReqID uint64
+	// fileListYOffset is the index of the first file currently rendered in
+	// the left column. We don't host the file-list in a bubbles/viewport
+	// because viewport.Update would swallow j/k for its own scroll, and the
+	// file-list needs j/k to mean cursor-move-plus-patch-reload. Instead we
+	// keep an explicit offset and slide it via edge-follow inside Update.
+	fileListYOffset int
 }
 
 func newChangesModel() changesModel {
@@ -55,6 +61,10 @@ func (c *changesModel) SetSize(w, h int) {
 	if c.patchText != "" {
 		c.viewport.SetContent(c.patchText)
 	}
+	// Re-clamp yOffset so a shrunk file-list area never strands the cursor
+	// outside the visible window, and a grown one doesn't leave trailing
+	// blank rows after the last file.
+	c.followCursor()
 }
 
 // columnWidths splits the available width between the file-list (left) and
@@ -85,6 +95,7 @@ func (c *changesModel) MarkPending(hash string) {
 	c.hash = hash
 	c.files = nil
 	c.cursor = 0
+	c.fileListYOffset = 0
 	c.loadingFiles = true
 	c.statErr = nil
 	c.patchText = ""
@@ -101,19 +112,18 @@ func (c *changesModel) SetFiles(hash string, files []git.FileStat) tea.Cmd {
 	c.hash = hash
 	c.loadingFiles = false
 	c.statErr = nil
-	if c.cursor >= len(files) {
-		c.cursor = 0
-	}
-	if c.cursor < 0 {
+	if c.cursor >= len(files) || c.cursor < 0 {
 		c.cursor = 0
 	}
 	if len(files) == 0 {
+		c.fileListYOffset = 0
 		c.patchText = ""
 		c.patchErr = nil
 		c.loadingPatch = false
 		c.viewport.SetContent("")
 		return nil
 	}
+	c.followCursor()
 	return c.loadCurrentFileCmd()
 }
 
@@ -184,26 +194,54 @@ func (c changesModel) Update(msg tea.Msg) (changesModel, tea.Cmd) {
 		case "j", "down":
 			if c.cursor < len(c.files)-1 {
 				c.cursor++
+				c.followCursor()
 				return c, c.loadCurrentFileCmd()
 			}
 		case "k", "up":
 			if c.cursor > 0 {
 				c.cursor--
+				c.followCursor()
 				return c, c.loadCurrentFileCmd()
 			}
 		case "g":
 			if c.cursor != 0 {
 				c.cursor = 0
+				c.fileListYOffset = 0
 				return c, c.loadCurrentFileCmd()
 			}
 		case "G":
 			if len(c.files) > 0 && c.cursor != len(c.files)-1 {
 				c.cursor = len(c.files) - 1
+				c.followCursor()
 				return c, c.loadCurrentFileCmd()
 			}
 		}
 	}
 	return c, nil
+}
+
+// followCursor implements edge-follow auto-scroll for the file-list: yOffset
+// only moves when the cursor walks off the top or bottom of the visible
+// window, then snaps just enough to bring it back inside. After cursor
+// motion it also normalizes the offset so it stays inside [0, len-visibleH].
+func (c *changesModel) followCursor() {
+	visibleH := c.height
+	if visibleH < 1 {
+		visibleH = 1
+	}
+	if c.cursor < c.fileListYOffset {
+		c.fileListYOffset = c.cursor
+	} else if c.cursor >= c.fileListYOffset+visibleH {
+		c.fileListYOffset = c.cursor - visibleH + 1
+	}
+	if c.fileListYOffset < 0 {
+		c.fileListYOffset = 0
+	}
+	if maxOffset := len(c.files) - visibleH; maxOffset < 0 {
+		c.fileListYOffset = 0
+	} else if c.fileListYOffset > maxOffset {
+		c.fileListYOffset = maxOffset
+	}
 }
 
 var (
@@ -256,8 +294,22 @@ func (c changesModel) renderFileList(width int) string {
 		pathW = 4
 	}
 
+	visibleH := c.height
+	if visibleH < 1 {
+		visibleH = 1
+	}
+	start := c.fileListYOffset
+	if start < 0 {
+		start = 0
+	}
+	end := start + visibleH
+	if end > len(c.files) {
+		end = len(c.files)
+	}
+
 	var b strings.Builder
-	for i, f := range c.files {
+	for i := start; i < end; i++ {
+		f := c.files[i]
 		var line string
 		if f.Binary() {
 			binCell := runewidth.FillRight(changesBinS.Render("Bin"), statColW)
@@ -274,7 +326,7 @@ func (c changesModel) renderFileList(width int) string {
 			line = changesCursorS.Render(line)
 		}
 		b.WriteString(line)
-		if i < len(c.files)-1 {
+		if i < end-1 {
 			b.WriteByte('\n')
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -24,14 +25,26 @@ type commitDetailModel struct {
 	err     error
 	reqID   uint64
 
-	width, height int
+	width    int
+	viewport viewport.Model
 }
 
-func newCommitDetailModel() commitDetailModel { return commitDetailModel{} }
+func newCommitDetailModel() commitDetailModel {
+	return commitDetailModel{viewport: viewport.New(0, 0)}
+}
 
+// SetSize updates the viewport dimensions. The body is only re-wrapped when
+// the width actually changes — height-only changes (the common case for
+// ctrl+↑/↓ split adjustments) skip the lipgloss soft-wrap + ANSI re-parse,
+// which is the hot path the user holds the resize keys on.
 func (c *commitDetailModel) SetSize(w, h int) {
+	widthChanged := w != c.width
 	c.width = w
-	c.height = h
+	c.viewport.Width = w
+	c.viewport.Height = h
+	if c.loaded && widthChanged {
+		c.viewport.SetContent(c.renderContent())
+	}
 }
 
 // MarkLoading clears prior content and stamps the request id so the Commit
@@ -43,6 +56,8 @@ func (c *commitDetailModel) MarkLoading(hash string, reqID uint64) {
 	c.loading = true
 	c.err = nil
 	c.reqID = reqID
+	c.viewport.SetContent("")
+	c.viewport.GotoTop()
 }
 
 func (c *commitDetailModel) accepts(reqID uint64, hash string) bool {
@@ -57,6 +72,8 @@ func (c *commitDetailModel) ApplyDetailLoaded(reqID uint64, hash string, d git.D
 	c.loaded = true
 	c.detail = d
 	c.err = nil
+	c.viewport.SetContent(c.renderContent())
+	c.viewport.GotoTop()
 }
 
 func (c *commitDetailModel) ApplyDetailFailed(reqID uint64, hash string, err error) {
@@ -71,6 +88,25 @@ func (c *commitDetailModel) ApplyDetailFailed(reqID uint64, hash string, err err
 // detail is still loading — the y-key clipboard write needs it before the
 // `git show` round-trip completes.
 func (c commitDetailModel) CurrentHash() string { return c.hash }
+
+// ScrollContent forwards a pre-filtered scroll key to the viewport. The caller
+// (model.go paneTab dispatch) is responsible for whitelisting which keys reach
+// here so viewport's default keymap (which would otherwise claim ctrl+d/u for
+// itself) doesn't shadow the Changes-tab patch scroll bindings. g/G are
+// special-cased because viewport's DefaultKeyMap doesn't bind them.
+func (c *commitDetailModel) ScrollContent(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "g":
+		c.viewport.GotoTop()
+		return nil
+	case "G":
+		c.viewport.GotoBottom()
+		return nil
+	}
+	var cmd tea.Cmd
+	c.viewport, cmd = c.viewport.Update(msg)
+	return cmd
+}
 
 var (
 	commitLabelS = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
@@ -120,6 +156,14 @@ func (c commitDetailModel) View() string {
 	if c.loading && !c.loaded {
 		return commitEmptyS.Render("loading…")
 	}
+	return c.viewport.View()
+}
+
+// renderContent builds the full Commit-tab body string. Metadata rows render
+// at natural width (they're short enough to never need wrapping), while the
+// body is soft-wrapped to the viewport width so long lines don't overflow
+// horizontally — the viewport handles vertical overflow via scroll.
+func (c commitDetailModel) renderContent() string {
 	d := c.detail
 	var b strings.Builder
 	row := func(label, value string) {
@@ -152,7 +196,11 @@ func (c commitDetailModel) View() string {
 	}
 	row("sign", signStyle.Render(signStatusLabel(d.SignStatus)))
 	b.WriteByte('\n')
-	b.WriteString(strings.TrimRight(d.Body, "\n"))
+	body := strings.TrimRight(d.Body, "\n")
+	if c.width > 0 {
+		body = lipgloss.NewStyle().Width(c.width).Render(body)
+	}
+	b.WriteString(body)
 	return b.String()
 }
 

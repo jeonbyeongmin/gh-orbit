@@ -689,3 +689,88 @@ func TestModelFetchFailedSurfacesError(t *testing.T) {
 		t.Error("graph.loaded should remain on fetch failure")
 	}
 }
+
+// loadCommitDetailFixture installs a long body into the Commit-tab viewport
+// so paneTab dispatch tests have something to scroll. Mirrors the metadata
+// + body shape of a real ApplyDetailLoaded call but bypasses the git command
+// since these tests run without a repo.
+func loadCommitDetailFixture(t *testing.T, m *Model) {
+	t.Helper()
+	m.commitDetail.MarkLoading("hash", 1)
+	m.commitDetail.ApplyDetailLoaded(1, "hash", git.Detail{
+		Hash: "hash",
+		Body: strings.Repeat("body line\n", 60),
+	})
+}
+
+func TestPaneTabCommit_JKScrollsBodyViewport(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.focused = paneTab
+	loadCommitDetailFixture(t, &m)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+	if m.commitDetail.viewport.YOffset == 0 {
+		t.Errorf("j on Commit tab must scroll the body viewport, YOffset still 0")
+	}
+}
+
+func TestPaneTabCommit_TabTogglePreservesScroll(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.focused = paneTab
+	loadCommitDetailFixture(t, &m)
+
+	// Scroll a few lines down on the Commit tab.
+	for i := 0; i < 3; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = updated.(Model)
+	}
+	scrolled := m.commitDetail.viewport.YOffset
+	if scrolled == 0 {
+		t.Fatalf("setup: j×3 should have advanced the viewport")
+	}
+	// Toggle to Changes and back to Commit — the Commit-tab viewport state must
+	// survive the round trip (each tab keeps its own offset).
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m = updated.(Model)
+	if m.tabs.Active() != tabChanges {
+		t.Fatalf("l should switch to Changes")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	m = updated.(Model)
+	if m.tabs.Active() != tabCommit {
+		t.Fatalf("h should switch back to Commit")
+	}
+	if m.commitDetail.viewport.YOffset != scrolled {
+		t.Errorf("scroll position lost across tab toggle: got %d, want %d",
+			m.commitDetail.viewport.YOffset, scrolled)
+	}
+}
+
+func TestPaneTabCommit_CtrlDIsNoOp(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.focused = paneTab
+	if m.tabs.Active() != tabCommit {
+		t.Fatalf("setup: tab default = %v, want tabCommit", m.tabs.Active())
+	}
+	loadCommitDetailFixture(t, &m)
+
+	// ctrl+d/ctrl+u stay reserved for the Changes-tab patch viewport — the
+	// Commit tab must not consume them, so YOffset stays at 0.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m = updated.(Model)
+	if m.commitDetail.viewport.YOffset != 0 {
+		t.Errorf("ctrl+d on Commit tab must be a no-op, YOffset = %d", m.commitDetail.viewport.YOffset)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	m = updated.(Model)
+	if m.commitDetail.viewport.YOffset != 0 {
+		t.Errorf("ctrl+u on Commit tab must be a no-op, YOffset = %d", m.commitDetail.viewport.YOffset)
+	}
+}

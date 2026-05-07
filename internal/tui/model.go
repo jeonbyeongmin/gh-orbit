@@ -761,7 +761,7 @@ var (
 )
 
 const (
-	helpTextNormal     = "tab focus · h/l switch tab · j/k navigate · ctrl+↑/↓ resize · enter jump ref · y copy hash · d patch · F fetch · P pull · r reload · q quit"
+	helpTextNormal     = "tab focus · h/l switch tab · j/k nav · ctrl+↑/↓ resize · enter checkout · o jump ref · C detach · y copy · d patch · F fetch · P pull · r reload · q quit"
 	helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
 )
 

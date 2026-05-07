@@ -142,6 +142,11 @@ func TestPullIntegrationConflictWraps(t *testing.T) {
 		t.Fatalf("mkdir work: %v", err)
 	}
 	gitRun(t, work, "init", "-b", "main")
+	// Pull() inherits the parent's environment, not gitRun's per-call env, so
+	// merge commits made during pull need user.email/user.name set on the
+	// repo itself. CI runners have no global identity.
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
 	gitRun(t, work, "remote", "add", "origin", bare)
 	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatalf("write f.txt: %v", err)

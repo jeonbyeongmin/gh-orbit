@@ -87,6 +87,7 @@ right). `File Tree` is reserved for a follow-up backlog.
 | `y`             | Commit tab    | copy full hash to clipboard                    |
 | `d`             | global        | open the focused commit's full patch overlay   |
 | `F`             | global        | `git fetch --all` in the background            |
+| `P`             | global        | `git pull` in the background (strategy: prefs > git config > `--ff-only`) |
 | `r`             | global        | reload refs + log                              |
 | `q` / `ctrl+c`  | global        | quit (closes the patch overlay first)          |
 | `R`             | global        | reserved for a future Rebase action            |
@@ -123,3 +124,16 @@ tail -f ~/.local/state/gh-orbit/log
 ```
 
 If `$XDG_STATE_HOME` is unset, fall back to `~/.local/state/gh-orbit/log` per the XDG Base Directory spec — not `~/.gh-orbit/`.
+
+## User Preferences
+
+User prefs live in `$XDG_CONFIG_HOME/gh-orbit/config.toml` (defaults to `~/.config/gh-orbit/config.toml`). The file is optional — a missing or empty file means "use defaults". `internal/config.LoadPrefs` parses TOML; unknown keys are ignored.
+
+Schema (only field today):
+
+```toml
+[pull]
+strategy = "rebase"   # "ff-only" | "merge" | "rebase"
+```
+
+`P` resolves the strategy in this order: prefs `[pull] strategy` → git config `pull.rebase` (`true` → rebase) → git config `pull.ff` (`only` → ff-only) → final fallback `--ff-only`. A pull conflict surfaces "pull: CONFLICT — resolve in your terminal" in the status bar; resolve with the user's normal git workflow outside the TUI.

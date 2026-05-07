@@ -49,6 +49,10 @@ PR review/merge is a follow-up milestone. Right now the build wires up:
   - `y` — copy the focused commit's hash to the clipboard (Commit tab)
   - `d` — open the patch overlay (`esc` / `q` to close)
   - `F` — `git fetch --all` in the background
+  - `P` — `git pull` in the background; strategy from
+    `~/.config/gh-orbit/config.toml` (`[pull] strategy = "ff-only" | "merge"
+    | "rebase"`), then git's `pull.rebase` / `pull.ff`, falling back to
+    `--ff-only`
   - `r` — reload refs + log
   - `q` / `ctrl+c` — quit (closes the patch overlay first)
   - `R` is reserved for a future Rebase action

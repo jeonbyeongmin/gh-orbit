@@ -102,9 +102,9 @@ type graphRow struct {
 // `git rev-list HEAD`; before it lands the delegate falls back to "all
 // rows above headRowIndex are dim" so the boundary is visible immediately.
 type commitDelegate struct {
-	graphWidth     int
-	headRowIndex   int
-	headAncestors  map[string]struct{}
+	graphWidth    int
+	headRowIndex  int
+	headAncestors map[string]struct{}
 }
 
 func (commitDelegate) Height() int                             { return 2 }

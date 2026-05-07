@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -739,5 +741,101 @@ func TestGraphModelStreamDoneClearsLoadingOnEmpty(t *testing.T) {
 	}
 	if got := g.View(); got != "(no commits)" {
 		t.Errorf("after empty done, View = %q, want %q", got, "(no commits)")
+	}
+}
+
+// renderDelegateRow builds a list.Model around the given items and renders
+// the requested index through commitDelegate. Returns the ANSI-stripped
+// commit line (the second of the connector+commit pair).
+func renderDelegateRow(t *testing.T, items []list.Item, idx, outerWidth, capW int) string {
+	t.Helper()
+	d := commitDelegate{graphWidth: capW}
+	l := list.New(items, d, outerWidth, 10)
+	var buf strings.Builder
+	d.Render(&buf, l, idx, items[idx])
+	parts := strings.SplitN(buf.String(), "\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected connector + commit lines, got %q", buf.String())
+	}
+	return ansi.Strip(parts[1])
+}
+
+// visibleColOf returns the visible column where sub starts in s, or -1 if
+// sub is not present. Unlike strings.Index it counts cells (handles wide
+// runes and multi-byte ASCII glyphs like "›") rather than bytes.
+func visibleColOf(s, sub string) int {
+	i := strings.Index(s, sub)
+	if i < 0 {
+		return -1
+	}
+	return runewidth.StringWidth(s[:i])
+}
+
+func TestCommitDelegateRendersGraphPerRowTight(t *testing.T) {
+	// Two rows with very different lane counts. With per-row tight the
+	// subject starts immediately after each row's own graph width — so
+	// the two rows have *different* subject start columns. That is the
+	// whole point of dropping the max-align padding.
+	now := time.Now()
+	rowA := commitItem{
+		c:                git.Commit{Hash: "aaaa111", Subject: "row-a", AuthorTime: now},
+		commitPrefix:     "* ",
+		commitGraphWidth: 2,
+	}
+	rowB := commitItem{
+		c:                git.Commit{Hash: "bbbb222", Subject: "row-b", AuthorTime: now},
+		commitPrefix:     "| | | * ",
+		commitGraphWidth: 8,
+	}
+	items := []list.Item{rowA, rowB}
+
+	saStripped := renderDelegateRow(t, items, 0, 80, maxLaneCap*cellWidth)
+	sbStripped := renderDelegateRow(t, items, 1, 80, maxLaneCap*cellWidth)
+
+	saSubject := visibleColOf(saStripped, "row-a")
+	sbSubject := visibleColOf(sbStripped, "row-b")
+	if saSubject < 0 || sbSubject < 0 {
+		t.Fatalf("subject missing; A=%q B=%q", saStripped, sbStripped)
+	}
+	// No chips and no author here — subject sits at cursor + own graph width.
+	if want := cursorColWidth + rowA.commitGraphWidth; saSubject != want {
+		t.Errorf("row A subject col = %d, want %d", saSubject, want)
+	}
+	if want := cursorColWidth + rowB.commitGraphWidth; sbSubject != want {
+		t.Errorf("row B subject col = %d, want %d", sbSubject, want)
+	}
+	if saSubject == sbSubject {
+		t.Errorf("per-row tight: rows must not share the same subject column, both at %d", saSubject)
+	}
+}
+
+func TestCommitDelegateRightAnchorStaysAcrossRows(t *testing.T) {
+	// Right-anchor invariant: hash + time live at width - rightTail
+	// regardless of how wide each row's graph is. Per-row tight must
+	// not break this.
+	now := time.Now()
+	rowA := commitItem{
+		c:                git.Commit{Hash: "aaaa111", Subject: "row-a", AuthorTime: now},
+		commitPrefix:     "* ",
+		commitGraphWidth: 2,
+	}
+	rowB := commitItem{
+		c:                git.Commit{Hash: "bbbb222", Subject: "row-b", AuthorTime: now},
+		commitPrefix:     "| | | * ",
+		commitGraphWidth: 8,
+	}
+	items := []list.Item{rowA, rowB}
+	const width = 80
+
+	saStripped := renderDelegateRow(t, items, 0, width, maxLaneCap*cellWidth)
+	sbStripped := renderDelegateRow(t, items, 1, width, maxLaneCap*cellWidth)
+
+	saHash := visibleColOf(saStripped, "aaaa111")
+	sbHash := visibleColOf(sbStripped, "bbbb222")
+	// Right anchor is what matters: both rows must share the same hash
+	// column regardless of how wide their graph cell is. We don't pin
+	// the absolute column because list applies its own outer padding.
+	if saHash != sbHash {
+		t.Errorf("row A hash col %d != row B hash col %d (right anchor must hold across rows)", saHash, sbHash)
 	}
 }

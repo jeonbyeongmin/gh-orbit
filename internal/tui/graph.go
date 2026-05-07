@@ -20,8 +20,10 @@ import (
 )
 
 const (
-	defaultLogMaxCount = 200
-	shortHashLen       = 7
+	defaultLogMaxCount  = 200
+	streamBatchSize     = 200
+	streamBatchInterval = 50 * time.Millisecond
+	shortHashLen        = 7
 	// 8 covers the widest relativeShort output ("just now").
 	timeColWidth = 8
 	// authorColWidth is the visible budget for the author column. Names
@@ -297,8 +299,10 @@ type graphModel struct {
 	height         int
 	err            error
 	loaded         bool
-	graphWidth     int // graph column width currently in effect (after cap)
-	maxVisualWidth int // widest graphPrefix among loaded rows
+	streaming      bool // a LogStream is in flight; loaded may already be true
+	userHasMoved   bool // true after the user has intentionally moved the cursor (j/k/g/G/etc)
+	graphWidth     int  // graph column width currently in effect (after cap)
+	maxVisualWidth int  // widest graphPrefix among loaded rows
 }
 
 func newGraphModel() graphModel {
@@ -317,32 +321,149 @@ func newGraphModel() graphModel {
 type commitsLoadedMsg struct{ rows []graphRow }
 type commitsLoadFailedMsg struct{ err error }
 
-// loadCommitsCmd runs git.Log in a tea.Cmd, then feeds the commits through a
-// fresh lane allocator to produce one styled graph segment per row.
-func loadCommitsCmd(dir string, refs []string, max int) tea.Cmd {
+// commitsStreamStartedMsg is the first event of a streaming load. The Model
+// stashes cancel for r/quit teardown and dispatches next to start collecting
+// batches. reqID lets stale streams (after a reload) drop their messages.
+type commitsStreamStartedMsg struct {
+	reqID  uint64
+	cancel context.CancelFunc
+	next   tea.Cmd
+}
+
+// commitsAppendedMsg carries one batch of rows. done=true means this is the
+// final batch (channel closed cleanly). next, when non-nil, is the cmd that
+// will collect the next batch.
+type commitsAppendedMsg struct {
+	reqID uint64
+	rows  []graphRow
+	done  bool
+	next  tea.Cmd
+}
+
+// commitsStreamDoneMsg ends a stream. err is non-nil for a real failure;
+// nil err means natural end-of-history or quiet ctx cancel.
+type commitsStreamDoneMsg struct {
+	reqID uint64
+	err   error
+}
+
+// streamState lives across a stream's lifetime. The lane allocator is created
+// once per reload so lane numbers stay continuous across batch boundaries.
+type streamState struct {
+	reqID          uint64
+	ctx            context.Context
+	ch             <-chan git.CommitOrErr
+	cancel         context.CancelFunc
+	alloc          *lanes.Allocator
+	firstBatchSent bool
+}
+
+// loadCommitsCmd kicks off a streaming `git log`. The first message is
+// commitsStreamStartedMsg (carrying cancel + the batch-collector cmd);
+// subsequent batches arrive as commitsAppendedMsg, with commitsStreamDoneMsg
+// closing the stream.
+//
+// reqID lets the model drop stale messages after a reload — only the latest
+// reqID's batches should mutate the list.
+func loadCommitsCmd(dir string, refs []string, max int, reqID uint64) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		commits, err := git.Log(ctx, git.LogOptions{Dir: dir, Refs: refs, MaxCount: max})
+		ctx, cancel := context.WithCancel(context.Background())
+		ch, err := git.LogStream(ctx, git.LogOptions{Dir: dir, Refs: refs, MaxCount: max})
 		if err != nil {
-			return commitsLoadFailedMsg{err: err}
+			cancel()
+			return commitsStreamDoneMsg{reqID: reqID, err: err}
 		}
-		alloc := lanes.New()
-		rows := make([]graphRow, len(commits))
-		for i, c := range commits {
-			pair := alloc.Push(c)
-			connectorText, connectorW := renderGraphRow(pair.Connector)
-			commitText, commitW := renderGraphRow(pair.Commit)
-			rows[i] = graphRow{
-				commit:          c,
-				connectorPrefix: connectorText,
-				connectorWidth:  connectorW,
-				commitPrefix:    commitText,
-				commitWidth:     commitW,
+		state := &streamState{
+			reqID:  reqID,
+			ctx:    ctx,
+			ch:     ch,
+			cancel: cancel,
+			alloc:  lanes.New(),
+		}
+		return commitsStreamStartedMsg{
+			reqID:  reqID,
+			cancel: cancel,
+			next:   collectBatchCmd(state),
+		}
+	}
+}
+
+// collectBatchCmd accumulates commits from the LogStream channel until either
+// streamBatchSize commits arrive or streamBatchInterval elapses with at least
+// one commit pending, then emits a commitsAppendedMsg. The first commit
+// always flushes immediately so the initial paint happens within ms.
+//
+// ctx.Done is on every wait path — this is the firstBatchSent / drain race
+// guard called out in the plan.
+func collectBatchCmd(state *streamState) tea.Cmd {
+	return func() tea.Msg {
+		rows := make([]graphRow, 0, streamBatchSize)
+		deadline := time.NewTimer(streamBatchInterval)
+		defer deadline.Stop()
+		for {
+			select {
+			case <-state.ctx.Done():
+				go drainStream(state.ch)
+				return commitsStreamDoneMsg{reqID: state.reqID}
+			case ev, ok := <-state.ch:
+				if !ok {
+					if len(rows) > 0 {
+						return commitsAppendedMsg{reqID: state.reqID, rows: rows, done: true}
+					}
+					return commitsStreamDoneMsg{reqID: state.reqID}
+				}
+				if ev.Err != nil {
+					if len(rows) > 0 {
+						return commitsAppendedMsg{
+							reqID: state.reqID, rows: rows, done: true,
+							next: errMsgCmd(state.reqID, ev.Err),
+						}
+					}
+					return commitsStreamDoneMsg{reqID: state.reqID, err: ev.Err}
+				}
+				pair := state.alloc.Push(ev.Commit)
+				connectorText, connectorW := renderGraphRow(pair.Connector)
+				commitText, commitW := renderGraphRow(pair.Commit)
+				rows = append(rows, graphRow{
+					commit:          ev.Commit,
+					connectorPrefix: connectorText,
+					connectorWidth:  connectorW,
+					commitPrefix:    commitText,
+					commitWidth:     commitW,
+				})
+				if !state.firstBatchSent {
+					state.firstBatchSent = true
+					return commitsAppendedMsg{
+						reqID: state.reqID, rows: rows, done: false,
+						next: collectBatchCmd(state),
+					}
+				}
+				if len(rows) >= streamBatchSize {
+					return commitsAppendedMsg{
+						reqID: state.reqID, rows: rows, done: false,
+						next: collectBatchCmd(state),
+					}
+				}
+			case <-deadline.C:
+				if len(rows) > 0 {
+					return commitsAppendedMsg{
+						reqID: state.reqID, rows: rows, done: false,
+						next: collectBatchCmd(state),
+					}
+				}
+				deadline.Reset(streamBatchInterval)
 			}
 		}
-		return commitsLoadedMsg{rows: rows}
 	}
+}
+
+func drainStream(ch <-chan git.CommitOrErr) {
+	for range ch {
+	}
+}
+
+func errMsgCmd(reqID uint64, err error) tea.Cmd {
+	return func() tea.Msg { return commitsStreamDoneMsg{reqID: reqID, err: err} }
 }
 
 func (g graphModel) Init() tea.Cmd { return nil }
@@ -380,6 +501,21 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 		g.loaded = true
 		g.err = m.err
 		return g, nil
+	case commitsStreamStartedMsg:
+		g.streaming = true
+		if m.next != nil {
+			return g, m.next
+		}
+		return g, nil
+	case commitsAppendedMsg:
+		return g.handleAppended(m)
+	case commitsStreamDoneMsg:
+		g.streaming = false
+		g.loaded = true
+		if m.err != nil && len(g.list.Items()) == 0 {
+			g.err = m.err
+		}
+		return g, nil
 	case tea.KeyMsg:
 		prevHash := ""
 		if c, ok := g.Selected(); ok {
@@ -392,11 +528,100 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 			newHash = c.Hash
 		}
 		if newHash != "" && newHash != prevHash {
+			// PR #14 회귀 가드: tail-follow 는 사용자가 한 번이라도
+			// cursor 를 의식적으로 옮긴 뒤에만 작동해야 한다.
+			g.userHasMoved = true
 			return g, tea.Batch(cmd, emitCommitSelected(newHash))
 		}
 		return g, cmd
 	}
 	return g, nil
+}
+
+// handleAppended folds one streaming batch into the list. First batch:
+// SetItems + commitSelectedMsg for the initial cursor. Subsequent batch:
+// append, with tail-follow gated by userHasMoved (PR #14 회귀 가드).
+func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
+	if !g.loaded {
+		items := make([]list.Item, 0, len(m.rows))
+		maxW := 0
+		for _, r := range m.rows {
+			items = append(items, commitItem{
+				c:                r.commit,
+				connectorPrefix:  r.connectorPrefix,
+				connectorWidth:   r.connectorWidth,
+				commitPrefix:     r.commitPrefix,
+				commitGraphWidth: r.commitWidth,
+			})
+			if r.commitWidth > maxW {
+				maxW = r.commitWidth
+			}
+			if r.connectorWidth > maxW {
+				maxW = r.connectorWidth
+			}
+		}
+		g.maxVisualWidth = maxW
+		g.applyGraphCap()
+		setCmd := g.list.SetItems(items)
+		g.loaded = true
+		g.streaming = !m.done
+		g.err = nil
+		cmds := []tea.Cmd{setCmd}
+		if c, ok := g.Selected(); ok {
+			cmds = append(cmds, emitCommitSelected(c.Hash))
+		}
+		if !m.done && m.next != nil {
+			cmds = append(cmds, m.next)
+		}
+		return g, tea.Batch(cmds...)
+	}
+
+	prev := g.list.Items()
+	prevLen := len(prev)
+	// Tail-follow only when the user has actually moved the cursor at least
+	// once and is sitting on the last visible row. Without userHasMoved the
+	// fresh cursor at index 0 == prevLen-1 (single-row first batch) would
+	// trigger spurious tail-follow on the second batch — the PR #14 회귀.
+	atTail := g.userHasMoved && prevLen > 0 && g.list.Index() == prevLen-1
+
+	items := make([]list.Item, 0, prevLen+len(m.rows))
+	items = append(items, prev...)
+	maxW := g.maxVisualWidth
+	for _, r := range m.rows {
+		items = append(items, commitItem{
+			c:                r.commit,
+			connectorPrefix:  r.connectorPrefix,
+			connectorWidth:   r.connectorWidth,
+			commitPrefix:     r.commitPrefix,
+			commitGraphWidth: r.commitWidth,
+		})
+		if r.commitWidth > maxW {
+			maxW = r.commitWidth
+		}
+		if r.connectorWidth > maxW {
+			maxW = r.connectorWidth
+		}
+	}
+	if maxW != g.maxVisualWidth {
+		g.maxVisualWidth = maxW
+		g.applyGraphCap()
+	}
+	setCmd := g.list.SetItems(items)
+	g.streaming = !m.done
+
+	cmds := []tea.Cmd{setCmd}
+	if atTail {
+		g.list.Select(len(items) - 1)
+		if c, ok := g.Selected(); ok {
+			// Tail-follow moved the cursor — re-emit so Commit/Changes
+			// tabs follow it. model.go's diffReqID debounces fast batches.
+			cmds = append(cmds, emitCommitSelected(c.Hash))
+		}
+	}
+	if !m.done && m.next != nil {
+		cmds = append(cmds, m.next)
+	}
+	return g, tea.Batch(cmds...)
 }
 
 func emitCommitSelected(hash string) tea.Cmd {
@@ -449,6 +674,8 @@ func (g *graphModel) applyGraphCap() {
 // callers should batch it with the new load cmd.
 func (g *graphModel) ResetForReload() tea.Cmd {
 	g.loaded = false
+	g.streaming = false
+	g.userHasMoved = false
 	g.err = nil
 	g.maxVisualWidth = 0
 	g.graphWidth = 0

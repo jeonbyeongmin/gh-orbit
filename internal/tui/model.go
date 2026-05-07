@@ -3,6 +3,8 @@
 package tui
 
 import (
+	"context"
+
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -65,6 +67,14 @@ type Model struct {
 	// in-flight git show responses compare their reqID against this and drop
 	// themselves if they no longer match.
 	diffReqID uint64
+	// streamReqID counts every LogStream dispatch (initial load + each
+	// reloadCmd). Stale stream messages from the previous reload compare
+	// reqID against this and drop themselves. Independent of diffReqID:
+	// diff debounce and graph reload progress on separate cadences.
+	streamReqID uint64
+	// streamCancel is the cancel handle of the most recent LogStream. r and
+	// q/ctrl+c invoke it so the git process is reaped instead of leaking.
+	streamCancel context.CancelFunc
 	// currentRefs is the last commit-query argument dispatched to
 	// loadCommitsCmd. New() seeds it with [refsAllSentinel] so the unified
 	// graph is the default base. Reload (r) replays git.Log with this exact
@@ -92,12 +102,13 @@ func New() Model {
 		tabs:         newTabsModel(),
 		splitRatio:   splitRatioDefault,
 		currentRefs:  []string{refsAllSentinel},
+		streamReqID:  1,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
+		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount, m.streamReqID),
 		loadRefsCmd(""),
 	)
 }
@@ -119,6 +130,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case commitsLoadedMsg, commitsLoadFailedMsg:
+		var cmd tea.Cmd
+		m.graph, cmd = m.graph.Update(msg)
+		return m, cmd
+
+	case commitsStreamStartedMsg:
+		if msg.reqID != m.streamReqID {
+			// Stale — its reload was superseded. Cancel the orphaned
+			// producer immediately so its git process doesn't leak.
+			if msg.cancel != nil {
+				msg.cancel()
+			}
+			return m, nil
+		}
+		m.streamCancel = msg.cancel
+		var cmd tea.Cmd
+		m.graph, cmd = m.graph.Update(msg)
+		return m, cmd
+
+	case commitsAppendedMsg:
+		if msg.reqID != m.streamReqID {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.graph, cmd = m.graph.Update(msg)
+		return m, cmd
+
+	case commitsStreamDoneMsg:
+		if msg.reqID != m.streamReqID {
+			return m, nil
+		}
+		m.streamCancel = nil
 		var cmd tea.Cmd
 		m.graph, cmd = m.graph.Update(msg)
 		return m, cmd
@@ -214,6 +256,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.diff.ClosePatch()
 				return m, nil
 			case "ctrl+c":
+				if m.streamCancel != nil {
+					m.streamCancel()
+					m.streamCancel = nil
+				}
 				return m, tea.Quit
 			case "j", "k", "down", "up", "pgdown", "pgup":
 				return m, m.diff.ScrollPatch(msg)
@@ -222,6 +268,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "ctrl+c", "q":
+			if m.streamCancel != nil {
+				m.streamCancel()
+				m.streamCancel = nil
+			}
 			return m, tea.Quit
 		case "tab":
 			m.focused = (m.focused + 1) % paneCount
@@ -367,11 +417,16 @@ func (m *Model) beginDiffStat(hash string) tea.Cmd {
 // another tool, git.Log surfaces that through the existing commitsLoadFailedMsg
 // path.
 func (m *Model) reloadCmd() tea.Cmd {
+	if m.streamCancel != nil {
+		m.streamCancel()
+		m.streamCancel = nil
+	}
+	m.streamReqID++
 	resetCmd := m.graph.ResetForReload()
 	m.refs.ResetForReload()
 	return tea.Batch(
 		resetCmd,
-		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount),
+		loadCommitsCmd("", m.currentRefs, defaultLogMaxCount, m.streamReqID),
 		loadRefsCmd(""),
 	)
 }

@@ -620,3 +620,119 @@ type sentinelErr struct{}
 func (sentinelErr) Error() string { return "sentinel" }
 
 var errSentinel = sentinelErr{}
+
+// TestGraphModelTailFollowRequiresUserMoved guards the PR #14 회귀: a
+// single-row first batch leaves cursor at index 0 == len(prev)-1, so without
+// the userHasMoved gate the second batch would auto-follow the tail and
+// drag cursor down with every batch even though the user never asked.
+func TestGraphModelTailFollowRequiresUserMoved(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	now := time.Now()
+
+	g, _ = g.Update(commitsAppendedMsg{
+		reqID: 1, done: false,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "aaa1111", Subject: "1", AuthorTime: now}},
+		},
+	})
+	if g.list.Index() != 0 {
+		t.Fatalf("cursor after first batch = %d, want 0", g.list.Index())
+	}
+	if g.userHasMoved {
+		t.Fatal("userHasMoved must remain false until the user presses a movement key")
+	}
+
+	g, _ = g.Update(commitsAppendedMsg{
+		reqID: 1, done: true,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "bbb2222", Subject: "2", AuthorTime: now}},
+			{commit: git.Commit{Hash: "ccc3333", Subject: "3", AuthorTime: now}},
+		},
+	})
+	if g.list.Index() != 0 {
+		t.Errorf("cursor after second batch (no user keypress) = %d, want 0 — PR #14 회귀!",
+			g.list.Index())
+	}
+}
+
+func TestGraphModelTailFollowAppendsCursorAfterUserMoved(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	now := time.Now()
+
+	g, _ = g.Update(commitsAppendedMsg{
+		reqID: 1, done: false,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "aaa1111", Subject: "1", AuthorTime: now}},
+			{commit: git.Commit{Hash: "bbb2222", Subject: "2", AuthorTime: now}},
+			{commit: git.Commit{Hash: "ccc3333", Subject: "3", AuthorTime: now}},
+		},
+	})
+	// Move cursor to last row of prev (index 2).
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if !g.userHasMoved {
+		t.Fatal("userHasMoved should be true after j keypress")
+	}
+	if g.list.Index() != 2 {
+		t.Fatalf("cursor before second batch = %d, want 2", g.list.Index())
+	}
+
+	g, _ = g.Update(commitsAppendedMsg{
+		reqID: 1, done: true,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "ddd4444", Subject: "4", AuthorTime: now}},
+			{commit: git.Commit{Hash: "eee5555", Subject: "5", AuthorTime: now}},
+		},
+	})
+	if g.list.Index() != 4 {
+		t.Errorf("tail-follow after user-moved keypress: cursor = %d, want 4", g.list.Index())
+	}
+}
+
+func TestGraphModelTailFollowStaysWhenCursorNotOnTail(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	now := time.Now()
+
+	g, _ = g.Update(commitsAppendedMsg{
+		reqID: 1, done: false,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "aaa1111", Subject: "1", AuthorTime: now}},
+			{commit: git.Commit{Hash: "bbb2222", Subject: "2", AuthorTime: now}},
+			{commit: git.Commit{Hash: "ccc3333", Subject: "3", AuthorTime: now}},
+		},
+	})
+	// Move to middle row (index 1) — NOT the last row.
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if g.list.Index() != 1 {
+		t.Fatalf("cursor after j = %d, want 1", g.list.Index())
+	}
+
+	g, _ = g.Update(commitsAppendedMsg{
+		reqID: 1, done: true,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "ddd4444", Subject: "4", AuthorTime: now}},
+			{commit: git.Commit{Hash: "eee5555", Subject: "5", AuthorTime: now}},
+		},
+	})
+	if g.list.Index() != 1 {
+		t.Errorf("cursor not on tail of prev: stayed at %d, want 1", g.list.Index())
+	}
+}
+
+func TestGraphModelStreamDoneClearsLoadingOnEmpty(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	if g.View() != "loading…" {
+		t.Fatalf("initial View = %q, want %q", g.View(), "loading…")
+	}
+	g, _ = g.Update(commitsStreamDoneMsg{reqID: 1})
+	if !g.loaded {
+		t.Error("commitsStreamDoneMsg should mark graph loaded")
+	}
+	if got := g.View(); got != "(no commits)" {
+		t.Errorf("after empty done, View = %q, want %q", got, "(no commits)")
+	}
+}

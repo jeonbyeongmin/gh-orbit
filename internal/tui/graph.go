@@ -90,13 +90,10 @@ type graphRow struct {
 //	[connector row]   ← lane transitions arriving at this commit
 //	[commit row]      ← cursor + graph + hash + time + chips + subject
 //
-// graphWidth is the hard cap (= laneColCap of the pane width) above which
-// a row's graph prefix gets truncated with "…". Rows render per-row tight:
-// each row's graph cell occupies its own prefix width, not a max-aligned
-// width — so the message column starts immediately after the graph and
-// short-lane rows aren't pushed right by tall-lane neighbors. For the very
-// first item (index 0) the connector is rendered as a blank line — there
-// is nothing above the most recent commit to connect to.
+// graphWidth is the hard cap (= laneColCap of the pane width); rows
+// whose own prefix is wider get truncated with "…". For the very first
+// item (index 0) the connector is rendered as a blank line — there is
+// nothing above the most recent commit to connect to.
 type commitDelegate struct {
 	graphWidth int
 }
@@ -122,10 +119,8 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		connectorWidth = 0
 	}
 
-	// per-row tight: each row's graph cell takes its own prefix width.
-	// The hard cap (d.graphWidth, derived from laneColCap) only triggers
-	// when a single row's prefix exceeds it — buildGraphCell then paints
-	// the "…" truncation marker.
+	// Clamp each row's column to the cap; below the cap rows render at
+	// their own prefix width so message starts right after the graph.
 	capW := d.graphWidth
 	commitColW := ci.commitGraphWidth
 	if capW > 0 && commitColW > capW {
@@ -292,11 +287,10 @@ func renderConnectorLine(connectorPrefix string, connectorRowWidth, graphColWidt
 	return cursor + graphCell + strings.Repeat(" ", width-used)
 }
 
-// buildGraphCell returns the styled graph segment for one row plus the actual
-// visible column width consumed. The "…" tail is the intended truncation
-// marker — it surfaces only when a row's lane count exceeds the hard cap
-// (`maxLaneCap*cellWidth`) or when the pane is too narrow to fit the row's
-// own prefix; in both cases the marker signals "lanes were dropped here".
+// buildGraphCell returns the styled graph segment for one row plus the
+// actual visible column width consumed. The "…" tail surfaces only when
+// the row's prefix exceeds effectiveCol (lane count past the cap, or pane
+// too narrow) — i.e. it marks dropped lanes, not silent truncation.
 func buildGraphCell(graphPrefix string, graphRowWidth, effectiveCol int) (string, int) {
 	if effectiveCol <= 0 {
 		return "", 0
@@ -545,8 +539,6 @@ func appendCommitItems(dst []list.Item, rows []graphRow) []list.Item {
 func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 	if !g.loaded {
 		items := appendCommitItems(make([]list.Item, 0, len(m.rows)), m.rows)
-		// Idempotent safety: in case the first batch lands before
-		// SetSize, push the cap derived from the current width.
 		g.applyGraphCap()
 		setCmd := g.list.SetItems(items)
 		g.loaded = true

@@ -251,10 +251,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.diff.ClosePatch()
 				return m, nil
 			case "ctrl+c":
-				if m.streamCancel != nil {
-					m.streamCancel()
-					m.streamCancel = nil
-				}
+				m.cancelStream()
 				return m, tea.Quit
 			case "j", "k", "down", "up", "pgdown", "pgup":
 				return m, m.diff.ScrollPatch(msg)
@@ -263,10 +260,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "ctrl+c", "q":
-			if m.streamCancel != nil {
-				m.streamCancel()
-				m.streamCancel = nil
-			}
+			m.cancelStream()
 			return m, tea.Quit
 		case "tab":
 			m.focused = (m.focused + 1) % paneCount
@@ -407,15 +401,20 @@ func (m *Model) beginDiffStat(hash string) tea.Cmd {
 	return scheduleDiffStatCmd(m.diffReqID, hash)
 }
 
-// reloadCmd resets both panes to their loading state and dispatches fresh
-// log + refs queries. If the ref stored in m.currentRefs was deleted by
-// another tool, git.Log surfaces that through the existing commitsLoadFailedMsg
-// path.
-func (m *Model) reloadCmd() tea.Cmd {
+// cancelStream invokes the active LogStream's cancel handle (if any) and
+// clears the slot. Safe to call when no stream is in flight.
+func (m *Model) cancelStream() {
 	if m.streamCancel != nil {
 		m.streamCancel()
 		m.streamCancel = nil
 	}
+}
+
+// reloadCmd resets both panes to their loading state and dispatches fresh
+// log + refs queries. A stale ref in m.currentRefs surfaces via the new
+// stream's commitsStreamDoneMsg.err.
+func (m *Model) reloadCmd() tea.Cmd {
+	m.cancelStream()
 	m.streamReqID++
 	resetCmd := m.graph.ResetForReload()
 	m.refs.ResetForReload()

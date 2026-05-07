@@ -504,28 +504,34 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 	return g, nil
 }
 
+// appendCommitItems folds graphRows into a list.Item slice while tracking
+// the widest graph prefix seen. Returns the (possibly resliced) items and
+// the running max so callers can decide whether maxVisualWidth changed.
+func appendCommitItems(dst []list.Item, rows []graphRow, maxW int) ([]list.Item, int) {
+	for _, r := range rows {
+		dst = append(dst, commitItem{
+			c:                r.commit,
+			connectorPrefix:  r.connectorPrefix,
+			connectorWidth:   r.connectorWidth,
+			commitPrefix:     r.commitPrefix,
+			commitGraphWidth: r.commitWidth,
+		})
+		if r.commitWidth > maxW {
+			maxW = r.commitWidth
+		}
+		if r.connectorWidth > maxW {
+			maxW = r.connectorWidth
+		}
+	}
+	return dst, maxW
+}
+
 // handleAppended folds one streaming batch into the list. First batch:
 // SetItems + commitSelectedMsg for the initial cursor. Subsequent batch:
 // append, with tail-follow gated by userHasMoved (PR #14 회귀 가드).
 func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 	if !g.loaded {
-		items := make([]list.Item, 0, len(m.rows))
-		maxW := 0
-		for _, r := range m.rows {
-			items = append(items, commitItem{
-				c:                r.commit,
-				connectorPrefix:  r.connectorPrefix,
-				connectorWidth:   r.connectorWidth,
-				commitPrefix:     r.commitPrefix,
-				commitGraphWidth: r.commitWidth,
-			})
-			if r.commitWidth > maxW {
-				maxW = r.commitWidth
-			}
-			if r.connectorWidth > maxW {
-				maxW = r.connectorWidth
-			}
-		}
+		items, maxW := appendCommitItems(make([]list.Item, 0, len(m.rows)), m.rows, 0)
 		g.maxVisualWidth = maxW
 		g.applyGraphCap()
 		setCmd := g.list.SetItems(items)
@@ -552,22 +558,7 @@ func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 
 	items := make([]list.Item, 0, prevLen+len(m.rows))
 	items = append(items, prev...)
-	maxW := g.maxVisualWidth
-	for _, r := range m.rows {
-		items = append(items, commitItem{
-			c:                r.commit,
-			connectorPrefix:  r.connectorPrefix,
-			connectorWidth:   r.connectorWidth,
-			commitPrefix:     r.commitPrefix,
-			commitGraphWidth: r.commitWidth,
-		})
-		if r.commitWidth > maxW {
-			maxW = r.commitWidth
-		}
-		if r.connectorWidth > maxW {
-			maxW = r.connectorWidth
-		}
-	}
+	items, maxW := appendCommitItems(items, m.rows, g.maxVisualWidth)
 	if maxW != g.maxVisualWidth {
 		g.maxVisualWidth = maxW
 		g.applyGraphCap()

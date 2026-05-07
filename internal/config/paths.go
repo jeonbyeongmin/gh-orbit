@@ -8,18 +8,26 @@ import (
 
 const appName = "gh-orbit"
 
-// StateDir returns the directory where gh-orbit stores per-user runtime state
-// (logs, caches that survive runs). It follows the XDG Base Directory spec:
-// $XDG_STATE_HOME/gh-orbit, falling back to ~/.local/state/gh-orbit.
-func StateDir() (string, error) {
-	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
+// xdgDir resolves an XDG Base Directory: if envVar is set, returns
+// $envVar/<appName>; otherwise joins the user's home dir with homeFallback
+// and appName. Shared by StateDir / ConfigDir.
+func xdgDir(envVar string, homeFallback ...string) (string, error) {
+	if dir := os.Getenv(envVar); dir != "" {
 		return filepath.Join(dir, appName), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "state", appName), nil
+	parts := append(append([]string{home}, homeFallback...), appName)
+	return filepath.Join(parts...), nil
+}
+
+// StateDir returns the directory where gh-orbit stores per-user runtime state
+// (logs, caches that survive runs): $XDG_STATE_HOME/gh-orbit or
+// ~/.local/state/gh-orbit.
+func StateDir() (string, error) {
+	return xdgDir("XDG_STATE_HOME", ".local", "state")
 }
 
 // LogPath returns the absolute path of the debug log file.
@@ -29,6 +37,23 @@ func LogPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "log"), nil
+}
+
+// ConfigDir returns the directory where gh-orbit looks for the user's
+// preferences file: $XDG_CONFIG_HOME/gh-orbit or ~/.config/gh-orbit. Unlike
+// StateDir / LogPath, callers do not create the directory eagerly — config
+// is optional and a missing file means "use defaults".
+func ConfigDir() (string, error) {
+	return xdgDir("XDG_CONFIG_HOME", ".config")
+}
+
+// ConfigPath returns the absolute path of the TOML preferences file.
+func ConfigPath() (string, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.toml"), nil
 }
 
 // OpenLog ensures the state directory exists and opens the log file for

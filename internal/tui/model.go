@@ -9,6 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+
+	"github.com/jeonbyeongmin/gh-orbit/internal/config"
 )
 
 // clipboardWrite is the package-level seam for OS clipboard writes. Tests
@@ -39,6 +41,12 @@ const (
 // default base for the unified graph: Init seeds currentRefs with this so the
 // commit list shows every local/remote/tag from the start, Fork-style.
 const refsAllSentinel = "--all"
+
+// pendingHEADSentinel marks pendingHEADHash as "armed but the real hash
+// hasn't arrived yet". Replaced with HEAD's commit hash by the next
+// refsLoadedMsg. Picks an obviously-not-a-hash value so a misbehaving
+// refsLoadedMsg can never accidentally collide.
+const pendingHEADSentinel = "<pending>"
 
 // viewMode toggles between the 3-pane layout and the full-screen patch overlay
 // that `d` opens. graph cursor state is preserved across the toggle so esc
@@ -84,6 +92,20 @@ type Model struct {
 	// fetchInFlight gates the F key while a background fetch is running so a
 	// second F doesn't spawn a parallel git invocation.
 	fetchInFlight bool
+	// pullInFlight gates the P key. Tracked separately from fetchInFlight so
+	// F + P can run in parallel; git's own .git/index.lock is the real
+	// serialization point.
+	pullInFlight bool
+	// pullPrefStrategy is the user's preferred pull strategy ("ff-only" /
+	// "merge" / "rebase" / ""). Loaded once in New() from ConfigPath; an
+	// empty string means "let git config / final fallback decide".
+	pullPrefStrategy string
+	// pendingHEADHash drives the post-pull cursor jump. pullSucceededMsg
+	// arms it with the sentinel pendingHEADSentinel; the post-reload
+	// refsLoadedMsg replaces the sentinel with HEAD's actual hash;
+	// tryHEADJump (called from both refsLoadedMsg and commitsStreamDoneMsg)
+	// clears it once the row lands. Empty string means "no pending jump".
+	pendingHEADHash string
 	// status is the one-line message rendered next to the help line:
 	// "fetching…", "fetch: done", "fetch failed: …". Empty hides it.
 	// statusStyle decides the color; zero value renders without color.
@@ -92,7 +114,7 @@ type Model struct {
 }
 
 func New() Model {
-	return Model{
+	m := Model{
 		focused:      paneGraph,
 		refs:         newRefsModel(),
 		graph:        newGraphModel(),
@@ -104,6 +126,16 @@ func New() Model {
 		currentRefs:  []string{refsAllSentinel},
 		streamReqID:  1,
 	}
+	prefs, err := config.LoadPrefs()
+	if err != nil {
+		// Non-fatal — pull falls back to git config / ff-only. Surface once
+		// so the user knows the file isn't being honored.
+		m.status = "prefs load failed: " + firstLine(err.Error())
+		m.statusStyle = statusErrS
+	} else {
+		m.pullPrefStrategy = prefs.Pull.Strategy
+	}
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -158,9 +190,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamCancel = nil
 		var cmd tea.Cmd
 		m.graph, cmd = m.graph.Update(msg)
+		m = m.tryHEADJump()
 		return m, cmd
 
 	case refsLoadedMsg, refsLoadFailedMsg:
+		if loaded, ok := msg.(refsLoadedMsg); ok && m.pendingHEADHash == pendingHEADSentinel {
+			for _, r := range loaded.refs {
+				if r.IsHead {
+					m.pendingHEADHash = r.ObjectName
+					break
+				}
+			}
+			m = m.tryHEADJump()
+		}
 		var cmd tea.Cmd
 		m.refs, cmd = m.refs.Update(msg)
 		return m, cmd
@@ -231,13 +273,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case fetchSucceededMsg:
 		m.fetchInFlight = false
+		// While a pull is still in flight, its "pulling…" status outranks
+		// fetch's outcome and the pending pullSucceededMsg / pullConflictMsg
+		// will reload. Skip status overwrite + the redundant reload.
+		if m.pullInFlight {
+			return m, nil
+		}
 		m.status = "fetch: done"
 		m.statusStyle = statusOkS
 		return m, m.reloadCmd()
 
 	case fetchFailedMsg:
 		m.fetchInFlight = false
+		if m.pullInFlight {
+			return m, nil
+		}
 		m.status = "fetch failed: " + msg.err.Error()
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case pullSucceededMsg:
+		m.pullInFlight = false
+		m.status = "pull: done"
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case pullConflictMsg:
+		m.pullInFlight = false
+		m.status = "pull: CONFLICT — resolve in your terminal"
+		m.statusStyle = statusErrS
+		// Reload so refs (HEAD may now sit on a half-merged commit) and the
+		// graph reflect post-pull state. No HEAD jump — user is mid-conflict.
+		return m, m.reloadCmd()
+
+	case pullFailedMsg:
+		m.pullInFlight = false
+		m.status = "pull failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
 
@@ -273,6 +345,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "fetching…"
 			m.statusStyle = statusBusyS
 			return m, fetchCmd("")
+		case "P":
+			if m.pullInFlight {
+				return m, nil
+			}
+			m.pullInFlight = true
+			m.status = "pulling…"
+			m.statusStyle = statusBusyS
+			return m, pullCmd("", m.pullPrefStrategy)
 		case "r":
 			return m, m.reloadCmd()
 		case "ctrl+up":
@@ -408,6 +488,21 @@ func (m *Model) beginDiffStat(hash string) tea.Cmd {
 	return scheduleDiffStatCmd(m.diffReqID, hash)
 }
 
+// tryHEADJump attempts to point the graph cursor at HEAD using the hash
+// captured from the post-pull refsLoadedMsg. JumpToHash returns false until
+// the matching commit has actually streamed in, so the caller invokes this
+// from both refsLoadedMsg and commitsStreamDoneMsg — whichever arrives
+// second wins. Empty / sentinel pendingHEADHash → no-op.
+func (m Model) tryHEADJump() Model {
+	if m.pendingHEADHash == "" || m.pendingHEADHash == pendingHEADSentinel {
+		return m
+	}
+	if m.graph.JumpToHash(m.pendingHEADHash) {
+		m.pendingHEADHash = ""
+	}
+	return m
+}
+
 // cancelStream invokes the active LogStream's cancel handle (if any) and
 // clears the slot. Safe to call when no stream is in flight.
 func (m *Model) cancelStream() {
@@ -516,7 +611,7 @@ var (
 )
 
 const (
-	helpTextNormal     = "tab focus · h/l switch tab · j/k navigate · ctrl+↑/↓ resize · enter jump ref · y copy hash · d patch · F fetch · r reload · q quit"
+	helpTextNormal     = "tab focus · h/l switch tab · j/k navigate · ctrl+↑/↓ resize · enter jump ref · y copy hash · d patch · F fetch · P pull · r reload · q quit"
 	helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
 )
 

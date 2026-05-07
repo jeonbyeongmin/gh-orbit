@@ -181,9 +181,41 @@ func TestTabPaneHL_TogglesCommitChanges(t *testing.T) {
 	}
 }
 
-func TestRefsGraphHL_NoOp(t *testing.T) {
-	send := func(m Model, r rune) Model {
+func TestTabPaneArrows_TogglesCommitChanges(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.focused = paneTab
+	if m.tabs.Active() != tabCommit {
+		t.Fatalf("tabs default = %v, want tabCommit", m.tabs.Active())
+	}
+
+	send := func(kt tea.KeyType) Model {
+		updated, _ := m.Update(tea.KeyMsg{Type: kt})
+		return updated.(Model)
+	}
+
+	m = send(tea.KeyRight)
+	if m.tabs.Active() != tabChanges {
+		t.Errorf("after → on paneTab, active = %v, want tabChanges", m.tabs.Active())
+	}
+	m = send(tea.KeyRight)
+	if m.tabs.Active() != tabCommit {
+		t.Errorf("after → #2 (wrap), active = %v, want tabCommit", m.tabs.Active())
+	}
+	m = send(tea.KeyLeft)
+	if m.tabs.Active() != tabChanges {
+		t.Errorf("after ← on paneTab, active = %v, want tabChanges (wrap reverse)", m.tabs.Active())
+	}
+}
+
+func TestRefsGraphTabKeys_NoOp(t *testing.T) {
+	sendRune := func(m Model, r rune) Model {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return updated.(Model)
+	}
+	sendKey := func(m Model, kt tea.KeyType) Model {
+		updated, _ := m.Update(tea.KeyMsg{Type: kt})
 		return updated.(Model)
 	}
 
@@ -195,12 +227,22 @@ func TestRefsGraphHL_NoOp(t *testing.T) {
 		startActive := m.tabs.Active()
 
 		for _, key := range []rune{'h', 'l'} {
-			m = send(m, key)
+			m = sendRune(m, key)
 			if m.focused != focus {
 				t.Errorf("h/l from %v moved focus to %v, want unchanged", focus, m.focused)
 			}
 			if m.tabs.Active() != startActive {
 				t.Errorf("h/l from %v changed tab to %v, want %v", focus, m.tabs.Active(), startActive)
+			}
+		}
+
+		for _, kt := range []tea.KeyType{tea.KeyLeft, tea.KeyRight} {
+			m = sendKey(m, kt)
+			if m.focused != focus {
+				t.Errorf("←/→ from %v moved focus to %v, want unchanged", focus, m.focused)
+			}
+			if m.tabs.Active() != startActive {
+				t.Errorf("←/→ from %v changed tab to %v, want %v", focus, m.tabs.Active(), startActive)
 			}
 		}
 	}
@@ -221,6 +263,8 @@ func TestDiffOverlay_TabHLSwallowed(t *testing.T) {
 		{"tab", tea.KeyMsg{Type: tea.KeyTab}},
 		{"h", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}},
 		{"l", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}},
+		{"left", tea.KeyMsg{Type: tea.KeyLeft}},
+		{"right", tea.KeyMsg{Type: tea.KeyRight}},
 	}
 	for _, tc := range cases {
 		updated, cmd := m.Update(tc.msg)

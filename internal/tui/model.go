@@ -129,11 +129,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case commitsLoadedMsg, commitsLoadFailedMsg:
-		var cmd tea.Cmd
-		m.graph, cmd = m.graph.Update(msg)
-		return m, cmd
-
 	case commitsStreamStartedMsg:
 		if msg.reqID != m.streamReqID {
 			// Stale — its reload was superseded. Cancel the orphaned

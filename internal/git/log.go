@@ -164,47 +164,6 @@ func runLogStream(ctx context.Context, cmd *exec.Cmd, stdout io.ReadCloser, stde
 	}
 }
 
-// Log runs `git log` and returns every matching commit, buffered. Fine for
-// the MVP; once we wire up the graph pane against large repos we'll add a
-// streaming variant that emits commits over a channel as they're parsed.
-func Log(ctx context.Context, opts LogOptions) ([]Commit, error) {
-	args := []string{"log", "--format=" + logFormat}
-	if opts.MaxCount > 0 {
-		args = append(args, "-n", strconv.Itoa(opts.MaxCount))
-	}
-	if len(opts.Refs) > 0 {
-		args = append(args, opts.Refs...)
-	} else {
-		args = append(args, "HEAD")
-	}
-
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = opts.Dir
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("git log: start: %w", err)
-	}
-
-	commits, parseErr := parseLog(stdout)
-	waitErr := cmd.Wait()
-	if waitErr != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			return nil, fmt.Errorf("git log: %w", waitErr)
-		}
-		return nil, fmt.Errorf("git log: %w: %s", waitErr, msg)
-	}
-	if parseErr != nil {
-		return nil, fmt.Errorf("git log: parse: %w", parseErr)
-	}
-	return commits, nil
-}
-
 func parseLog(r io.Reader) ([]Commit, error) {
 	scanner := bufio.NewScanner(r)
 	// Subject lines can blow past Scanner's 64KiB default in pathological repos.

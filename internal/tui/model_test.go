@@ -253,7 +253,7 @@ func TestModelRefSelectedJumpsCursor(t *testing.T) {
 	m = updated.(Model)
 
 	now := time.Now()
-	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: now}},
 		{commit: git.Commit{Hash: "bbb2222", Subject: "second", AuthorTime: now}},
 		{commit: git.Commit{Hash: "ccc3333", Subject: "third", AuthorTime: now}},
@@ -295,7 +295,7 @@ func TestModelRefSelectedTipMissingShowsStatus(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: time.Now()}},
 	}})
 	m = updated.(Model)
@@ -320,7 +320,7 @@ func TestModelRKeyReloadsBothPanes(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
 	}})
 	m = updated.(Model)
@@ -365,7 +365,7 @@ func TestModelRKeyPreservesAllSentinel(t *testing.T) {
 		ObjectName: "abc1234",
 	}})
 	m = updated.(Model)
-	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
 	}})
 	m = updated.(Model)
@@ -382,7 +382,7 @@ func TestModelCapitalRIsReservedAndIgnored(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
 	}})
 	m = updated.(Model)
@@ -434,7 +434,7 @@ func TestModelFetchSucceededReloadsBothPanes(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
 	}})
 	m = updated.(Model)
@@ -523,7 +523,7 @@ func TestModelDKeyOpensDiffWindow(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
-	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: time.Now()}},
 	}})
 	m = updated.(Model)
@@ -622,7 +622,7 @@ func TestModelFetchFailedSurfacesError(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, _ = m.Update(commitsLoadedMsg{rows: []graphRow{
+	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
 	}})
 	m = updated.(Model)

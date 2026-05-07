@@ -318,9 +318,6 @@ func newGraphModel() graphModel {
 	return graphModel{list: l, delegate: d}
 }
 
-type commitsLoadedMsg struct{ rows []graphRow }
-type commitsLoadFailedMsg struct{ err error }
-
 // commitsStreamStartedMsg is the first event of a streaming load. The Model
 // stashes cancel for r/quit teardown and dispatches next to start collecting
 // batches. reqID lets stale streams (after a reload) drop their messages.
@@ -470,37 +467,6 @@ func (g graphModel) Init() tea.Cmd { return nil }
 
 func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 	switch m := msg.(type) {
-	case commitsLoadedMsg:
-		items := make([]list.Item, len(m.rows))
-		maxW := 0
-		for i, r := range m.rows {
-			items[i] = commitItem{
-				c:                r.commit,
-				connectorPrefix:  r.connectorPrefix,
-				connectorWidth:   r.connectorWidth,
-				commitPrefix:     r.commitPrefix,
-				commitGraphWidth: r.commitWidth,
-			}
-			if r.commitWidth > maxW {
-				maxW = r.commitWidth
-			}
-			if r.connectorWidth > maxW {
-				maxW = r.connectorWidth
-			}
-		}
-		g.maxVisualWidth = maxW
-		g.applyGraphCap()
-		cmd := g.list.SetItems(items)
-		g.loaded = true
-		g.err = nil
-		if c, ok := g.Selected(); ok {
-			return g, tea.Batch(cmd, emitCommitSelected(c.Hash))
-		}
-		return g, cmd
-	case commitsLoadFailedMsg:
-		g.loaded = true
-		g.err = m.err
-		return g, nil
 	case commitsStreamStartedMsg:
 		g.streaming = true
 		if m.next != nil {

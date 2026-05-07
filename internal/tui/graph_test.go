@@ -385,8 +385,8 @@ func TestGraphModelResetForReloadReturnsToLoading(t *testing.T) {
 	if !g.loaded {
 		t.Fatalf("graph should be loaded after commitsAppendedMsg")
 	}
-	if g.graphWidth != 2 {
-		t.Errorf("graphWidth = %d, want 2", g.graphWidth)
+	if want := laneColCap(40); g.graphWidth != want {
+		t.Errorf("graphWidth = %d, want %d", g.graphWidth, want)
 	}
 	g.ResetForReload()
 	if g.loaded {
@@ -403,7 +403,10 @@ func TestGraphModelResetForReloadReturnsToLoading(t *testing.T) {
 	}
 }
 
-func TestGraphModelComputesGraphWidthFromLongestPrefix(t *testing.T) {
+func TestGraphModelGraphWidthIsLaneColCapNotMaxRowWidth(t *testing.T) {
+	// Per-row tight: graphWidth is the hard cap derived from pane width
+	// (laneColCap), not the widest prefix among rows. The delegate uses
+	// it only to truncate rows whose prefix exceeds the cap.
 	g := newGraphModel()
 	g.SetSize(80, 10)
 	now := time.Now()
@@ -412,17 +415,19 @@ func TestGraphModelComputesGraphWidthFromLongestPrefix(t *testing.T) {
 		{commit: git.Commit{Hash: "b", Subject: "s2", AuthorTime: now}, commitPrefix: "| | * ", commitWidth: 6},
 		{commit: git.Commit{Hash: "c", Subject: "s3", AuthorTime: now}, commitPrefix: "|/ ", commitWidth: 3},
 	}})
-	if g.graphWidth != 6 {
-		t.Errorf("graphWidth = %d, want 6 (width of '| | * ')", g.graphWidth)
+	want := laneColCap(80)
+	if g.graphWidth != want {
+		t.Errorf("graphWidth = %d, want %d (laneColCap(80))", g.graphWidth, want)
 	}
-	if g.delegate.graphWidth != 6 {
-		t.Errorf("delegate.graphWidth = %d, want 6 (must match graphModel.graphWidth)", g.delegate.graphWidth)
+	if g.delegate.graphWidth != want {
+		t.Errorf("delegate.graphWidth = %d, want %d (must match graphModel.graphWidth)", g.delegate.graphWidth, want)
 	}
 }
 
-func TestGraphModelGraphWidthZeroWhenNoPrefix(t *testing.T) {
+func TestGraphModelGraphWidthZeroBeforeSetSize(t *testing.T) {
+	// Without SetSize the model has no pane width to compute a cap from,
+	// so graphWidth stays at zero — even after a row is appended.
 	g := newGraphModel()
-	g.SetSize(80, 10)
 	g, _ = g.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "a", Subject: "s", AuthorTime: time.Now()}},
 	}})
@@ -447,17 +452,16 @@ func TestLaneColCapClampsAtMin(t *testing.T) {
 	}
 }
 
-func TestApplyGraphCapTruncatesWhenWidthBelowMaxVisual(t *testing.T) {
+func TestApplyGraphCapTracksLaneColCapOnly(t *testing.T) {
+	// graphWidth tracks laneColCap(width) only — row prefix width is
+	// irrelevant. A wide-prefix row exceeding the cap will be truncated
+	// with "…" by buildGraphCell at render time, but doesn't move the cap.
 	g := newGraphModel()
-	// Pretend many rows produced a 20-column graph in total.
 	g.SetSize(40, 10)
 	g, _ = g.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "a", Subject: "s", AuthorTime: time.Now()},
 			commitPrefix: strings.Repeat("│", 20), commitWidth: 20},
 	}})
-	if g.maxVisualWidth != 20 {
-		t.Fatalf("maxVisualWidth = %d, want 20", g.maxVisualWidth)
-	}
 	wantCap := laneColCap(40)
 	if g.graphWidth != wantCap {
 		t.Errorf("graphWidth = %d, want %d (cap for width 40)", g.graphWidth, wantCap)

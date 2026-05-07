@@ -432,7 +432,8 @@ func TestGraphModelGraphWidthZeroWhenNoPrefix(t *testing.T) {
 }
 
 func TestLaneColCapClampsAtMax(t *testing.T) {
-	// Very wide terminal — graph must not grow past maxLaneCap × cellWidth.
+	// Very wide terminal — graph must not grow past maxLaneCap × cellWidth
+	// (16 lanes × 2 cols = 32 cols).
 	if got := laneColCap(500); got != maxLaneCap*cellWidth {
 		t.Errorf("laneColCap(500) = %d, want %d", got, maxLaneCap*cellWidth)
 	}

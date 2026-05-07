@@ -31,7 +31,7 @@ const (
 	authorColWidth = 14
 
 	cursorColWidth = 2
-	maxLaneCap     = 8
+	maxLaneCap     = 16
 	minLaneCap     = 2
 
 	colorHash     = "214"

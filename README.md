@@ -61,13 +61,8 @@ PR review/merge is a follow-up milestone. Right now the build wires up:
 
 ## Install
 
-Until this is published, install from a local clone:
-
 ```bash
-git clone https://github.com/jeonbyeongmin/gh-orbit
-cd gh-orbit
-go build -o gh-orbit ./cmd/orbit
-gh extension install .
+gh extension install jeonbyeongmin/gh-orbit
 gh orbit
 ```
 

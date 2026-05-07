@@ -2,7 +2,7 @@ version: 2
 
 before:
   hooks:
-    - go mod tidy
+    - go mod download
 
 builds:
   - id: gh-orbit
@@ -24,20 +24,8 @@ builds:
       - "-s -w -X main.version={{.Version}}"
 
 archives:
-  - id: gh-orbit
-    formats: [binary]
-    name_template: >-
-      {{ .Binary }}_{{ .Version }}_{{ .Os }}-{{ .Arch }}{{- if eq .Os "windows" }}.exe{{ end }}
-
-checksum:
-  name_template: "checksums.txt"
+  - formats: [binary]
+    name_template: '{{ .Binary }}_{{ .Version }}_{{ .Os }}-{{ .Arch }}{{ if eq .Os "windows" }}.exe{{ end }}'
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
-
-changelog:
-  use: git
-
-release:
-  draft: false
-  prerelease: false

@@ -5,13 +5,16 @@ on:
   push:
     branches: [develop]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  gofmt:
-    name: gofmt
+  lint:
+    name: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,18 +29,9 @@ jobs:
             echo "$diff"
             exit 1
           fi
-
-  lint:
-    name: golangci-lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: v2.0.2
+          version: v2
 
   test:
     name: go test

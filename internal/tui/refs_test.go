@@ -311,8 +311,7 @@ func TestRefModelScrollAcrossLocalTagsBoundaryWhenRemoteEmpty(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 4)
 	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 0, 3)})
-	// cursor +1 이지만 flat-row 는 gap+header(R)+empty(R)+gap+header(T) 만큼
-	// +6 점프. nudgeOffsetOnEdge 가 항상 놓치던 케이스.
+	// cursor +1 이지만 flat-row 는 gap+header(R)+empty(R)+gap+header(T) 만큼 +6 점프.
 	for i := 0; i < 3; i++ {
 		r = pressKey(t, r, "j")
 	}
@@ -336,14 +335,38 @@ func TestRefModelCursorStaysVisibleAtSmallHeightAcrossBoundary(t *testing.T) {
 	}
 }
 
+func TestRefModelScrollKeepsSectionHeaderAboveCursor(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 4)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(5, 5, 0)})
+	r = pressKey(t, r, "G")
+	for i := 0; i < 4; i++ {
+		r = pressKey(t, r, "k")
+	}
+	if got, ok := r.Selected(); !ok || got.ShortName != "remote-0" {
+		t.Fatalf("Selected after G then k×4 = %+v ok=%v, want remote-0", got, ok)
+	}
+	if view := ansi.Strip(r.View()); !strings.Contains(view, "Remote branches") {
+		t.Errorf("Remote branches header must be visible when cursor on remote-0; got:\n%s", view)
+	}
+	for i := 0; i < 5; i++ {
+		r = pressKey(t, r, "k")
+	}
+	if got, ok := r.Selected(); !ok || got.ShortName != "local-0" {
+		t.Fatalf("Selected after G then k×9 = %+v ok=%v, want local-0", got, ok)
+	}
+	if view := ansi.Strip(r.View()); !strings.Contains(view, "Local branches") {
+		t.Errorf("Local branches header must be visible when cursor on local-0; got:\n%s", view)
+	}
+}
+
 func TestRefModelKBackwardAcrossBoundariesPreservesLazyAndJumps(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 4)
 	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 3, 3)})
 	r = pressKey(t, r, "G")
 	startOffset := r.yOffset
-	// G 직후 cursor 가 viewport 마지막 줄. 처음 두 k 는 같은 섹션(Tags) 내라
-	// cursor 가 [yOffset, yOffset+h) 안에 머무므로 lazy 유지(yOffset 불변).
+	// 처음 두 k 는 Tags 섹션 내 — lazy invariant.
 	for i := 0; i < 2; i++ {
 		r = pressKey(t, r, "k")
 		if r.yOffset != startOffset {
@@ -351,14 +374,12 @@ func TestRefModelKBackwardAcrossBoundariesPreservesLazyAndJumps(t *testing.T) {
 		}
 		assertCursorVisible(t, r)
 	}
-	// 다음 k 는 Tags→Remote 경계 통과 — yOffset 이 줄어 cursor 를 끌어들여야 함.
 	beforeOffset := r.yOffset
 	r = pressKey(t, r, "k")
 	if r.yOffset >= beforeOffset {
 		t.Errorf("yOffset after boundary-crossing k did not decrease: before=%d after=%d", beforeOffset, r.yOffset)
 	}
 	assertCursorVisible(t, r)
-	// 끝까지 k — 매 단계 cursor 가 viewport 안에 머물러야 함.
 	for i := 0; i < 5; i++ {
 		r = pressKey(t, r, "k")
 		assertCursorVisible(t, r)

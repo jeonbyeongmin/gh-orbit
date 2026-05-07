@@ -94,8 +94,17 @@ type graphRow struct {
 // whose own prefix is wider get truncated with "…". For the very first
 // item (index 0) the connector is rendered as a blank line — there is
 // nothing above the most recent commit to connect to.
+//
+// headRowIndex / headAncestors carry the HEAD-as-dim-boundary state. -1
+// means HEAD is not in the loaded window and dim is suppressed entirely.
+// Otherwise rows above headRowIndex whose Hash isn't in headAncestors are
+// rendered with a Faint pass. headAncestors arrives asynchronously from
+// `git rev-list HEAD`; before it lands the delegate falls back to "all
+// rows above headRowIndex are dim" so the boundary is visible immediately.
 type commitDelegate struct {
-	graphWidth int
+	graphWidth     int
+	headRowIndex   int
+	headAncestors  map[string]struct{}
 }
 
 func (commitDelegate) Height() int                             { return 2 }
@@ -313,10 +322,22 @@ type graphModel struct {
 	streaming    bool // a LogStream is in flight; loaded may already be true
 	userHasMoved bool // true after the user has intentionally moved the cursor (j/k/g/G/etc)
 	graphWidth   int  // hard cap = laneColCap(width); rows render per-row tight up to this cap
+
+	// HEAD-as-dim-boundary state. headHash is the HEAD commit hash captured
+	// from `%D` decoration tokens during streaming (no extra git call —
+	// ParseDecoration already exposes it). headRowIndex is the list index
+	// of that row; -1 means HEAD never appeared in the loaded window, in
+	// which case the dim pass is suppressed (whole graph stays bright).
+	// headAncestors is the set of HEAD-reachable commit hashes from
+	// `git rev-list HEAD`, populated asynchronously and used by the
+	// delegate to keep ancestor rows above HEAD bright.
+	headHash      string
+	headRowIndex  int
+	headAncestors map[string]struct{}
 }
 
 func newGraphModel() graphModel {
-	d := commitDelegate{}
+	d := commitDelegate{headRowIndex: -1}
 	l := list.New(nil, d, 0, 0)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
@@ -325,7 +346,7 @@ func newGraphModel() graphModel {
 	l.SetFilteringEnabled(false)
 	l.DisableQuitKeybindings()
 	l.SetShowFilter(false)
-	return graphModel{list: l, delegate: d}
+	return graphModel{list: l, delegate: d, headRowIndex: -1}
 }
 
 // commitsStreamStartedMsg is the first event of a streaming load. The Model
@@ -625,6 +646,24 @@ func (g *graphModel) applyGraphCap() {
 	g.list.SetDelegate(g.delegate)
 }
 
+// applyHeadDim mirrors graphModel's HEAD-as-dim-boundary state into the
+// delegate so Render can decide per-row dim without re-walking commits.
+// Always pushes the delegate back into the list so the next paint sees the
+// current values.
+func (g *graphModel) applyHeadDim() {
+	g.delegate.headRowIndex = g.headRowIndex
+	g.delegate.headAncestors = g.headAncestors
+	g.list.SetDelegate(g.delegate)
+}
+
+// SetHeadAncestors stores the set of HEAD-reachable commit hashes so the
+// delegate can keep ancestor rows bright above the HEAD boundary. Called
+// from Model.Update on headAncestorsLoadedMsg.
+func (g *graphModel) SetHeadAncestors(ancestors map[string]struct{}) {
+	g.headAncestors = ancestors
+	g.applyHeadDim()
+}
+
 // ResetForReload clears state so View renders the "loading…" placeholder
 // again. Use this before dispatching a fresh loadCommitsCmd so the UI
 // reflects that the visible commits no longer match the requested ref. The
@@ -637,6 +676,11 @@ func (g *graphModel) ResetForReload() tea.Cmd {
 	g.err = nil
 	g.graphWidth = 0
 	g.delegate.graphWidth = 0
+	g.headHash = ""
+	g.headRowIndex = -1
+	g.headAncestors = nil
+	g.delegate.headRowIndex = -1
+	g.delegate.headAncestors = nil
 	g.list.SetDelegate(g.delegate)
 	return g.list.SetItems(nil)
 }

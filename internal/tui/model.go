@@ -9,6 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+
+	"github.com/jeonbyeongmin/gh-orbit/internal/config"
 )
 
 // clipboardWrite is the package-level seam for OS clipboard writes. Tests
@@ -84,6 +86,21 @@ type Model struct {
 	// fetchInFlight gates the F key while a background fetch is running so a
 	// second F doesn't spawn a parallel git invocation.
 	fetchInFlight bool
+	// pullInFlight gates the P key. Tracked separately from fetchInFlight so
+	// F + P can run in parallel; git's own .git/index.lock is the real
+	// serialization point.
+	pullInFlight bool
+	// pullPrefStrategy is the user's preferred pull strategy ("ff-only" /
+	// "merge" / "rebase" / ""). Loaded once in New() from ConfigPath; an
+	// empty string means "let git config / final fallback decide".
+	pullPrefStrategy string
+	// pendingHEADJump is set when a successful pull asked the cursor to
+	// jump to HEAD. Cleared by tryHEADJump once the post-reload refs and
+	// commits arrive and the row is found.
+	pendingHEADJump bool
+	// pendingHEADHash is the commit hash of HEAD captured from the
+	// post-pull refsLoadedMsg, used by tryHEADJump.
+	pendingHEADHash string
 	// status is the one-line message rendered next to the help line:
 	// "fetching…", "fetch: done", "fetch failed: …". Empty hides it.
 	// statusStyle decides the color; zero value renders without color.
@@ -92,7 +109,7 @@ type Model struct {
 }
 
 func New() Model {
-	return Model{
+	m := Model{
 		focused:      paneGraph,
 		refs:         newRefsModel(),
 		graph:        newGraphModel(),
@@ -104,6 +121,16 @@ func New() Model {
 		currentRefs:  []string{refsAllSentinel},
 		streamReqID:  1,
 	}
+	prefs, err := config.LoadPrefs()
+	if err != nil {
+		// Non-fatal — pull falls back to git config / ff-only. Surface once
+		// so the user knows the file isn't being honored.
+		m.status = "prefs load failed: " + firstLine(err.Error())
+		m.statusStyle = statusErrS
+	} else {
+		m.pullPrefStrategy = prefs.Pull.Strategy
+	}
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -158,9 +185,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamCancel = nil
 		var cmd tea.Cmd
 		m.graph, cmd = m.graph.Update(msg)
+		if m.pendingHEADJump {
+			m = m.tryHEADJump()
+		}
 		return m, cmd
 
-	case refsLoadedMsg, refsLoadFailedMsg:
+	case refsLoadedMsg:
+		if m.pendingHEADJump && m.pendingHEADHash == "" {
+			for _, r := range msg.refs {
+				if r.IsHead {
+					m.pendingHEADHash = r.ObjectName
+					break
+				}
+			}
+			m = m.tryHEADJump()
+		}
+		var cmd tea.Cmd
+		m.refs, cmd = m.refs.Update(msg)
+		return m, cmd
+
+	case refsLoadFailedMsg:
 		var cmd tea.Cmd
 		m.refs, cmd = m.refs.Update(msg)
 		return m, cmd
@@ -231,13 +275,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case fetchSucceededMsg:
 		m.fetchInFlight = false
-		m.status = "fetch: done"
-		m.statusStyle = statusOkS
+		// While a pull is still in flight its "pulling…" status outranks
+		// fetch's outcome — the user pressed P after F and cares about pull.
+		if !m.pullInFlight {
+			m.status = "fetch: done"
+			m.statusStyle = statusOkS
+		}
 		return m, m.reloadCmd()
 
 	case fetchFailedMsg:
 		m.fetchInFlight = false
-		m.status = "fetch failed: " + msg.err.Error()
+		if !m.pullInFlight {
+			m.status = "fetch failed: " + msg.err.Error()
+			m.statusStyle = statusErrS
+		}
+		return m, nil
+
+	case pullSucceededMsg:
+		m.pullInFlight = false
+		m.status = "pull: done"
+		m.statusStyle = statusOkS
+		m.pendingHEADJump = true
+		m.pendingHEADHash = ""
+		return m, m.reloadCmd()
+
+	case pullConflictMsg:
+		m.pullInFlight = false
+		m.status = "pull: CONFLICT — resolve in your terminal"
+		m.statusStyle = statusErrS
+		// reload so refs (HEAD may now sit on a half-merged commit) and the
+		// graph reflect post-pull state. No HEAD jump — user is mid-conflict.
+		return m, m.reloadCmd()
+
+	case pullFailedMsg:
+		m.pullInFlight = false
+		m.status = "pull failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
 
@@ -273,6 +345,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "fetching…"
 			m.statusStyle = statusBusyS
 			return m, fetchCmd("")
+		case "P":
+			if m.pullInFlight {
+				return m, nil
+			}
+			m.pullInFlight = true
+			m.status = "pulling…"
+			m.statusStyle = statusBusyS
+			return m, pullCmdFactory("", m.pullPrefStrategy)
 		case "r":
 			return m, m.reloadCmd()
 		case "ctrl+up":
@@ -408,6 +488,22 @@ func (m *Model) beginDiffStat(hash string) tea.Cmd {
 	return scheduleDiffStatCmd(m.diffReqID, hash)
 }
 
+// tryHEADJump attempts to point the graph cursor at HEAD using the hash
+// captured from the post-pull refsLoadedMsg. JumpToHash returns false until
+// the matching commit has actually streamed in, so the caller invokes this
+// from both refsLoadedMsg and commitsStreamDoneMsg — whichever arrives
+// second wins. Clears both pending flags only on a successful jump.
+func (m Model) tryHEADJump() Model {
+	if m.pendingHEADHash == "" {
+		return m
+	}
+	if m.graph.JumpToHash(m.pendingHEADHash) {
+		m.pendingHEADJump = false
+		m.pendingHEADHash = ""
+	}
+	return m
+}
+
 // cancelStream invokes the active LogStream's cancel handle (if any) and
 // clears the slot. Safe to call when no stream is in flight.
 func (m *Model) cancelStream() {
@@ -516,7 +612,7 @@ var (
 )
 
 const (
-	helpTextNormal     = "tab focus · h/l switch tab · j/k navigate · ctrl+↑/↓ resize · enter jump ref · y copy hash · d patch · F fetch · r reload · q quit"
+	helpTextNormal     = "tab focus · h/l switch tab · j/k navigate · ctrl+↑/↓ resize · enter jump ref · y copy hash · d patch · F fetch · P pull · r reload · q quit"
 	helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
 )
 

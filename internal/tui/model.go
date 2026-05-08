@@ -9,7 +9,6 @@ import (
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/config"
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
@@ -66,9 +65,9 @@ const (
 	viewModeCheckoutConfirm
 	// viewModeHelp expands the bottom area into a multi-line help panel.
 	// The 3-pane layout stays visible above; only the bottom shrinks the
-	// main area to make room. Every key except `?` and `ctrl+c` is
-	// swallowed while open — q and esc included — so a stray press
-	// doesn't quit the app or close anything else.
+	// main area to make room. All other shortcuts keep working while the
+	// panel is open — `?` re-toggles, q quits, j/k navigate, etc. — so the
+	// expanded panel functions as a reference, not a modal.
 	viewModeHelp
 )
 
@@ -409,18 +408,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// The viewMode guard runs before the global ctrl+c/q quit branch so
 		// `q` inside the overlay closes the overlay instead of killing the app.
-		if m.mode == viewModeHelp {
-			switch msg.String() {
-			case "?":
-				m.mode = viewModeNormal
-				m.applyPaneSizes()
-				return m, nil
-			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
-			}
-			return m, nil
-		}
 		if m.mode == viewModeDiffWindow {
 			switch msg.String() {
 			case "esc", "q":
@@ -461,7 +448,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelStream()
 			return m, tea.Quit
 		case "?":
-			m.mode = viewModeHelp
+			if m.mode == viewModeHelp {
+				m.mode = viewModeNormal
+			} else {
+				m.mode = viewModeHelp
+			}
 			m.applyPaneSizes()
 			return m, nil
 		case "tab":
@@ -773,25 +764,16 @@ func (m Model) paneSizes() paneSizes {
 }
 
 // helpReservedRows returns how many bottom rows the `?` help panel
-// claims. Defaults to helpExpandedHeight; small terminals halve it but
-// keep at least 3 rows. The result is clamped so the main area always
-// retains ≥ 3 rows — paneSizes already enforces mainH ≥ 1, but a
-// 1-row main pane is unusable.
+// claims. Defaults to helpExpandedHeight; small terminals halve it.
+// The main area is given priority — if leaving 3 rows for it would push
+// the panel below 3 rows, the panel shrinks further (down to 1 row) so
+// the user can still see the graph. Floor: 1.
 func (m Model) helpReservedRows() int {
-	want := helpExpandedHeight
-	if m.height/2 < want {
-		want = m.height / 2
+	want := max(min(helpExpandedHeight, m.height/2), 3)
+	if upper := m.height - 3; upper > 0 {
+		want = min(want, upper)
 	}
-	if want < 3 {
-		want = 3
-	}
-	if upper := m.height - 3; upper > 0 && want > upper {
-		want = upper
-	}
-	if want < 1 {
-		want = 1
-	}
-	return want
+	return max(want, 1)
 }
 
 var (
@@ -809,9 +791,6 @@ var (
 
 const helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
 
-// helpRenderedDiffWindow pre-renders the diff-overlay hint at package init
-// since the string is fixed. The viewModeNormal hint is focus-aware and
-// composed in renderHelpStatus per frame.
 var helpRenderedDiffWindow = help.Render(helpTextDiffWindow)
 
 // confirmPromptS reuses the busy color and adds bold so the modal prompt
@@ -872,10 +851,8 @@ func (m Model) renderHelpStatus() string {
 	if m.mode == viewModeHelp {
 		return renderHelpPanel(m.width, m.helpReservedRows())
 	}
-	hintText := paneHints()[m.focused]
-	hintRendered := help.Render(hintText)
 	if m.status == "" {
-		return hintRendered
+		return paneHintsRendered[m.focused]
 	}
 	statusRendered := m.statusStyle.Render(m.status)
 
@@ -883,9 +860,5 @@ func (m Model) renderHelpStatus() string {
 	if avail < 1 {
 		return statusRendered
 	}
-	helpPart := hintRendered
-	if lipgloss.Width(helpPart) > avail {
-		helpPart = help.Render(runewidth.Truncate(hintText, avail, "…"))
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, helpPart, " ", statusRendered)
+	return lipgloss.JoinHorizontal(lipgloss.Top, fitHelpLine(paneHintTexts[m.focused], avail), " ", statusRendered)
 }

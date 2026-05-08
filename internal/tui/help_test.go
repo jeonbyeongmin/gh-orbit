@@ -37,6 +37,28 @@ func TestPaneHintsContainGlobalSuffix(t *testing.T) {
 	}
 }
 
+// TestPaneHintsCoverEveryPane keeps renderHelpStatus from silently falling
+// back to "" when a new pane constant is added. paneCount is the sentinel,
+// so we walk [0, paneCount).
+func TestPaneHintsCoverEveryPane(t *testing.T) {
+	hints := paneHints()
+	for p := pane(0); p < paneCount; p++ {
+		if hints[p] == "" {
+			t.Errorf("paneHints missing entry for pane %v", p)
+		}
+	}
+}
+
+// TestHelpExpandedHeightMatchesData guards against helpExpandedHeight
+// drifting away from helpData() — renderHelpPanel emits 2 rows per
+// category (header + entries), so the constant must equal 2 * len.
+func TestHelpExpandedHeightMatchesData(t *testing.T) {
+	if got := 2 * len(helpData()); got != helpExpandedHeight {
+		t.Errorf("helpExpandedHeight = %d, want %d (2 rows × %d categories)",
+			helpExpandedHeight, got, len(helpData()))
+	}
+}
+
 func TestRenderHelpPanelLineCount(t *testing.T) {
 	out := renderHelpPanel(120, helpExpandedHeight)
 	got := strings.Count(out, "\n") + 1

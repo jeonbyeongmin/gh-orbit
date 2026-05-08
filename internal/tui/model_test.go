@@ -48,29 +48,34 @@ func TestHelpToggleEntersAndExitsMode(t *testing.T) {
 	}
 }
 
-func TestHelpModeSwallowsQAndEsc(t *testing.T) {
+func TestHelpModeKeysPassThrough(t *testing.T) {
+	// The expanded panel is a reference, not a modal — shortcuts must keep
+	// working while it is open so a user can act on what they read. tab
+	// cycles focus, F dispatches a fetch, q quits.
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	m.mode = viewModeHelp
+	startFocus := m.focused
 
-	for _, k := range []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune{'q'}},
-		{Type: tea.KeyEsc},
-		{Type: tea.KeyRunes, Runes: []rune{'j'}},
-		{Type: tea.KeyRunes, Runes: []rune{'F'}},
-		{Type: tea.KeyRunes, Runes: []rune{'P'}},
-		{Type: tea.KeyRunes, Runes: []rune{'d'}},
-		{Type: tea.KeyTab},
-	} {
-		updated, cmd := m.Update(k)
-		m = updated.(Model)
-		if m.mode != viewModeHelp {
-			t.Errorf("key %v closed help mode (mode=%v)", k, m.mode)
-		}
-		if cmd != nil {
-			t.Errorf("key %v dispatched cmd %v in help mode, want nil", k, cmd)
-		}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(Model)
+	if m.focused == startFocus {
+		t.Errorf("tab in help mode should still cycle focus, got %v", m.focused)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	m = updated.(Model)
+	if !m.fetchInFlight {
+		t.Errorf("F in help mode should still dispatch fetch")
+	}
+	if cmd == nil {
+		t.Errorf("F in help mode should return a fetchCmd, got nil")
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Errorf("q in help mode should still quit (tea.Quit), got nil cmd")
 	}
 }
 
@@ -101,21 +106,18 @@ func TestHelpModeIgnoredInCheckoutConfirm(t *testing.T) {
 	}
 }
 
-func TestQuitOnlyWhenHelpClosed(t *testing.T) {
+func TestHelpToggleClosesViaSecondQuestionMark(t *testing.T) {
+	// `?` is a single binding that flips the panel both ways — the panel
+	// is a reference, not a modal, so a second `?` press must close it.
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
-
-	// q in normal mode quits.
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	if cmd == nil {
-		t.Fatal("q in viewModeNormal should dispatch tea.Quit")
-	}
-
 	m.mode = viewModeHelp
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	if cmd != nil {
-		t.Errorf("q in viewModeHelp must not dispatch cmd, got %v", cmd)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Errorf("? in help mode should close panel, got mode=%v", m.mode)
 	}
 }
 

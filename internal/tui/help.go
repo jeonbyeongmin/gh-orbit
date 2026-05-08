@@ -50,7 +50,7 @@ var helpCategories = []helpCategory{
 	{
 		title: "Graph",
 		entries: []helpEntry{
-			{"C", "detach"},
+			{"enter", "go"},
 		},
 	},
 	{
@@ -72,7 +72,7 @@ func helpData() []helpCategory { return helpCategories }
 // the panel or quit, regardless of which pane has focus.
 var paneHintTexts = map[pane]string{
 	paneRefs:  "enter checkout · p checkout+pull · o jump · ? help · q quit",
-	paneGraph: "enter/d patch · C detach · ? help · q quit",
+	paneGraph: "enter checkout/ff/detach · d patch · ? help · q quit",
 	paneTab:   "h/l switch · y copy · ? help · q quit",
 }
 

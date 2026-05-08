@@ -133,8 +133,8 @@ func TestRenderHelpStatusReturnsPaneHint(t *testing.T) {
 	}
 
 	m.focused = paneGraph
-	if got := m.renderHelpStatus(); !strings.Contains(got, "C detach") {
-		t.Errorf("paneGraph hint missing 'C detach': %q", got)
+	if got := m.renderHelpStatus(); !strings.Contains(got, "enter checkout/ff/detach") {
+		t.Errorf("paneGraph hint missing 'enter checkout/ff/detach': %q", got)
 	}
 
 	m.focused = paneTab
@@ -169,7 +169,7 @@ func TestRenderHelpStatusStatusOverridesHint(t *testing.T) {
 	if !strings.Contains(got, "fetching…") {
 		t.Errorf("rendered line missing status: %q", got)
 	}
-	if !strings.Contains(got, "C detach") {
+	if !strings.Contains(got, "enter checkout/ff/detach") {
 		t.Errorf("rendered line should still carry the hint alongside status: %q", got)
 	}
 }

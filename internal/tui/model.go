@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
@@ -568,6 +569,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.status = fmt.Sprintf("branch select: %d candidates", len(msg.candidates))
 			m.statusStyle = statusBusyS
+			m.applyPaneSizes()
 			return m, nil
 		case graphActionFF:
 			m.ffInFlight = true
@@ -660,6 +662,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				branch := m.branchPicker.candidates[m.branchPicker.cursor]
 				m.branchPicker = branchPickerState{}
 				m.mode = viewModeNormal
+				m.applyPaneSizes()
 				var cmd tea.Cmd
 				m, cmd = m.beginCheckout(branch, false)
 				return m, cmd
@@ -668,6 +671,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.branchPicker = branchPickerState{}
 				m.status = "branch select cancelled"
 				m.statusStyle = statusOkS
+				m.applyPaneSizes()
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
@@ -1037,8 +1041,11 @@ func (m Model) paneSizes() paneSizes {
 	// is open. helpReservedRows clamps so the main area never starves
 	// below 3 rows.
 	helpReserved := 1
-	if m.mode == viewModeHelp {
+	switch m.mode {
+	case viewModeHelp:
 		helpReserved = m.helpReservedRows()
+	case viewModeBranchPicker:
+		helpReserved = m.branchPickerReservedRows()
 	}
 	mainH := m.height - helpReserved
 	if mainH < 1 {
@@ -1105,6 +1112,53 @@ func (m Model) helpReservedRows() int {
 		want = min(want, upper)
 	}
 	return max(want, 1)
+}
+
+// branchPickerReservedRows returns how many bottom rows the picker panel
+// claims: one per candidate plus a header row plus a hint row. Same
+// "main area gets at least 3 rows" floor as helpReservedRows so the
+// panel shrinks before starving the graph. Floor: 1.
+func (m Model) branchPickerReservedRows() int {
+	want := len(m.branchPicker.candidates) + 2
+	if want < 3 {
+		want = 3
+	}
+	if upper := m.height - 3; upper > 0 {
+		want = min(want, upper)
+	}
+	return max(want, 1)
+}
+
+// renderBranchPicker draws the picker panel as a `[Branch select]` header
+// row, one row per candidate (cursor row prefixed with "> "), and a
+// trailing hint row. Rows past `height` are dropped — same shrink-rather-
+// than-overflow behavior as renderHelpPanel.
+func (m Model) renderBranchPicker(width, height int) string {
+	if width < 1 || height < 1 {
+		return ""
+	}
+	var lines []string
+	lines = append(lines, "[Branch select]")
+	for i, c := range m.branchPicker.candidates {
+		marker := "  "
+		if i == m.branchPicker.cursor {
+			marker = "> "
+		}
+		row := marker + c
+		if i == m.branchPicker.cursor {
+			row = selectedStyle.Render(row)
+		}
+		lines = append(lines, row)
+	}
+	lines = append(lines, helpTextBranchPicker)
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	rendered := make([]string, len(lines))
+	for i, ln := range lines {
+		rendered[i] = fitHelpLine(ln, width)
+	}
+	return strings.Join(rendered, "\n")
 }
 
 var (
@@ -1174,11 +1228,19 @@ func (m Model) tabBody() string {
 // the line into a multi-row panel.
 func (m Model) renderHelpStatus() string {
 	if m.mode == viewModeCheckoutConfirm {
-		// Three modal variants. The skipReason check sits BEFORE the withPull
+		// Four modal variants. The skipReason check sits BEFORE the withPull
 		// branch — when pull will be elided we want the legacy "stash & checkout"
 		// text plus the skip reason, not "and pull?" which would over-promise.
+		// withFF is mutually exclusive with withPull (different keys originate
+		// the chain) and gets its own prompt so the user sees "fast-forward",
+		// not "checkout".
 		p := m.pendingCheckout
 		switch {
+		case p.withFF:
+			return confirmPromptS.Render(
+				"Uncommitted changes — fast-forward '" + p.ref +
+					"'? · [s] stash & fast-forward · [a] abort · [esc] cancel",
+			)
 		case p.withPull && p.skipReason == "":
 			return confirmPromptS.Render(
 				"Uncommitted changes — checkout '" + p.ref +
@@ -1196,6 +1258,9 @@ func (m Model) renderHelpStatus() string {
 					"'? · [s] stash & checkout · [a] abort · [esc] cancel",
 			)
 		}
+	}
+	if m.mode == viewModeBranchPicker {
+		return m.renderBranchPicker(m.width, m.branchPickerReservedRows())
 	}
 	if m.mode == viewModeHelp {
 		return renderHelpPanel(m.width, m.helpReservedRows())

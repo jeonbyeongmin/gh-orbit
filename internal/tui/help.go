@@ -100,6 +100,11 @@ func fitHelpLine(text string, width int) string {
 	return help.Render(text)
 }
 
+// helpTextBranchPicker is the bottom hint shown while the branch picker
+// modal is open. The picker swallows everything but j/k/enter/esc, so
+// the hint enumerates exactly what works.
+const helpTextBranchPicker = "j/k navigate · enter checkout · esc cancel"
+
 // renderHelpPanel composes the expanded `?` help panel as a multi-line
 // string capped at `height` rows. Each category emits a `[Title]` header
 // row plus a single entries row joined inline with `·`. Rows past the cap

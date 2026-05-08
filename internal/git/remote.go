@@ -55,6 +55,12 @@ var ErrPullConflict = errors.New("pull conflict")
 // stash-and-retry vs. abort decision instead of just dumping git's stderr.
 var ErrCheckoutNeedsCleanTree = errors.New("checkout needs clean working tree")
 
+// ErrStashPopConflict marks a `git stash pop` failure where the popped
+// changes collided with the post-checkout working tree. The TUI surfaces
+// this so the user knows conflict markers are present and the stash entry
+// is preserved (git keeps stash@{0} on conflict).
+var ErrStashPopConflict = errors.New("stash pop conflict")
+
 // Fetch runs `git fetch --all` and returns nil on success. On failure the
 // returned error wraps git's stderr so the TUI can surface a real reason
 // ("could not resolve host", "Authentication failed", ...) instead of
@@ -175,6 +181,46 @@ func Stash(ctx context.Context, dir, message string) error {
 		return wrapGitErr("git stash", err, stderr.String())
 	}
 	return nil
+}
+
+// StashPop runs `git stash pop` (no args — pops stash@{0}). On a clean
+// pop returns nil. On conflict the error chain includes ErrStashPopConflict
+// so the TUI can surface "marker(s) in tree, stash preserved" guidance
+// instead of a raw failure string. Other failures (no stash, transport
+// errors, ...) are wrapped with stderr.
+//
+// LC_ALL=C / LANG=C lock the CONFLICT marker to English; mirrors Pull.
+// stdout is captured because git writes the conflict marker there during
+// the merge phase, exactly like `git pull`.
+func StashPop(ctx context.Context, dir string) error {
+	cmd := exec.CommandContext(ctx, "git", "stash", "pop")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"LC_ALL=C",
+		"LANG=C",
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	if runErr == nil {
+		return nil
+	}
+
+	conflict := strings.Contains(stderr.String(), "CONFLICT") ||
+		strings.Contains(stdout.String(), "CONFLICT")
+	msg := strings.TrimSpace(stderr.String())
+	if msg == "" {
+		msg = strings.TrimSpace(stdout.String())
+	}
+	if conflict {
+		if msg == "" {
+			return fmt.Errorf("git stash pop: %w", ErrStashPopConflict)
+		}
+		return fmt.Errorf("git stash pop: %w: %s", ErrStashPopConflict, msg)
+	}
+	return wrapGitErr("git stash pop", runErr, msg)
 }
 
 // runCheckout is the shared body of Checkout and CheckoutDetached.

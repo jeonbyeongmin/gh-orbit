@@ -197,6 +197,39 @@ func TestRefModelEnterAndOOnEmptyDoNothing(t *testing.T) {
 	}
 }
 
+func TestRefModelLowerPEmitsCheckoutWithPullRequestedMsg(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 10)
+	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
+		{ShortName: "main", FullName: "refs/heads/main", Kind: git.RefKindLocal, IsHead: true, Upstream: "origin/main"},
+	}})
+	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	if cmd == nil {
+		t.Fatal("'p' on a ref should return a non-nil cmd (checkout+pull)")
+	}
+	msg := cmd()
+	sel, ok := msg.(refCheckoutWithPullRequestedMsg)
+	if !ok {
+		t.Fatalf("cmd produced %T, want refCheckoutWithPullRequestedMsg", msg)
+	}
+	if sel.ref.FullName != "refs/heads/main" {
+		t.Errorf("refCheckoutWithPullRequestedMsg.ref.FullName = %q, want refs/heads/main", sel.ref.FullName)
+	}
+	if sel.ref.Upstream != "origin/main" {
+		t.Errorf("ref.Upstream not preserved across the msg, got %q", sel.ref.Upstream)
+	}
+}
+
+func TestRefModelLowerPOnEmptyDoesNothing(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 10)
+	r, _ = r.Update(refsLoadedMsg{refs: nil})
+	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	if cmd != nil {
+		t.Errorf("'p' with no selectable ref should not emit a cmd, got %v", cmd())
+	}
+}
+
 func TestRefModelClipsToHeight(t *testing.T) {
 	r := newRefsModel()
 	const h = 10

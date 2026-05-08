@@ -310,6 +310,64 @@ func TestStashIntegration(t *testing.T) {
 	}
 }
 
+func TestStashPopReturnsErrorWithStderr(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	err := StashPop(context.Background(), dir)
+	if err == nil {
+		t.Fatal("expected error running git stash pop outside a repo")
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error %q should include git's stderr message", err)
+	}
+}
+
+func TestStashPopReturnsConflictSentinel(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base f.txt: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "base")
+
+	// Stash a working-tree change at the same line.
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("stash-side\n"), 0o644); err != nil {
+		t.Fatalf("write stash f.txt: %v", err)
+	}
+	if err := Stash(context.Background(), work, "test stash"); err != nil {
+		t.Fatalf("Stash: %v", err)
+	}
+
+	// Commit a conflicting change at the same line on top of the stash's base.
+	// stash pop will 3-way merge stash-side vs tree-side using base as common
+	// ancestor — git writes conflict markers + the CONFLICT line to stdout.
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("tree-side\n"), 0o644); err != nil {
+		t.Fatalf("write tree f.txt: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "tree-side change")
+
+	err := StashPop(context.Background(), work)
+	if err == nil {
+		t.Fatal("expected stash pop conflict")
+	}
+	if !errors.Is(err, ErrStashPopConflict) {
+		t.Errorf("error %q should wrap ErrStashPopConflict", err)
+	}
+	// Stash should still be present (git preserves the entry on conflict).
+	if out := gitOutput(t, work, "stash", "list"); !strings.Contains(out, "test stash") {
+		t.Errorf("stash list = %q, want it to still contain the stash entry on conflict", out)
+	}
+}
+
 func TestPullIntegrationConflictWraps(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

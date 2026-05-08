@@ -1737,18 +1737,8 @@ func TestModelStashChainPullConflictPreservesNoJump(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, cmd := m.Update(stashThenCheckoutThenPullThenPopConflictMsg{
-		ref:        "feat",
-		stashLabel: "stash@{0}",
-		phase:      chainPhasePull,
-		err:        errors.New("git pull: pull conflict: CONFLICT (content)"),
-	})
-	// Re-wrap in the proper sentinel chain so errors.Is matches.
-	_ = updated
-	m, _ = m, cmd
-
 	conflictErr := fmt.Errorf("git pull: %w: CONFLICT (content)", git.ErrPullConflict)
-	updated, cmd = m.Update(stashThenCheckoutThenPullThenPopConflictMsg{
+	updated, cmd := m.Update(stashThenCheckoutThenPullThenPopConflictMsg{
 		ref:        "feat",
 		stashLabel: "stash@{0}",
 		phase:      chainPhasePull,

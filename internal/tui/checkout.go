@@ -107,7 +107,97 @@ var (
 	checkoutDetachedExec = git.CheckoutDetached
 	stashExec            = git.Stash
 	stashPopExec         = git.StashPop
+	mergeFFOnlyExec      = git.MergeFFOnly
+	isAncestorExec       = git.IsAncestor
+	countAheadExec       = git.CountAhead
 )
+
+// ffSucceededMsg fires when ffOnlyCmd's `git merge --ff-only` completed
+// without a checkout step (Case 1: HEAD already on the branch we're
+// advancing). branch is HEAD's local-branch name; advance is the +N commit
+// count between the pre-FF tip and the post-FF tip, computed before the
+// merge runs.
+type ffSucceededMsg struct {
+	branch  string
+	advance int
+}
+
+// ffFailedMsg fires when ffOnlyCmd hit a non-recoverable error — divergent
+// histories (ErrFFNotPossible), lock contention, missing ref, or a generic
+// merge failure. Dirty-tree refusal is split out into ffNeedsCleanTreeMsg.
+type ffFailedMsg struct{ err error }
+
+// ffNeedsCleanTreeMsg fires when ffOnlyCmd's merge was refused because the
+// working tree had uncommitted changes git would have to clobber. The
+// model reuses viewModeCheckoutConfirm with pendingCheckout.withFF=true so
+// the user gets the same `s` (stash) / `a` (abort) modal as a dirty-tree
+// checkout.
+type ffNeedsCleanTreeMsg struct {
+	branch string
+	hash   string
+}
+
+// stashThenFFMsg fires when the dirty-tree `s` branch chained stash → FF
+// to completion. stashLabel mirrors the post-checkout pattern — git keeps
+// the entry at stash@{0} so the user can pop it on their own time.
+type stashThenFFMsg struct {
+	branch     string
+	advance    int
+	stashLabel string
+}
+
+// ffOnlyCmd runs `git merge --ff-only <hash>` against the cursor commit,
+// stamping the +N advance count via CountAhead before the merge fires.
+// Case 1 only: HEAD must already be attached to `branch` and `branch`'s
+// tip must be an ancestor of `hash`. The graph Enter evaluator pre-gates
+// both (IsAncestor + headBranch resolution); MergeFFOnly's --ff-only flag
+// is the runtime safety net.
+//
+// Failure wrapping mirrors the checkout family: ErrCheckoutNeedsCleanTree
+// → ffNeedsCleanTreeMsg, anything else → ffFailedMsg. ErrFFNotPossible
+// surfaces as ffFailedMsg with the wrapped error in the chain so the
+// status line can render the divergence reason; the modal is reserved
+// for dirty-tree only.
+func ffOnlyCmd(dir, branch, hash string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), checkoutTimeout)
+		defer cancel()
+		// Compute advance up-front so the success path can stamp it. A
+		// rev-list error here is non-fatal — fall back to 0 and let the
+		// merge decide the final outcome.
+		advance, _ := countAheadExec(ctx, dir, "HEAD", hash)
+		if err := mergeFFOnlyExec(ctx, dir, hash); err != nil {
+			if errors.Is(err, git.ErrCheckoutNeedsCleanTree) {
+				return ffNeedsCleanTreeMsg{branch: branch, hash: hash}
+			}
+			return ffFailedMsg{err: err}
+		}
+		return ffSucceededMsg{branch: branch, advance: advance}
+	}
+}
+
+// stashThenFFCmd runs the dirty-tree `s` branch of an FF: stash → FF.
+// Mirrors stashThenCheckoutCmd's policy — no automatic pop. The stash
+// stays at stash@{0} for the user to handle on their own time, which
+// matches how the existing checkout chain treats post-stash entries.
+func stashThenFFCmd(dir, branch, hash string) tea.Cmd {
+	return func() tea.Msg {
+		stCtx, stCancel := context.WithTimeout(context.Background(), checkoutTimeout)
+		stashErr := stashExec(stCtx, dir, "gh-orbit: before fast-forward "+branch)
+		stCancel()
+		if stashErr != nil {
+			return ffFailedMsg{err: stashErr}
+		}
+
+		ffCtx, ffCancel := context.WithTimeout(context.Background(), checkoutTimeout)
+		defer ffCancel()
+		advance, _ := countAheadExec(ffCtx, dir, "HEAD", hash)
+		if err := mergeFFOnlyExec(ffCtx, dir, hash); err != nil {
+			return ffFailedMsg{err: err}
+		}
+		return stashThenFFMsg{branch: branch, advance: advance, stashLabel: stashLabelHEAD}
+	}
+}
 
 func checkoutCmd(dir, ref string, detached bool) tea.Cmd {
 	return func() tea.Msg {

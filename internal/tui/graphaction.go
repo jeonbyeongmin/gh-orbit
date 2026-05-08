@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"log"
 	"sort"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -107,14 +108,23 @@ func evaluateGraphActionCmd(dir, hash string, locals []git.Ref) tea.Cmd {
 		}
 
 		if headBranch == "" || headHash == "" {
+			log.Printf("graph enter: detach (no HEAD branch in locals; HEAD likely detached)")
 			return graphActionMsg{hash: hash, kind: graphActionDetach}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), checkoutTimeout)
 		defer cancel()
 		advance, err := countAheadExec(ctx, dir, headHash, hash)
-		if err != nil || advance == 0 {
+		if err != nil {
+			log.Printf("graph enter: detach (rev-list --count %s..%s failed: %v)", shortHash(headHash), shortHash(hash), err)
 			return graphActionMsg{hash: hash, kind: graphActionDetach}
 		}
+		if advance == 0 {
+			log.Printf("graph enter: detach (advance=0; %s..%s — cursor not strictly ahead of HEAD %s)",
+				shortHash(headHash), shortHash(hash), headBranch)
+			return graphActionMsg{hash: hash, kind: graphActionDetach}
+		}
+		log.Printf("graph enter: ff (%s +%d, %s..%s)",
+			headBranch, advance, shortHash(headHash), shortHash(hash))
 		return graphActionMsg{hash: hash, kind: graphActionFF, branch: headBranch, advance: advance}
 	}
 }

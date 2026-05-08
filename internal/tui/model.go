@@ -575,6 +575,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ffFailedMsg:
 		m.ffInFlight = false
+		log.Printf("graph enter: ff failed: %v", msg.err)
 		m.status = "fast-forward failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
@@ -765,6 +766,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.actionInFlight = true
 			m.status = "→ resolving…"
 			m.statusStyle = statusBusyS
+			log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d)", shortHash(c.Hash), len(locals))
 			return m, evaluateGraphActionCmd("", c.Hash, locals)
 		case "d":
 			c, ok := m.graph.Selected()

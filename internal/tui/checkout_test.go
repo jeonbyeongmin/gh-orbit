@@ -586,4 +586,3 @@ func TestStashThenCheckoutThenPullThenPopCmdStashFailsBlocksChain(t *testing.T) 
 		t.Errorf("err = %v, want chain to include %v", got.err, boom)
 	}
 }
-

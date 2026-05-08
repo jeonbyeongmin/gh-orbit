@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -60,6 +61,13 @@ var ErrCheckoutNeedsCleanTree = errors.New("checkout needs clean working tree")
 // this so the user knows conflict markers are present and the stash entry
 // is preserved (git keeps stash@{0} on conflict).
 var ErrStashPopConflict = errors.New("stash pop conflict")
+
+// ErrFFNotPossible marks a `git merge --ff-only` rejection where the target
+// hash isn't a descendant of HEAD (divergence). The TUI sites that drive
+// MergeFFOnly normally pre-gate with IsAncestor so this surfaces only on a
+// race or a wording-shift edge; callers branch on errors.Is to distinguish
+// "not a fast-forward" from transport / lock errors.
+var ErrFFNotPossible = errors.New("fast-forward not possible")
 
 // gitEnv returns the locale-locked, prompt-disabled env shared by every
 // wrapper that parses git's textual output. LC_ALL=C / LANG=C keep markers
@@ -230,6 +238,105 @@ func runCheckout(ctx context.Context, dir string, args []string) error {
 		return fmt.Errorf("git checkout: %w: %s", ErrCheckoutNeedsCleanTree, msg)
 	}
 	return wrapGitErr("git checkout", runErr, msg)
+}
+
+// IsAncestor reports whether `ancestor` is an ancestor of `descendant`,
+// using `git merge-base --is-ancestor`. The contract follows git's exit
+// codes: 0 → true, 1 → false, anything else (bad ref, repo error, …) →
+// wrapped error. Used by the graph Enter evaluator to decide whether HEAD
+// can fast-forward to the cursor commit before invoking MergeFFOnly.
+func IsAncestor(ctx context.Context, dir, ancestor, descendant string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, wrapGitErr("git merge-base --is-ancestor", err, stderr.String())
+}
+
+// MergeFFOnly runs `git merge --ff-only <hash>`. On success the current
+// branch tip advances to <hash> with no merge commit and no checkout. The
+// caller is expected to gate this on IsAncestor first; the explicit
+// --ff-only flag is the runtime safety net.
+//
+// Failure wrapping mirrors Checkout: dirty-tree wording (which `merge`
+// emits with the same "would be overwritten" / "Please commit your
+// changes" phrases as `checkout`) routes to ErrCheckoutNeedsCleanTree so
+// the TUI can reuse the existing stash-or-abort confirm modal. The FF-
+// rejection phrase ("Not possible to fast-forward, aborting") routes to
+// ErrFFNotPossible so callers can branch on a divergence vs. a lock /
+// transport failure. Anything else falls through to wrapGitErr.
+func MergeFFOnly(ctx context.Context, dir, hash string) error {
+	cmd := exec.CommandContext(ctx, "git", "merge", "--ff-only", hash)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	if runErr == nil {
+		return nil
+	}
+	// `merge` writes the FF-rejection phrase to stderr; the dirty-tree
+	// phrases also land on stderr. Scan stderr first, fall back to stdout
+	// for the human message (some git versions write hints to stdout).
+	msg := strings.TrimSpace(stderr.String())
+	if msg == "" {
+		msg = strings.TrimSpace(stdout.String())
+	}
+	if isCheckoutDirty(stderr.String()) || isCheckoutDirty(stdout.String()) {
+		if msg == "" {
+			return fmt.Errorf("git merge --ff-only: %w", ErrCheckoutNeedsCleanTree)
+		}
+		return fmt.Errorf("git merge --ff-only: %w: %s", ErrCheckoutNeedsCleanTree, msg)
+	}
+	if isFFNotPossible(stderr.String()) || isFFNotPossible(stdout.String()) {
+		if msg == "" {
+			return fmt.Errorf("git merge --ff-only: %w", ErrFFNotPossible)
+		}
+		return fmt.Errorf("git merge --ff-only: %w: %s", ErrFFNotPossible, msg)
+	}
+	return wrapGitErr("git merge --ff-only", runErr, msg)
+}
+
+// CountAhead returns how many commits are reachable from `descendant` but
+// not from `ancestor` (i.e., the `+N` advance count) using `git rev-list
+// --count <ancestor>..<descendant>`. Returns 0 when descendant == ancestor
+// or when descendant is behind ancestor (rev-list emits an empty range).
+// The TUI uses this to render `fast-forward: <branch> +N` in the status
+// bar after a successful MergeFFOnly.
+func CountAhead(ctx context.Context, dir, ancestor, descendant string) (int, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-list", "--count", ancestor+".."+descendant)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return 0, wrapGitErr("git rev-list --count", err, stderr.String())
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(stdout.String()))
+	if err != nil {
+		return 0, fmt.Errorf("git rev-list --count: parse %q: %w", stdout.String(), err)
+	}
+	return n, nil
+}
+
+// isFFNotPossible matches the phrase git emits when `merge --ff-only`
+// rejects because the target isn't a descendant of HEAD. Wording has
+// drifted slightly across git versions ("Not possible to fast-forward,
+// aborting." vs. "fatal: Not possible to fast-forward") so we match a
+// case-insensitive substring of the stable core.
+func isFFNotPossible(stderr string) bool {
+	return strings.Contains(stderr, "Not possible to fast-forward") ||
+		strings.Contains(stderr, "not possible to fast-forward")
 }
 
 // isCheckoutDirty matches the three phrases git emits when a checkout is

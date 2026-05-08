@@ -1432,8 +1432,12 @@ func TestModelCheckoutConfirmSwallowsOtherKeys(t *testing.T) {
 	}
 }
 
-func TestModelGraphCDispatchesDetachedCheckout(t *testing.T) {
-	_, _, getDetached := stubCheckout(t)
+func TestModelGraphCKeyRemoved(t *testing.T) {
+	// Regression: 'C' used to detach the cursor commit. The graph Enter
+	// flow now subsumes that — chipless rows fall through to detach. Make
+	// sure 'C' is no longer wired so a stray keypress doesn't latch a
+	// checkout chain.
+	_, _, _ = stubCheckout(t)
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -1449,21 +1453,14 @@ func TestModelGraphCDispatchesDetachedCheckout(t *testing.T) {
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
 	m = updated.(Model)
 
-	if !m.checkoutInFlight {
-		t.Error("'C' should latch checkoutInFlight")
+	if m.checkoutInFlight {
+		t.Error("'C' should no longer latch checkoutInFlight (graph Enter handles detach)")
 	}
-	if !m.pendingCheckout.detached {
-		t.Errorf("pendingCheckout = %+v, want detached=true", m.pendingCheckout)
+	if m.pendingCheckout.ref != "" {
+		t.Errorf("pendingCheckout.ref = %q, want empty (no detach armed)", m.pendingCheckout.ref)
 	}
-	if m.pendingCheckout.ref != "abc1234" {
-		t.Errorf("pendingCheckout.ref = %q, want abc1234 (graph hash)", m.pendingCheckout.ref)
-	}
-	if cmd == nil {
-		t.Fatal("'C' should return a checkoutCmd")
-	}
-	_ = cmd()
-	if got, ok := getDetached(); !ok || got != "abc1234" {
-		t.Errorf("checkoutDetachedExec ref = %q ok=%v, want abc1234", got, ok)
+	if cmd != nil {
+		t.Error("'C' should return no cmd on graph focus")
 	}
 }
 

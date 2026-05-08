@@ -5,6 +5,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 
 	"github.com/atotto/clipboard"
@@ -70,6 +71,11 @@ const (
 	// panel is open — `?` re-toggles, q quits, j/k navigate, etc. — so the
 	// expanded panel functions as a reference, not a modal.
 	viewModeHelp
+	// viewModeBranchPicker gates the screen on a "pick which local branch"
+	// modal triggered when the graph Enter evaluator returns multiple
+	// chips at the cursor row (graphActionPicker). The 3-pane layout stays
+	// visible underneath; only j/k/enter/esc are accepted while open.
+	viewModeBranchPicker
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
@@ -80,8 +86,9 @@ const helpExpandedHeight = 8
 
 // pendingCheckout remembers what the user was trying to check out so the
 // "[s]tash & checkout" branch in the confirm modal can re-issue the same
-// request after stashing. detached=true means graph 'C' (CheckoutDetached);
-// detached=false means a refs-pane Enter (named ref).
+// request after stashing. detached=true means graph Enter resolved to
+// detach (CheckoutDetached); detached=false means a refs-pane Enter
+// (named ref) or a graph-Enter checkout to a chip-bearing branch.
 //
 // withPull and skipReason carry the refs-pane `p` chain's state across
 // the dirty-tree confirm modal. Zero values mean "plain checkout" —
@@ -93,11 +100,31 @@ const helpExpandedHeight = 8
 // vs. the legacy stashThenCheckoutCmd. skipReason being non-empty is
 // the single signal of "pull will be skipped" — the chain commands
 // derive their skip flag from that, no parallel boolean needed.
+//
+// withFF / ffHash flag the graph-Enter FF path (graphActionFF) so the
+// dirty-tree confirm modal can route `s` to stashThenFFCmd instead of
+// stashThenCheckoutCmd. ref then carries the branch name (HEAD's, since
+// FF is a Case 1 op with no checkout step) and ffHash carries the cursor
+// commit MergeFFOnly should advance to. withFF is mutually exclusive
+// with withPull — graph FF and refs `p` originate from different keys.
 type pendingCheckout struct {
 	ref        string
 	detached   bool
 	withPull   bool
 	skipReason string
+	withFF     bool
+	ffHash     string
+}
+
+// pendingFF remembers the parameters of an in-flight graph-Enter FF so a
+// follow-up dirty-tree confirm modal can re-issue the same request after
+// stashing. Mirrors pendingCheckout's shape for the FF-specific path —
+// the dual struct keeps the FF and checkout flows independently
+// reconstructable rather than overloading pendingCheckout fields.
+type pendingFF struct {
+	branch  string
+	hash    string
+	advance int
 }
 
 type Model struct {
@@ -153,7 +180,7 @@ type Model struct {
 	// statusStyle decides the color; zero value renders without color.
 	status      string
 	statusStyle lipgloss.Style
-	// checkoutInFlight gates Enter on the refs pane and 'C' on the graph
+	// checkoutInFlight gates Enter on the refs pane and Enter on the graph
 	// while a background checkout is running. fetch/pull have their own
 	// gates; git's .git/index.lock is the real serialization point.
 	checkoutInFlight bool
@@ -161,6 +188,27 @@ type Model struct {
 	// tree confirm modal can re-issue the same request (with stashing) on
 	// 's', or drop the slot on 'a'/esc.
 	pendingCheckout pendingCheckout
+	// actionInFlight gates graph-pane Enter while evaluateGraphActionCmd
+	// is resolving the cursor's chip / ancestry state. Released by the
+	// graphActionMsg handler before any follow-up cmd is dispatched —
+	// downstream gates (checkoutInFlight / ffInFlight) take over from
+	// there. A second Enter while resolving is swallowed.
+	actionInFlight bool
+	// ffInFlight gates graph Enter while ffOnlyCmd / stashThenFFCmd is
+	// running. Tracked separately from checkoutInFlight so the FF and
+	// checkout chains can't collide on a status overwrite or a stale
+	// pendingFF / pendingCheckout slot. Cleared by ffSucceededMsg /
+	// ffFailedMsg / stashThenFFMsg.
+	ffInFlight bool
+	// pendingFF mirrors pendingCheckout for the graph-Enter FF path. The
+	// dirty-tree confirm modal arms its `s` branch off pendingCheckout
+	// (with withFF=true), so this slot is only consulted while ffOnlyCmd
+	// is in flight.
+	pendingFF pendingFF
+	// branchPicker backs viewModeBranchPicker. Reset to the zero value on
+	// esc / enter; the picker reads candidates+cursor while open and
+	// dispatches a graph-Enter checkout on enter.
+	branchPicker branchPickerState
 }
 
 func New() Model {
@@ -495,6 +543,87 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 
+	case graphActionMsg:
+		m.actionInFlight = false
+		// Stale-drop: cursor moved between Enter dispatch and this reply.
+		// Drop silently — the user can re-press Enter on the new row.
+		if c, ok := m.graph.Selected(); !ok || c.Hash != msg.hash {
+			m.status = ""
+			return m, nil
+		}
+		switch msg.kind {
+		case graphActionNoOp:
+			m.status = "already on " + msg.branch
+			m.statusStyle = statusOkS
+			return m, nil
+		case graphActionCheckout:
+			var cmd tea.Cmd
+			m, cmd = m.beginCheckout(msg.branch, false)
+			return m, cmd
+		case graphActionPicker:
+			m.mode = viewModeBranchPicker
+			m.branchPicker = branchPickerState{
+				candidates: msg.candidates,
+				hash:       msg.hash,
+			}
+			m.status = fmt.Sprintf("branch select: %d candidates", len(msg.candidates))
+			m.statusStyle = statusBusyS
+			return m, nil
+		case graphActionFF:
+			m.ffInFlight = true
+			m.pendingFF = pendingFF{
+				branch:  msg.branch,
+				hash:    msg.hash,
+				advance: msg.advance,
+			}
+			m.status = fmt.Sprintf("fast-forward: %s +%d …", msg.branch, msg.advance)
+			m.statusStyle = statusBusyS
+			return m, ffOnlyCmd("", msg.branch, msg.hash)
+		case graphActionDetach:
+			var cmd tea.Cmd
+			m, cmd = m.beginCheckout(msg.hash, true)
+			return m, cmd
+		}
+		return m, nil
+
+	case ffSucceededMsg:
+		m.ffInFlight = false
+		m.pendingFF = pendingFF{}
+		m.status = fmt.Sprintf("fast-forward: %s +%d", msg.branch, msg.advance)
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case ffFailedMsg:
+		m.ffInFlight = false
+		m.pendingFF = pendingFF{}
+		m.status = "fast-forward failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case ffNeedsCleanTreeMsg:
+		// Modal owns the next decision; release the in-flight gate so
+		// 's' → stashThenFFCmd can re-arm it without colliding.
+		m.ffInFlight = false
+		m.pendingCheckout = pendingCheckout{
+			ref:    msg.branch,
+			withFF: true,
+			ffHash: msg.hash,
+		}
+		m.mode = viewModeCheckoutConfirm
+		m.status = "fast-forward: " + msg.branch + " — uncommitted changes"
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case stashThenFFMsg:
+		m.ffInFlight = false
+		m.pendingCheckout = pendingCheckout{}
+		m.status = fmt.Sprintf("fast-forward: %s +%d (stashed before fast-forward: %s)",
+			msg.branch, msg.advance, msg.stashLabel)
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
 	case tea.KeyMsg:
 		// The viewMode guard runs before the global ctrl+c/q quit branch so
 		// `q` inside the overlay closes the overlay instead of killing the app.
@@ -512,13 +641,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.mode == viewModeBranchPicker {
+			switch msg.String() {
+			case "j", "down":
+				if m.branchPicker.cursor < len(m.branchPicker.candidates)-1 {
+					m.branchPicker.cursor++
+				}
+				return m, nil
+			case "k", "up":
+				if m.branchPicker.cursor > 0 {
+					m.branchPicker.cursor--
+				}
+				return m, nil
+			case "enter":
+				if len(m.branchPicker.candidates) == 0 {
+					return m, nil
+				}
+				branch := m.branchPicker.candidates[m.branchPicker.cursor]
+				m.branchPicker = branchPickerState{}
+				m.mode = viewModeNormal
+				var cmd tea.Cmd
+				m, cmd = m.beginCheckout(branch, false)
+				return m, cmd
+			case "esc":
+				m.mode = viewModeNormal
+				m.branchPicker = branchPickerState{}
+				m.status = "branch select cancelled"
+				m.statusStyle = statusOkS
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		if m.mode == viewModeCheckoutConfirm {
 			switch msg.String() {
 			case "s":
 				p := m.pendingCheckout
 				m.mode = viewModeNormal
-				m.checkoutInFlight = true
 				m.statusStyle = statusBusyS
+				if p.withFF {
+					m.ffInFlight = true
+					m.status = "fast-forward: " + p.ref + " (stashing…)"
+					return m, stashThenFFCmd("", p.ref, p.ffHash)
+				}
+				m.checkoutInFlight = true
 				if p.withPull {
 					if p.skipReason != "" {
 						m.status = "checkout: " + p.ref + " (pull skipped: " + p.skipReason + ", stashing…)"
@@ -533,8 +701,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, stashThenCheckoutCmd("", p.ref, p.detached)
 			case "a", "esc":
 				m.mode = viewModeNormal
+				p := m.pendingCheckout
 				m.pendingCheckout = pendingCheckout{}
-				m.status = "checkout: aborted"
+				if p.withFF {
+					m.status = "fast-forward: aborted"
+				} else {
+					m.status = "checkout: aborted"
+				}
 				m.statusStyle = statusOkS
 				return m, nil
 			case "ctrl+c":
@@ -589,18 +762,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Swallow so capital R doesn't fall through to the focused
 			// sub-model. Reserved for a future Rebase action.
 			return m, nil
-		case "C":
-			// Gate on graph focus so a stray 'C' on the refs pane doesn't detach.
+		case "enter":
+			// Graph focus only — refs pane has its own enter handler
+			// (refs.go: refCheckoutRequestedMsg). On other panes, fall
+			// through to the focused-sub-model dispatch below.
 			if m.focused != paneGraph {
+				break
+			}
+			if m.actionInFlight || m.checkoutInFlight || m.ffInFlight {
 				return m, nil
 			}
 			c, ok := m.graph.Selected()
 			if !ok {
 				return m, nil
 			}
-			var cmd tea.Cmd
-			m, cmd = m.beginCheckout(c.Hash, true)
-			return m, cmd
+			locals := m.refs.byKind[0]
+			if len(locals) == 0 {
+				m.status = "refs not loaded yet"
+				m.statusStyle = statusErrS
+				return m, nil
+			}
+			m.actionInFlight = true
+			m.status = "→ resolving…"
+			m.statusStyle = statusBusyS
+			return m, evaluateGraphActionCmd("", c.Hash, locals)
 		case "d":
 			c, ok := m.graph.Selected()
 			if !ok {

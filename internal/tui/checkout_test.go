@@ -257,7 +257,7 @@ func TestCheckoutThenPullCmdSuccess(t *testing.T) {
 		},
 	})
 
-	msg := checkoutThenPullCmd("", "feat", false, "rebase", false, "")()
+	msg := checkoutThenPullCmd("", "feat", false, "rebase", "")()
 	if !coRan || !puRan {
 		t.Errorf("co=%v pu=%v, want both true", coRan, puRan)
 	}
@@ -286,7 +286,7 @@ func TestCheckoutThenPullCmdSkipsPullWhenIneligible(t *testing.T) {
 		},
 	})
 
-	msg := checkoutThenPullCmd("", "v1.0", false, "", true, "tag has no upstream")()
+	msg := checkoutThenPullCmd("", "v1.0", false, "", "tag has no upstream")()
 	if !coRan {
 		t.Error("checkout should run even when pull is skipped")
 	}
@@ -313,7 +313,7 @@ func TestCheckoutThenPullCmdCheckoutFailsBlocksPull(t *testing.T) {
 		},
 	})
 
-	msg := checkoutThenPullCmd("", "feat", false, "", false, "")()
+	msg := checkoutThenPullCmd("", "feat", false, "", "")()
 	if puRan {
 		t.Error("pull should not run when checkout failed")
 	}
@@ -333,7 +333,7 @@ func TestCheckoutThenPullCmdCheckoutDirtyTreeRoutesToConfirm(t *testing.T) {
 		},
 	})
 
-	msg := checkoutThenPullCmd("", "feat", false, "", false, "")()
+	msg := checkoutThenPullCmd("", "feat", false, "", "")()
 	got, ok := msg.(checkoutNeedsCleanTreeMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want checkoutNeedsCleanTreeMsg", msg)
@@ -353,7 +353,7 @@ func TestCheckoutThenPullCmdPullConflictReportsConflict(t *testing.T) {
 		},
 	})
 
-	msg := checkoutThenPullCmd("", "feat", false, "", false, "")()
+	msg := checkoutThenPullCmd("", "feat", false, "", "")()
 	got, ok := msg.(checkoutThenPullConflictMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want checkoutThenPullConflictMsg", msg)
@@ -376,7 +376,7 @@ func TestCheckoutThenPullCmdPullGenericFailureSurfaces(t *testing.T) {
 		},
 	})
 
-	msg := checkoutThenPullCmd("", "feat", false, "", false, "")()
+	msg := checkoutThenPullCmd("", "feat", false, "", "")()
 	got, ok := msg.(pullFailedMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want pullFailedMsg", msg)
@@ -408,7 +408,7 @@ func TestStashThenCheckoutThenPullThenPopCmdHappyPath(t *testing.T) {
 		},
 	})
 
-	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", false, "")()
+	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", "")()
 	wantSeq := []string{"stash", "checkout", "pull", "pop"}
 	if !slices.Equal(seq, wantSeq) {
 		t.Errorf("seq = %v, want %v", seq, wantSeq)
@@ -446,7 +446,7 @@ func TestStashThenCheckoutThenPullThenPopCmdSkipsPullChain(t *testing.T) {
 		},
 	})
 
-	msg := stashThenCheckoutThenPullThenPopCmd("", "v1.0", false, "", true, "tag has no upstream")()
+	msg := stashThenCheckoutThenPullThenPopCmd("", "v1.0", false, "", "tag has no upstream")()
 	wantSeq := []string{"stash", "checkout", "pop"}
 	if !slices.Equal(seq, wantSeq) {
 		t.Errorf("seq = %v, want %v (pull skipped, pop runs after checkout)", seq, wantSeq)
@@ -474,7 +474,7 @@ func TestStashThenCheckoutThenPullThenPopCmdPullConflictStillPops(t *testing.T) 
 		},
 	})
 
-	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", false, "")()
+	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", "")()
 	if !popRan {
 		t.Error("pop must still run after pull conflict (interview decision)")
 	}
@@ -482,7 +482,7 @@ func TestStashThenCheckoutThenPullThenPopCmdPullConflictStillPops(t *testing.T) 
 	if !ok {
 		t.Fatalf("msg = %T, want stashThenCheckoutThenPullThenPopConflictMsg", msg)
 	}
-	if got.phase != "pull" {
+	if got.phase != chainPhasePull {
 		t.Errorf("phase = %q, want pull", got.phase)
 	}
 	if !errors.Is(got.err, git.ErrPullConflict) {
@@ -504,7 +504,7 @@ func TestStashThenCheckoutThenPullThenPopCmdPullGenericFailureKeepsStash(t *test
 		},
 	})
 
-	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", false, "")()
+	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", "")()
 	if popRan {
 		t.Error("pop must NOT run on generic pull failure — stash is preserved")
 	}
@@ -512,7 +512,7 @@ func TestStashThenCheckoutThenPullThenPopCmdPullGenericFailureKeepsStash(t *test
 	if !ok {
 		t.Fatalf("msg = %T, want stashThenCheckoutThenPullThenPopConflictMsg", msg)
 	}
-	if got.phase != "pull" {
+	if got.phase != chainPhasePull {
 		t.Errorf("phase = %q, want pull", got.phase)
 	}
 	if !errors.Is(got.err, boom) {
@@ -530,12 +530,12 @@ func TestStashThenCheckoutThenPullThenPopCmdPopConflictPreservesStash(t *testing
 		stashPop:    func(context.Context, string) error { return popConflictErr },
 	})
 
-	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", false, "")()
+	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", "")()
 	got, ok := msg.(stashThenCheckoutThenPullThenPopConflictMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want stashThenCheckoutThenPullThenPopConflictMsg", msg)
 	}
-	if got.phase != "stash-pop" {
+	if got.phase != chainPhaseStashPop {
 		t.Errorf("phase = %q, want stash-pop", got.phase)
 	}
 	if !errors.Is(got.err, git.ErrStashPopConflict) {
@@ -557,7 +557,7 @@ func TestStashThenCheckoutThenPullThenPopCmdStashFailsBlocksChain(t *testing.T) 
 		stashPop:    func(context.Context, string) error { popRan = true; return nil },
 	})
 
-	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", false, "")()
+	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", "")()
 	if coRan || puRan || popRan {
 		t.Errorf("nothing should run after stash failure (co=%v pu=%v pop=%v)", coRan, puRan, popRan)
 	}

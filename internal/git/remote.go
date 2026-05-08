@@ -61,6 +61,45 @@ var ErrCheckoutNeedsCleanTree = errors.New("checkout needs clean working tree")
 // is preserved (git keeps stash@{0} on conflict).
 var ErrStashPopConflict = errors.New("stash pop conflict")
 
+// gitEnv returns the locale-locked, prompt-disabled env shared by every
+// wrapper that parses git's textual output. LC_ALL=C / LANG=C keep markers
+// like CONFLICT / "would be overwritten" in English so the parsers in this
+// file stay stable across user locales; GIT_TERMINAL_PROMPT=0 stops git
+// from grabbing stdin for HTTPS credentials, which would collide with the
+// bubbletea altscreen.
+func gitEnv() []string {
+	return append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"LC_ALL=C",
+		"LANG=C",
+	)
+}
+
+// wrapMergeLikeErr formats the post-run error for git commands that can
+// emit a "CONFLICT" marker (pull, stash pop, future merge/cherry-pick).
+// Both stdout and stderr are scanned because git writes the marker to
+// stdout during the merge phase but transport / strategy errors land on
+// stderr — capture both, prefer stderr's first non-empty line for the
+// human message. Conflict failures wrap conflictSentinel so callers can
+// branch on errors.Is; non-conflict failures fall through to wrapGitErr.
+func wrapMergeLikeErr(label string, runErr error, stdout, stderr string, conflictSentinel error) error {
+	if runErr == nil {
+		return nil
+	}
+	conflict := strings.Contains(stderr, "CONFLICT") || strings.Contains(stdout, "CONFLICT")
+	msg := strings.TrimSpace(stderr)
+	if msg == "" {
+		msg = strings.TrimSpace(stdout)
+	}
+	if conflict {
+		if msg == "" {
+			return fmt.Errorf("%s: %w", label, conflictSentinel)
+		}
+		return fmt.Errorf("%s: %w: %s", label, conflictSentinel, msg)
+	}
+	return wrapGitErr(label, runErr, msg)
+}
+
 // Fetch runs `git fetch --all` and returns nil on success. On failure the
 // returned error wraps git's stderr so the TUI can surface a real reason
 // ("could not resolve host", "Authentication failed", ...) instead of
@@ -69,6 +108,8 @@ var ErrStashPopConflict = errors.New("stash pop conflict")
 // GIT_TERMINAL_PROMPT=0 is forced: git would otherwise grab stdin to ask for
 // HTTPS credentials, which collides with the bubbletea altscreen. With the
 // prompt disabled, missing credentials surface as a normal stderr error.
+// Locale envs are deliberately not forced here — `git fetch --all` doesn't
+// emit any markers we parse, so user-locale stderr is fine to surface.
 func Fetch(ctx context.Context, dir string) error {
 	cmd := exec.CommandContext(ctx, "git", "fetch", "--all")
 	cmd.Dir = dir
@@ -87,43 +128,15 @@ func Fetch(ctx context.Context, dir string) error {
 // are wrapped with stderr/stdout; if either stream contains "CONFLICT" the
 // error chain includes ErrPullConflict so the TUI can branch on a
 // merge/rebase conflict vs. a transport / auth / non-fast-forward error.
-//
-// LC_ALL=C and LANG=C are forced so the conflict marker stays in English —
-// the wrapper parses git's output programmatically; the TUI builds its own
-// user-facing messages. GIT_TERMINAL_PROMPT=0 mirrors Fetch.
 func Pull(ctx context.Context, dir string, strategy PullStrategy) error {
 	args := append([]string{"pull"}, strategy.args()...)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"LC_ALL=C",
-		"LANG=C",
-	)
-
-	// `git pull` writes the CONFLICT marker to stdout (the merge runs there)
-	// while transport / auth errors land on stderr. Capture both.
+	cmd.Env = gitEnv()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	runErr := cmd.Run()
-	if runErr == nil {
-		return nil
-	}
-
-	conflict := strings.Contains(stderr.String(), "CONFLICT") ||
-		strings.Contains(stdout.String(), "CONFLICT")
-	msg := strings.TrimSpace(stderr.String())
-	if msg == "" {
-		msg = strings.TrimSpace(stdout.String())
-	}
-	if conflict {
-		if msg == "" {
-			return fmt.Errorf("git pull: %w", ErrPullConflict)
-		}
-		return fmt.Errorf("git pull: %w: %s", ErrPullConflict, msg)
-	}
-	return wrapGitErr("git pull", runErr, msg)
+	return wrapMergeLikeErr("git pull", cmd.Run(), stdout.String(), stderr.String(), ErrPullConflict)
 }
 
 // CheckoutTarget translates a Ref into the local-name argument that
@@ -169,11 +182,7 @@ func CheckoutDetached(ctx context.Context, dir, hash string) error {
 func Stash(ctx context.Context, dir, message string) error {
 	cmd := exec.CommandContext(ctx, "git", "stash", "push", "-m", message)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"LC_ALL=C",
-		"LANG=C",
-	)
+	cmd.Env = gitEnv()
 	cmd.Stdout = io.Discard
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -186,41 +195,16 @@ func Stash(ctx context.Context, dir, message string) error {
 // StashPop runs `git stash pop` (no args — pops stash@{0}). On a clean
 // pop returns nil. On conflict the error chain includes ErrStashPopConflict
 // so the TUI can surface "marker(s) in tree, stash preserved" guidance
-// instead of a raw failure string. Other failures (no stash, transport
+// (git keeps the entry on conflict). Other failures (no stash, transport
 // errors, ...) are wrapped with stderr.
-//
-// LC_ALL=C / LANG=C lock the CONFLICT marker to English; mirrors Pull.
-// stdout is captured because git writes the conflict marker there during
-// the merge phase, exactly like `git pull`.
 func StashPop(ctx context.Context, dir string) error {
 	cmd := exec.CommandContext(ctx, "git", "stash", "pop")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"LC_ALL=C",
-		"LANG=C",
-	)
+	cmd.Env = gitEnv()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	runErr := cmd.Run()
-	if runErr == nil {
-		return nil
-	}
-
-	conflict := strings.Contains(stderr.String(), "CONFLICT") ||
-		strings.Contains(stdout.String(), "CONFLICT")
-	msg := strings.TrimSpace(stderr.String())
-	if msg == "" {
-		msg = strings.TrimSpace(stdout.String())
-	}
-	if conflict {
-		if msg == "" {
-			return fmt.Errorf("git stash pop: %w", ErrStashPopConflict)
-		}
-		return fmt.Errorf("git stash pop: %w: %s", ErrStashPopConflict, msg)
-	}
-	return wrapGitErr("git stash pop", runErr, msg)
+	return wrapMergeLikeErr("git stash pop", cmd.Run(), stdout.String(), stderr.String(), ErrStashPopConflict)
 }
 
 // runCheckout is the shared body of Checkout and CheckoutDetached.
@@ -230,11 +214,7 @@ func StashPop(ctx context.Context, dir string) error {
 func runCheckout(ctx context.Context, dir string, args []string) error {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"checkout"}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"LC_ALL=C",
-		"LANG=C",
-	)
+	cmd.Env = gitEnv()
 	cmd.Stdout = io.Discard
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

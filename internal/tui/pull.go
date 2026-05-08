@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,12 +30,9 @@ func pullCmd(dir, prefs string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
 		defer cancel()
-		strategy, err := pullResolveStrategy(ctx, dir, prefs)
+		conflict, err := runPullStep(ctx, dir, prefs)
 		if err != nil {
-			return pullFailedMsg{err: err}
-		}
-		if err := pullExec(ctx, dir, strategy); err != nil {
-			if errors.Is(err, git.ErrPullConflict) {
+			if conflict {
 				return pullConflictMsg{err: err}
 			}
 			return pullFailedMsg{err: err}

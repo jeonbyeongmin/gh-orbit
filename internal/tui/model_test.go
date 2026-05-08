@@ -1491,15 +1491,15 @@ func TestModelRefCheckoutWithPullDispatchesChainForLocalUpstream(t *testing.T) {
 	if !m.pendingCheckout.withPull {
 		t.Errorf("pendingCheckout.withPull = false, want true; got %+v", m.pendingCheckout)
 	}
-	if m.pendingCheckout.skipPull {
-		t.Errorf("local with upstream should not skip pull; got %+v", m.pendingCheckout)
+	if m.pendingCheckout.skipReason != "" {
+		t.Errorf("local with upstream should not have skipReason; got %+v", m.pendingCheckout)
 	}
 	if cmd == nil {
 		t.Fatal("p should return a chain cmd")
 	}
 	got := cmd().(checkoutThenPullSucceededMsg)
 	if got.pullSkipped {
-		t.Error("chain should run pull (skipPull=false) for local with upstream")
+		t.Error("chain should run pull (skipReason empty) for local with upstream")
 	}
 }
 
@@ -1523,8 +1523,8 @@ func TestModelRefCheckoutWithPullSkipsPullForTag(t *testing.T) {
 	}})
 	m = updated.(Model)
 
-	if !m.pendingCheckout.skipPull {
-		t.Errorf("tag should skipPull, got %+v", m.pendingCheckout)
+	if m.pendingCheckout.skipReason == "" {
+		t.Errorf("tag should set a skipReason, got %+v", m.pendingCheckout)
 	}
 	if m.pendingCheckout.skipReason != "tag has no upstream" {
 		t.Errorf("skipReason = %q, want 'tag has no upstream'", m.pendingCheckout.skipReason)
@@ -1562,8 +1562,8 @@ func TestModelRefCheckoutWithPullSkipsPullForUpstreamlessLocal(t *testing.T) {
 	}})
 	m = updated.(Model)
 
-	if !m.pendingCheckout.skipPull {
-		t.Errorf("upstream-less local should skipPull, got %+v", m.pendingCheckout)
+	if m.pendingCheckout.skipReason == "" {
+		t.Errorf("upstream-less local should set a skipReason, got %+v", m.pendingCheckout)
 	}
 	if m.pendingCheckout.skipReason != "local branch has no upstream" {
 		t.Errorf("skipReason = %q", m.pendingCheckout.skipReason)
@@ -1602,7 +1602,7 @@ func TestModelRefCheckoutWithPullRemoteIsEligible(t *testing.T) {
 	if m.pendingCheckout.ref != "feat" {
 		t.Errorf("pendingCheckout.ref = %q, want feat (dwim)", m.pendingCheckout.ref)
 	}
-	if m.pendingCheckout.skipPull {
+	if m.pendingCheckout.skipReason != "" {
 		t.Error("remote-tracking ref should be pull-eligible (dwim creates local with upstream)")
 	}
 	if cmd == nil {
@@ -1740,7 +1740,7 @@ func TestModelStashChainPullConflictPreservesNoJump(t *testing.T) {
 	updated, cmd := m.Update(stashThenCheckoutThenPullThenPopConflictMsg{
 		ref:        "feat",
 		stashLabel: "stash@{0}",
-		phase:      "pull",
+		phase:      chainPhasePull,
 		err:        errors.New("git pull: pull conflict: CONFLICT (content)"),
 	})
 	// Re-wrap in the proper sentinel chain so errors.Is matches.
@@ -1751,7 +1751,7 @@ func TestModelStashChainPullConflictPreservesNoJump(t *testing.T) {
 	updated, cmd = m.Update(stashThenCheckoutThenPullThenPopConflictMsg{
 		ref:        "feat",
 		stashLabel: "stash@{0}",
-		phase:      "pull",
+		phase:      chainPhasePull,
 		err:        conflictErr,
 	})
 	m = updated.(Model)
@@ -1778,7 +1778,7 @@ func TestModelStashChainPullFailureKeepsStashAndJumpsHEAD(t *testing.T) {
 	updated, cmd := m.Update(stashThenCheckoutThenPullThenPopConflictMsg{
 		ref:        "feat",
 		stashLabel: "stash@{0}",
-		phase:      "pull",
+		phase:      chainPhasePull,
 		err:        errors.New("could not resolve host github.com"),
 	})
 	m = updated.(Model)
@@ -1806,7 +1806,7 @@ func TestModelStashChainPopConflictSurfacesGuidance(t *testing.T) {
 	updated, cmd := m.Update(stashThenCheckoutThenPullThenPopConflictMsg{
 		ref:        "feat",
 		stashLabel: "stash@{0}",
-		phase:      "stash-pop",
+		phase:      chainPhaseStashPop,
 		err:        errors.New("git stash pop: stash pop conflict: CONFLICT"),
 	})
 	m = updated.(Model)
@@ -1850,7 +1850,7 @@ func TestModelCheckoutConfirmStashKeyDispatchesChainWhenWithPull(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	m.mode = viewModeCheckoutConfirm
-	m.pendingCheckout = pendingCheckout{ref: "feat", withPull: true, skipPull: false}
+	m.pendingCheckout = pendingCheckout{ref: "feat", withPull: true}
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	m = updated.(Model)
@@ -1920,6 +1920,31 @@ func TestModelCheckoutConfirmModalShowsPullVariant(t *testing.T) {
 
 	got := m.renderHelpStatus()
 	for _, want := range []string{"checkout 'feat' and pull", "stash & checkout & pull"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("modal text %q missing %q", got, want)
+		}
+	}
+}
+
+func TestModelCheckoutConfirmModalShowsSkipVariantWhenPullElided(t *testing.T) {
+	// withPull=true but skipReason set (tag / no-upstream) — modal must NOT
+	// promise "and pull"; the chain will silently skip the pull step.
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeCheckoutConfirm
+	m.pendingCheckout = pendingCheckout{
+		ref: "v1.0", withPull: true, skipReason: "tag has no upstream",
+	}
+
+	got := m.renderHelpStatus()
+	if strings.Contains(got, "and pull") {
+		t.Errorf("modal must not say 'and pull' when pull is skipped: %q", got)
+	}
+	if strings.Contains(got, "stash & checkout & pull") {
+		t.Errorf("modal must not advertise 'stash & checkout & pull' when pull is skipped: %q", got)
+	}
+	for _, want := range []string{"v1.0", "pull skipped: tag has no upstream", "stash & checkout"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("modal text %q missing %q", got, want)
 		}

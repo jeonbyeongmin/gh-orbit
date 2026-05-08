@@ -72,19 +72,31 @@ type stashThenCheckoutThenPullThenPopSucceededMsg struct {
 	skipReason  string
 }
 
+// chainPhase identifies which step of the dirty-tree chain triggered the
+// terminal failure msg. Constants below are the only legal values; the
+// model's switch matches them exactly. A typed string keeps the value
+// out of user-facing text while still printing readably in logs.
+type chainPhase string
+
+const (
+	// chainPhasePull covers BOTH pull conflict and generic pull failure;
+	// the model branches further on errors.Is(err, ErrPullConflict).
+	// On generic failure, stash is preserved and pop was deliberately
+	// skipped (the marker-laden tree would just collide).
+	chainPhasePull chainPhase = "pull"
+	// chainPhaseStashPop fires only after a successful pull whose pop
+	// then collided with the popped changes. Conflict markers are in
+	// the working tree and the stash entry is preserved.
+	chainPhaseStashPop chainPhase = "stash-pop"
+)
+
 // stashThenCheckoutThenPullThenPopConflictMsg fires when the dirty-tree
-// chain hit a non-success outcome after the checkout step. phase identifies
-// which step failed:
-//   - "pull"      — pull conflict OR generic pull failure (model branches on
-//     errors.Is(err, ErrPullConflict)); stash is preserved and pop was
-//     skipped on generic failure (the marker-laden tree would just collide).
-//   - "stash-pop" — pop conflict; conflict markers are in the working tree
-//     and the stash entry is preserved.
+// chain hit a non-success outcome after the checkout step.
 type stashThenCheckoutThenPullThenPopConflictMsg struct {
 	ref        string
 	detached   bool
 	stashLabel string
-	phase      string
+	phase      chainPhase
 	err        error
 }
 
@@ -133,19 +145,35 @@ func runCheckoutExec(ctx context.Context, dir, ref string, detached bool) error 
 	return checkoutExec(ctx, dir, ref)
 }
 
+// runPullStep performs the strategy-resolve + pull-exec ladder shared by
+// pullCmd and the chain commands. Returns (conflict=true, err) when the
+// failure was an ErrPullConflict, (false, err) on a generic failure,
+// (false, nil) on success. Pulling out this helper kills three copies of
+// the same five-line ladder; each caller owns its own msg shape.
+func runPullStep(ctx context.Context, dir, prefs string) (conflict bool, err error) {
+	strategy, err := pullResolveStrategy(ctx, dir, prefs)
+	if err != nil {
+		return false, err
+	}
+	if err := pullExec(ctx, dir, strategy); err != nil {
+		return errors.Is(err, git.ErrPullConflict), err
+	}
+	return false, nil
+}
+
 // checkoutThenPullCmd runs the clean-tree variant of `p`: checkout, then
-// (unless skipPull) pull. Each step gets its own deadline so a slow pull
-// can't starve checkout. The pull half mirrors pullCmd — strategy resolution
-// happens before the subprocess so the prefs string is honored identically.
+// (unless skipReason names a reason to skip) pull. Each step gets its own
+// deadline so a slow pull can't starve checkout. A non-empty skipReason
+// is the single source of truth for "pull will not run" — the caller
+// (resolvePullEligibility) stamps it for tags / detached / no-upstream
+// locals; an empty skipReason means pull will run.
 //
 // Failures route to the existing checkoutNeedsCleanTreeMsg / checkoutFailedMsg
 // for the checkout phase; the pull phase emits checkoutThenPullConflictMsg
 // (conflict) or pullFailedMsg (generic). Success emits one
-// checkoutThenPullSucceededMsg with the right pullSkipped / skipReason
-// stamped on it.
-func checkoutThenPullCmd(dir, ref string, detached bool, prefs string, skipPull bool, skipReason string) tea.Cmd {
+// checkoutThenPullSucceededMsg with pullSkipped/skipReason stamped on it.
+func checkoutThenPullCmd(dir, ref string, detached bool, prefs, skipReason string) tea.Cmd {
 	return func() tea.Msg {
-		// Step 1: checkout (60s budget, independent of the pull deadline).
 		coCtx, coCancel := context.WithTimeout(context.Background(), checkoutTimeout)
 		coErr := runCheckoutExec(coCtx, dir, ref, detached)
 		coCancel()
@@ -156,7 +184,7 @@ func checkoutThenPullCmd(dir, ref string, detached bool, prefs string, skipPull 
 			return checkoutFailedMsg{err: coErr}
 		}
 
-		if skipPull {
+		if skipReason != "" {
 			return checkoutThenPullSucceededMsg{
 				ref:         ref,
 				detached:    detached,
@@ -165,17 +193,11 @@ func checkoutThenPullCmd(dir, ref string, detached bool, prefs string, skipPull 
 			}
 		}
 
-		// Step 2: pull. Strategy resolution shares the same context budget
-		// as the pull itself — they're both network-bound and the user
-		// asked for one logical operation.
 		puCtx, puCancel := context.WithTimeout(context.Background(), pullTimeout)
 		defer puCancel()
-		strategy, err := pullResolveStrategy(puCtx, dir, prefs)
+		conflict, err := runPullStep(puCtx, dir, prefs)
 		if err != nil {
-			return pullFailedMsg{err: err}
-		}
-		if err := pullExec(puCtx, dir, strategy); err != nil {
-			if errors.Is(err, git.ErrPullConflict) {
+			if conflict {
 				return checkoutThenPullConflictMsg{ref: ref, detached: detached, err: err}
 			}
 			return pullFailedMsg{err: err}
@@ -185,63 +207,54 @@ func checkoutThenPullCmd(dir, ref string, detached bool, prefs string, skipPull 
 }
 
 // stashThenCheckoutThenPullThenPopCmd runs the dirty-tree `s` branch of
-// `p`: stash → checkout → (pull|skip) → stash pop. The chain ordering is
-// not negotiable — pull must happen before pop so the user's local edits
-// always land on top of the freshly-pulled HEAD instead of a stale tip.
+// `p`: stash → checkout → (pull|skip) → stash pop. Pull must happen before
+// pop so the user's edits land on top of the freshly-pulled HEAD instead
+// of a stale tip — this ordering is not negotiable.
 //
 // Failure routing:
-//   - stash failure: checkoutFailedMsg (chain never started — keep parity
-//     with stashThenCheckoutCmd's existing surface).
-//   - checkout failure: checkoutFailedMsg. Dirty-tree wrapping is impossible
-//     here since stash already cleared the tree; this path catches missing
-//     refs, index lock contention, etc.
-//   - pull conflict: still attempt stash pop (interview decision — pop is
-//     "the last step of the pull chain"). pop result decides the final msg:
-//     pop ok → ConflictMsg{phase:"pull"}; pop conflict → ConflictMsg{phase:"stash-pop"}.
-//   - pull generic failure: stash preserved, pop NOT attempted (popping onto
-//     a half-failed pull just compounds confusion). Emits ConflictMsg{phase:"pull"}.
-//   - pop conflict (after successful pull): ConflictMsg{phase:"stash-pop"}.
-func stashThenCheckoutThenPullThenPopCmd(dir, ref string, detached bool, prefs string, skipPull bool, skipReason string) tea.Cmd {
+//   - stash failure: checkoutFailedMsg (chain never started).
+//   - checkout failure: checkoutFailedMsg (dirty-tree wrapping is impossible
+//     after stash; this catches missing refs, lock contention, etc.).
+//   - pull conflict: still attempt pop (interview decision — pop is "the
+//     last step of the pull chain"). Pop result decides the final msg:
+//     pop ok → ConflictMsg{phase: chainPhasePull},
+//     pop conflict → ConflictMsg{phase: chainPhaseStashPop}.
+//   - pull generic failure: stash preserved, pop NOT attempted; emits
+//     ConflictMsg{phase: chainPhasePull}.
+//   - pop conflict after successful pull: ConflictMsg{phase: chainPhaseStashPop}.
+func stashThenCheckoutThenPullThenPopCmd(dir, ref string, detached bool, prefs, skipReason string) tea.Cmd {
 	return func() tea.Msg {
 		stCtx, stCancel := context.WithTimeout(context.Background(), checkoutTimeout)
-		if err := stashExec(stCtx, dir, "gh-orbit: before checkout "+ref); err != nil {
-			stCancel()
-			return checkoutFailedMsg{err: err}
-		}
+		stashErr := stashExec(stCtx, dir, "gh-orbit: before checkout "+ref)
 		stCancel()
+		if stashErr != nil {
+			return checkoutFailedMsg{err: stashErr}
+		}
 
 		coCtx, coCancel := context.WithTimeout(context.Background(), checkoutTimeout)
-		if err := runCheckoutExec(coCtx, dir, ref, detached); err != nil {
-			coCancel()
-			return checkoutFailedMsg{err: err}
-		}
+		coErr := runCheckoutExec(coCtx, dir, ref, detached)
 		coCancel()
+		if coErr != nil {
+			return checkoutFailedMsg{err: coErr}
+		}
 
-		// Pull phase. skipPull short-circuits straight to pop.
 		var pullErr error
-		if !skipPull {
+		if skipReason == "" {
 			puCtx, puCancel := context.WithTimeout(context.Background(), pullTimeout)
-			strategy, sErr := pullResolveStrategy(puCtx, dir, prefs)
-			if sErr != nil {
-				pullErr = sErr
-			} else if eErr := pullExec(puCtx, dir, strategy); eErr != nil {
-				pullErr = eErr
-			}
+			_, pullErr = runPullStep(puCtx, dir, prefs)
 			puCancel()
 		}
 
 		if pullErr != nil && !errors.Is(pullErr, git.ErrPullConflict) {
-			// Generic pull failure: stash preserved, pop NOT attempted.
 			return stashThenCheckoutThenPullThenPopConflictMsg{
 				ref:        ref,
 				detached:   detached,
 				stashLabel: stashLabelHEAD,
-				phase:      "pull",
+				phase:      chainPhasePull,
 				err:        pullErr,
 			}
 		}
 
-		// Pop phase — runs whether pull succeeded or pull-conflicted.
 		popCtx, popCancel := context.WithTimeout(context.Background(), checkoutTimeout)
 		popErr := stashPopExec(popCtx, dir)
 		popCancel()
@@ -251,17 +264,16 @@ func stashThenCheckoutThenPullThenPopCmd(dir, ref string, detached bool, prefs s
 				ref:        ref,
 				detached:   detached,
 				stashLabel: stashLabelHEAD,
-				phase:      "stash-pop",
+				phase:      chainPhaseStashPop,
 				err:        popErr,
 			}
 		}
 		if pullErr != nil {
-			// Pop succeeded, but pull was a conflict — surface that.
 			return stashThenCheckoutThenPullThenPopConflictMsg{
 				ref:        ref,
 				detached:   detached,
 				stashLabel: stashLabelHEAD,
-				phase:      "pull",
+				phase:      chainPhasePull,
 				err:        pullErr,
 			}
 		}
@@ -269,7 +281,7 @@ func stashThenCheckoutThenPullThenPopCmd(dir, ref string, detached bool, prefs s
 			ref:         ref,
 			detached:    detached,
 			stashLabel:  stashLabelHEAD,
-			pullSkipped: skipPull,
+			pullSkipped: skipReason != "",
 			skipReason:  skipReason,
 		}
 	}

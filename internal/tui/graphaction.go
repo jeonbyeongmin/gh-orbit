@@ -129,6 +129,16 @@ func evaluateGraphActionCmd(dir, hash string, locals, remotes []git.Ref) tea.Cmd
 			return graphActionMsg{hash: hash, kind: graphActionCheckoutAndFF, branch: crossBranch}
 		}
 
+		// New-local path: cursor has a remote chip with no upstream-tracking
+		// local. Hand `git checkout <stripped name>` to dwim, which creates
+		// the tracking local and switches to it. The new branch is created
+		// at the remote's tip, which equals the cursor commit, so no FF is
+		// needed afterward.
+		if newLocal := findRemoteCheckoutTarget(hash, locals, remotes); newLocal != "" {
+			log.Printf("graph enter: checkout (dwim from remote → %s)", newLocal)
+			return graphActionMsg{hash: hash, kind: graphActionCheckout, branch: newLocal}
+		}
+
 		if headBranch == "" || headHash == "" {
 			log.Printf("graph enter: detach (no HEAD branch in locals; HEAD likely detached)")
 			return graphActionMsg{hash: hash, kind: graphActionDetach}
@@ -171,6 +181,41 @@ func findCrossBranchTarget(hash string, locals, remotes []git.Ref, headBranch st
 			if picked == "" || l.ShortName < picked {
 				picked = l.ShortName
 			}
+		}
+	}
+	return picked
+}
+
+// findRemoteCheckoutTarget returns the dwim checkout target derived from
+// a remote chip on the cursor row when no local already tracks that
+// remote. The returned name is what `git checkout` will turn into a
+// local tracking branch — git's dwim creates one when no same-name
+// local exists, and just switches when one does. Returns "" if the
+// cursor has no remote chip or every remote chip is already tracked.
+//
+// findCrossBranchTarget gets first refusal in the evaluator, so this
+// helper only runs when no upstream-tracker exists; the dwim outcome
+// depends on whether a same-name local exists at all (separate from the
+// tracker check).
+func findRemoteCheckoutTarget(hash string, locals, remotes []git.Ref) string {
+	var picked string
+	for _, r := range remotes {
+		if r.ObjectName != hash {
+			continue
+		}
+		tracked := false
+		for _, l := range locals {
+			if l.Upstream == r.ShortName {
+				tracked = true
+				break
+			}
+		}
+		if tracked {
+			continue
+		}
+		target := git.CheckoutTarget(r)
+		if picked == "" || target < picked {
+			picked = target
 		}
 	}
 	return picked

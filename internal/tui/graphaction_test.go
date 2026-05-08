@@ -239,20 +239,83 @@ func TestGraphEvaluatorCrossBranchFiresEvenWhenHeadDetached(t *testing.T) {
 	}
 }
 
-func TestGraphEvaluatorRemoteChipWithoutTrackerFallsThroughToDetach(t *testing.T) {
-	// Cursor has origin/dangling chip but no local has Upstream pointing
-	// to it. No cross-branch candidate. HEAD is on feat/foo, advance = 0
-	// (cursor not descendant of feat/foo) → detach.
+func TestGraphEvaluatorRemoteChipWithoutTrackerCreatesLocal(t *testing.T) {
+	// Cursor has origin/develop chip but no local tracks it. The new-
+	// local path returns "develop" so `git checkout develop` dwim creates
+	// the tracking branch. HEAD is on feat/foo (irrelevant — new-local
+	// path doesn't depend on HEAD).
 	cursor := "mmmm"
+	locals := []git.Ref{
+		{ShortName: "feat/foo", Kind: git.RefKindLocal, ObjectName: "ftip", IsHead: true},
+	}
+	remotes := []git.Ref{
+		{ShortName: "origin/develop", Kind: git.RefKindRemote, ObjectName: cursor},
+	}
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
+	if got.kind != graphActionCheckout {
+		t.Errorf("kind = %v, want Checkout (dwim creates local)", got.kind)
+	}
+	if got.branch != "develop" {
+		t.Errorf("branch = %q, want develop (stripped from origin/develop)", got.branch)
+	}
+}
+
+func TestGraphEvaluatorRemoteChipWithTrackerPrefersCrossBranchOverNewLocal(t *testing.T) {
+	// Two remote chips on cursor: origin/develop has a tracker (local
+	// develop), origin/feat doesn't. Cross-branch should win — its
+	// candidate is the tracked one, even though new-local has its own
+	// candidate.
+	cursor := "nnnn"
+	locals := []git.Ref{
+		{ShortName: "develop", Kind: git.RefKindLocal, ObjectName: "behind", Upstream: "origin/develop"},
+		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: "mtip", IsHead: true},
+	}
+	remotes := []git.Ref{
+		{ShortName: "origin/develop", Kind: git.RefKindRemote, ObjectName: cursor},
+		{ShortName: "origin/feat", Kind: git.RefKindRemote, ObjectName: cursor},
+	}
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
+	if got.kind != graphActionCheckoutAndFF {
+		t.Errorf("kind = %v, want CheckoutAndFF (cross-branch precedes new-local)", got.kind)
+	}
+	if got.branch != "develop" {
+		t.Errorf("branch = %q, want develop", got.branch)
+	}
+}
+
+func TestGraphEvaluatorAllRemotesTrackedFallsThroughToFFOrDetach(t *testing.T) {
+	// Cursor has origin/develop only and HEAD is on local develop tracking
+	// it. Cross-branch skips (HEAD == tracker), new-local skips (already
+	// tracked). Falls through to chipless FF — advance > 0 → FF.
+	cursor := "oooo"
+	headTip := "behind"
+	locals := []git.Ref{
+		{ShortName: "develop", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true, Upstream: "origin/develop"},
+	}
+	remotes := []git.Ref{
+		{ShortName: "origin/develop", Kind: git.RefKindRemote, ObjectName: cursor},
+	}
+	stubAdvances(t, map[string]int{headTip + "->" + cursor: 7})
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
+	if got.kind != graphActionFF {
+		t.Errorf("kind = %v, want FF", got.kind)
+	}
+	if got.advance != 7 {
+		t.Errorf("advance = %d, want 7", got.advance)
+	}
+}
+
+func TestGraphEvaluatorRemoteChipNoTrackerNoChipFallsThroughToDetach(t *testing.T) {
+	// Edge case: remote chip whose stripped name is somehow empty (or the
+	// cursor has no remote chip at all). With no remote chip, both cross-
+	// branch and new-local skip; HEAD non-ancestor → detach.
+	cursor := "pppp"
 	headTip := "aaaa"
 	locals := []git.Ref{
 		{ShortName: "feat/foo", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true},
 	}
-	remotes := []git.Ref{
-		{ShortName: "origin/dangling", Kind: git.RefKindRemote, ObjectName: cursor},
-	}
 	stubAdvances(t, map[string]int{headTip + "->" + cursor: 0})
-	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, nil)
 	if got.kind != graphActionDetach {
 		t.Errorf("kind = %v, want Detach", got.kind)
 	}

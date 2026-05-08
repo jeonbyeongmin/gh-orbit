@@ -200,14 +200,16 @@ Dirty working tree handling differs from `enter` / `s`. With `p`, the modal text
 | local branch chips ≥ 2, HEAD on one of them                        | —                                               | no-op                                                        |
 | local branch chips ≥ 2, HEAD elsewhere                             | —                                               | open `viewModeBranchPicker` → user picks → `checkout`        |
 | no local chip, remote chip with upstream-tracking local `L` (`L` ≠ HEAD) | —                                         | `checkout L` then `git merge --ff-only <cursor>` (cross-branch) |
+| no local chip, remote chip with no upstream-tracking local         | —                                               | `git checkout <stripped name>` — git's dwim creates the local tracking branch |
 | no local chip (mid-commit or remote-only chip)                     | attached, tip is ancestor of cursor (≠ cursor)  | `git merge --ff-only <cursor>` (Case 1, no checkout step)    |
 | no local chip                                                      | detached, **or** not an ancestor of cursor      | `git checkout --detach <cursor>`                             |
 
 Notes:
 
-- Fork's "Checkout & Fast-Forward" surfaces in two ways:
+- Fork's "Checkout & Fast-Forward" surfaces in three ways:
   - Same-branch case: HEAD is on local `main`, cursor row has only an `origin/main` chip → chipless Case 1 FF on `main`. No checkout.
   - Cross-branch case: HEAD is on `feat/foo`, cursor row has only an `origin/develop` chip whose upstream-tracking local is `develop` → `checkout develop` then `git merge --ff-only <cursor>`. The local-tracker rule excludes HEAD itself so the same-branch case stays in the FF lane.
+  - New-local case: cursor row has only an `origin/develop` chip and no local tracks it (e.g., never been checked out locally) → `git checkout develop` and let git's dwim create the local tracking branch at the remote's tip.
 - Multiple locals tracking the same upstream: cross-branch picks the alphabetically first. Picker UX is reserved for ambiguous local-chip rows; for cross-branch, the refs panel `p` (checkout + pull) is the explicit-choice escape hatch.
 - `viewModeBranchPicker` is a modal: `j` / `k` move the cursor, `enter` confirms, `esc` cancels. Every other key is swallowed.
 - The decision is computed asynchronously (`evaluateGraphActionCmd`) so the model never blocks Update on git. `actionInFlight` swallows a second Enter while the evaluator is running. A cursor move between Enter dispatch and the evaluator's reply causes the reply to be dropped — re-press Enter on the new row.

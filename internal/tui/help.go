@@ -50,7 +50,7 @@ var helpCategories = []helpCategory{
 	{
 		title: "Graph",
 		entries: []helpEntry{
-			{"C", "detach"},
+			{"enter", "go"},
 		},
 	},
 	{
@@ -72,7 +72,7 @@ func helpData() []helpCategory { return helpCategories }
 // the panel or quit, regardless of which pane has focus.
 var paneHintTexts = map[pane]string{
 	paneRefs:  "enter checkout · p checkout+pull · o jump · ? help · q quit",
-	paneGraph: "enter/d patch · C detach · ? help · q quit",
+	paneGraph: "enter checkout/ff/detach · d patch · ? help · q quit",
 	paneTab:   "h/l switch · y copy · ? help · q quit",
 }
 
@@ -99,6 +99,11 @@ func fitHelpLine(text string, width int) string {
 	}
 	return help.Render(text)
 }
+
+// helpTextBranchPicker is the bottom hint shown while the branch picker
+// modal is open. The picker swallows everything but j/k/enter/esc, so
+// the hint enumerates exactly what works.
+const helpTextBranchPicker = "j/k navigate · enter checkout · esc cancel"
 
 // renderHelpPanel composes the expanded `?` help panel as a multi-line
 // string capped at `height` rows. Each category emits a `[Title]` header

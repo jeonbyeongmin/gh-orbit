@@ -86,7 +86,7 @@ right). `File Tree` is reserved for a follow-up backlog.
 | `p`             | refs          | checkout the cursor ref then pull (skip pull on tag / detached / no-upstream) |
 | `o`             | refs          | jump graph cursor to ref tip                   |
 | `a`             | refs          | show every ref's commits (unified `--all`)     |
-| `C`             | graph         | checkout cursor commit as detached HEAD        |
+| `enter`         | graph         | checkout / fast-forward / detach — chosen automatically (see "Graph Enter Behavior") |
 | `y`             | Commit tab    | copy full hash to clipboard                    |
 | `d`             | global        | open the focused commit's full patch overlay   |
 | `F`             | global        | `git fetch --all` in the background            |
@@ -163,7 +163,7 @@ strategy = "rebase"   # "ff-only" | "merge" | "rebase"
 - Tag — pass `ShortName`. Result is a detached HEAD on the tag's commit, which is what the user picked.
 - Remote-tracking ref — strip the `<remote>/` prefix and pass the inner branch name (`origin/feat` → `feat`). Git's dwim rule then creates a local tracking branch when no same-name local exists; the wrapper does **not** invoke `--track` explicitly.
 
-`C` on the graph pane invokes `git checkout --detach <hash>` against the cursor commit and lands on a detached HEAD.
+Graph-pane Enter is documented in its own subsection below — it subsumes the old `C` (detach) shortcut as one of its outcomes.
 
 Dirty working tree handling:
 
@@ -188,3 +188,33 @@ Dirty working tree handling differs from `enter` / `s`. With `p`, the modal text
 - `pull` conflict: stash pop still runs (the chain treats pop as the final step). Status bar: `pull: CONFLICT — resolve in your terminal; stash preserved at stash@{0}`.
 - `pull` generic failure (transport, auth, non-fast-forward): stash is preserved and pop is **not** attempted. Status bar: `pull failed: <reason>; stash preserved at stash@{0}`. Working tree sits on the new ref's clean state; resolve the pull failure manually and `git stash pop` when ready.
 - `stash pop` conflict (after a successful pull): conflict markers are written into the working tree and the stash entry is preserved. Status bar: `pop conflict — resolve markers and run \`git stash drop\` (stash@{0})`. No modal — the status bar is the only surface, mirroring the policy for `pull` conflicts.
+
+### Graph Enter Behavior
+
+`enter` on the graph pane is a single context-aware shortcut. The action depends on the cursor commit's chip state and HEAD's relationship to the cursor:
+
+| cursor state                                                       | HEAD                                            | action                                                       |
+| ------------------------------------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------ |
+| local branch chip 1 (`B`), HEAD on `B`                             | —                                               | no-op (`already on B`)                                       |
+| local branch chip 1 (`B`), HEAD elsewhere                          | —                                               | `checkout B`                                                 |
+| local branch chips ≥ 2, HEAD on one of them                        | —                                               | no-op                                                        |
+| local branch chips ≥ 2, HEAD elsewhere                             | —                                               | open `viewModeBranchPicker` → user picks → `checkout`        |
+| no local chip, remote chip with upstream-tracking local `L` (`L` ≠ HEAD) | —                                         | `checkout L` then `git merge --ff-only <cursor>` (cross-branch) |
+| no local chip, remote chip with no upstream-tracking local         | —                                               | `git checkout <stripped name>` — git's dwim creates the local tracking branch |
+| no local chip (mid-commit or remote-only chip)                     | attached, tip is ancestor of cursor (≠ cursor)  | `git merge --ff-only <cursor>` (Case 1, no checkout step)    |
+| no local chip                                                      | detached, **or** not an ancestor of cursor      | `git checkout --detach <cursor>`                             |
+
+Notes:
+
+- Fork's "Checkout & Fast-Forward" surfaces in three ways:
+  - Same-branch case: HEAD is on local `main`, cursor row has only an `origin/main` chip → chipless Case 1 FF on `main`. No checkout.
+  - Cross-branch case: HEAD is on `feat/foo`, cursor row has only an `origin/develop` chip whose upstream-tracking local is `develop` → `checkout develop` then `git merge --ff-only <cursor>`. The local-tracker rule excludes HEAD itself so the same-branch case stays in the FF lane.
+  - New-local case: cursor row has only an `origin/develop` chip and no local tracks it (e.g., never been checked out locally) → `git checkout develop` and let git's dwim create the local tracking branch at the remote's tip.
+- Multiple locals tracking the same upstream: cross-branch picks the alphabetically first. Picker UX is reserved for ambiguous local-chip rows; for cross-branch, the refs panel `p` (checkout + pull) is the explicit-choice escape hatch.
+- `viewModeBranchPicker` is a modal: `j` / `k` move the cursor, `enter` confirms, `esc` cancels. Every other key is swallowed.
+- The decision is computed asynchronously (`evaluateGraphActionCmd`) so the model never blocks Update on git. `actionInFlight` swallows a second Enter while the evaluator is running. A cursor move between Enter dispatch and the evaluator's reply causes the reply to be dropped — re-press Enter on the new row.
+- Dirty working tree handling reuses `viewModeCheckoutConfirm` with the matching flag:
+  - `withFF=true` → `[s] stash & fast-forward` (same-branch FF, no checkout step).
+  - `withCheckoutFF=true` → `[s] stash & checkout & fast-forward` (cross-branch chain).
+  All chains follow the no-auto-pop policy of `stashThenCheckoutCmd`.
+- Status surfaces are one-line: `fast-forward: main +3`, `fast-forward: develop +2 (after checkout)`, `fast-forward failed: <reason>`, `already on main`, `branch select cancelled`.

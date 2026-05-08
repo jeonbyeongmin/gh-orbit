@@ -31,8 +31,9 @@ func withCheckoutStubs(t *testing.T, c, cd func(context.Context, string, string)
 
 // chainStubs swaps in stubs for every seam the p-key chains touch:
 // checkout, detached checkout, stash, pull strategy resolve, pull exec,
-// and stash pop. Returning nil for any field leaves that seam at its
-// default. Cleanup restores all six on test exit.
+// stash pop, and the FF wrappers (mergeFFOnly / countAhead). Returning
+// nil for any field leaves that seam at its default. Cleanup restores
+// all of them on test exit.
 type chainStubs struct {
 	checkout         func(context.Context, string, string) error
 	checkoutDetached func(context.Context, string, string) error
@@ -40,12 +41,15 @@ type chainStubs struct {
 	stashPop         func(context.Context, string) error
 	pullResolve      func(context.Context, string, string) (git.PullStrategy, error)
 	pull             func(context.Context, string, git.PullStrategy) error
+	mergeFFOnly      func(context.Context, string, string) error
+	countAhead       func(context.Context, string, string, string) (int, error)
 }
 
 func withChainStubs(t *testing.T, s chainStubs) {
 	t.Helper()
 	prevC, prevCD, prevS, prevSP := checkoutExec, checkoutDetachedExec, stashExec, stashPopExec
 	prevPR, prevPE := pullResolveStrategy, pullExec
+	prevFF, prevCA := mergeFFOnlyExec, countAheadExec
 	t.Cleanup(func() {
 		checkoutExec = prevC
 		checkoutDetachedExec = prevCD
@@ -53,6 +57,8 @@ func withChainStubs(t *testing.T, s chainStubs) {
 		stashPopExec = prevSP
 		pullResolveStrategy = prevPR
 		pullExec = prevPE
+		mergeFFOnlyExec = prevFF
+		countAheadExec = prevCA
 	})
 	if s.checkout != nil {
 		checkoutExec = s.checkout
@@ -71,6 +77,12 @@ func withChainStubs(t *testing.T, s chainStubs) {
 	}
 	if s.pull != nil {
 		pullExec = s.pull
+	}
+	if s.mergeFFOnly != nil {
+		mergeFFOnlyExec = s.mergeFFOnly
+	}
+	if s.countAhead != nil {
+		countAheadExec = s.countAhead
 	}
 }
 

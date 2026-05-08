@@ -368,6 +368,148 @@ func TestStashPopReturnsConflictSentinel(t *testing.T) {
 	}
 }
 
+func TestMergeFFOnlyIntegration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	gitRun(t, work, "commit", "--allow-empty", "-m", "first")
+	first := gitOutput(t, work, "rev-parse", "HEAD")
+	gitRun(t, work, "commit", "--allow-empty", "-m", "second")
+	second := gitOutput(t, work, "rev-parse", "HEAD")
+	// Reset HEAD back to first so MergeFFOnly has somewhere to advance to.
+	gitRun(t, work, "reset", "--hard", first)
+
+	if err := MergeFFOnly(context.Background(), work, second); err != nil {
+		t.Fatalf("MergeFFOnly happy path: %v", err)
+	}
+	if got := gitOutput(t, work, "rev-parse", "HEAD"); got != second {
+		t.Errorf("HEAD = %q, want %q (second commit) after FF", got, second)
+	}
+}
+
+func TestMergeFFOnlyDivergentReturnsErrFFNotPossible(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "base")
+	base := gitOutput(t, work, "rev-parse", "HEAD")
+
+	// Diverge: side branch with its own commit, main with a different commit.
+	gitRun(t, work, "checkout", "-b", "side")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("side\n"), 0o644); err != nil {
+		t.Fatalf("write side: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "side change")
+	sideHash := gitOutput(t, work, "rev-parse", "HEAD")
+
+	gitRun(t, work, "checkout", "main")
+	gitRun(t, work, "reset", "--hard", base)
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("main-other\n"), 0o644); err != nil {
+		t.Fatalf("write main-other: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "main-other change")
+
+	err := MergeFFOnly(context.Background(), work, sideHash)
+	if err == nil {
+		t.Fatal("expected FF rejection on divergent histories")
+	}
+	if !errors.Is(err, ErrFFNotPossible) {
+		t.Errorf("error %q should wrap ErrFFNotPossible", err)
+	}
+}
+
+func TestMergeFFOnlyDirtyTreeWraps(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "base")
+	first := gitOutput(t, work, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("second\n"), 0o644); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "second")
+	second := gitOutput(t, work, "rev-parse", "HEAD")
+
+	// Reset to first, then dirty f.txt so the FF would have to clobber it.
+	gitRun(t, work, "reset", "--hard", first)
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("dirty local\n"), 0o644); err != nil {
+		t.Fatalf("write dirty: %v", err)
+	}
+
+	err := MergeFFOnly(context.Background(), work, second)
+	if err == nil {
+		t.Fatal("expected dirty-tree refusal")
+	}
+	if !errors.Is(err, ErrCheckoutNeedsCleanTree) {
+		t.Errorf("error %q should wrap ErrCheckoutNeedsCleanTree", err)
+	}
+}
+
+func TestCountAheadIntegration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	gitRun(t, work, "commit", "--allow-empty", "-m", "c1")
+	c1 := gitOutput(t, work, "rev-parse", "HEAD")
+	gitRun(t, work, "commit", "--allow-empty", "-m", "c2")
+	gitRun(t, work, "commit", "--allow-empty", "-m", "c3")
+	c3 := gitOutput(t, work, "rev-parse", "HEAD")
+
+	got, err := CountAhead(context.Background(), work, c1, c3)
+	if err != nil {
+		t.Fatalf("CountAhead(c1, c3): %v", err)
+	}
+	if got != 2 {
+		t.Errorf("CountAhead(c1, c3) = %d, want 2", got)
+	}
+
+	// Self-range is empty.
+	got, err = CountAhead(context.Background(), work, c1, c1)
+	if err != nil {
+		t.Fatalf("CountAhead(c1, c1): %v", err)
+	}
+	if got != 0 {
+		t.Errorf("CountAhead(c1, c1) = %d, want 0", got)
+	}
+
+	// Reverse range: c3 is ahead of c1, so c1 has 0 commits not reachable
+	// from c3 — `<c3>..<c1>` is empty.
+	got, err = CountAhead(context.Background(), work, c3, c1)
+	if err != nil {
+		t.Fatalf("CountAhead(c3, c1): %v", err)
+	}
+	if got != 0 {
+		t.Errorf("CountAhead(c3, c1) = %d, want 0 (descendant behind ancestor)", got)
+	}
+}
+
 func TestPullIntegrationConflictWraps(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

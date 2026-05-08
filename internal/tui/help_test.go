@@ -10,7 +10,7 @@ import (
 // helpTextNormal carried — every refactor of the panel must keep them all.
 func TestHelpDataCoverage(t *testing.T) {
 	required := []string{
-		"tab", "h/l", "j/k", "ctrl+↑/↓", "enter", "o", "C",
+		"tab", "h/l", "j/k", "ctrl+↑/↓", "enter", "o",
 		"y", "d", "F", "P", "r", "q",
 	}
 

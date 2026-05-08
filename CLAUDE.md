@@ -92,12 +92,23 @@ right). `File Tree` is reserved for a follow-up backlog.
 | `P`             | global        | `git pull` in the background (strategy: prefs > git config > `--ff-only`) |
 | `r`             | global        | reload refs + log                              |
 | `q` / `ctrl+c`  | global        | quit (closes the patch overlay first)          |
+| `?`             | global        | toggle expanded help panel (esc/q ignored while open) |
 | `R`             | global        | reserved for a future Rebase action            |
 
 Inside the `d` patch overlay only `j` / `k` / `pgup` / `pgdn` / `esc` / `q`
 are accepted — the rest of the keymap is gated on normal mode. The
 dirty-tree checkout-confirm prompt has its own gated keymap (see
 "Checkout Behavior" below).
+
+`?` toggles a multi-line help panel that replaces the bottom hint with
+pane-grouped key bindings. While open, every key except `?` and
+`ctrl+c` is swallowed (q and esc are ignored). The panel is also
+suppressed inside the `d` patch overlay and the dirty-tree checkout
+prompt — those modes keep their dedicated single-line hint.
+
+The bottom hint is focus-aware: refs shows `enter checkout · o jump`,
+graph shows `enter/d patch · C detach`, tab shows `h/l switch · y copy`.
+Every focus appends `? help · q quit`.
 
 Bubble Tea conventions for this codebase:
 

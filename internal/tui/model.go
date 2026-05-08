@@ -64,7 +64,19 @@ const (
 	// context); only the help/status line below switches to the choice
 	// keys, and every key except s/a/esc/ctrl+c is swallowed.
 	viewModeCheckoutConfirm
+	// viewModeHelp expands the bottom area into a multi-line help panel.
+	// The 3-pane layout stays visible above; only the bottom shrinks the
+	// main area to make room. Every key except `?` and `ctrl+c` is
+	// swallowed while open — q and esc included — so a stray press
+	// doesn't quit the app or close anything else.
+	viewModeHelp
 )
+
+// helpExpandedHeight is the row count reserved for the bottom area when
+// the `?` help panel is open. Each helpData category renders as a 1-line
+// header + 1-line entries row, so 4 categories × 2 rows = 8. paneSizes
+// clamps this on small terminals.
+const helpExpandedHeight = 8
 
 // pendingCheckout remembers what the user was trying to check out so the
 // "[s]tash & checkout" branch in the confirm modal can re-issue the same
@@ -397,6 +409,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// The viewMode guard runs before the global ctrl+c/q quit branch so
 		// `q` inside the overlay closes the overlay instead of killing the app.
+		if m.mode == viewModeHelp {
+			switch msg.String() {
+			case "?":
+				m.mode = viewModeNormal
+				m.applyPaneSizes()
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		if m.mode == viewModeDiffWindow {
 			switch msg.String() {
 			case "esc", "q":
@@ -436,6 +460,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			m.cancelStream()
 			return m, tea.Quit
+		case "?":
+			m.mode = viewModeHelp
+			m.applyPaneSizes()
+			return m, nil
 		case "tab":
 			m.focused = (m.focused + 1) % paneCount
 			return m, nil
@@ -683,8 +711,14 @@ func (m Model) paneSizes() paneSizes {
 	if m.width == 0 || m.height == 0 {
 		return s
 	}
-	// Reserve 1 row for the help line.
-	mainH := m.height - 1
+	// Reserve 1 row for the help line, or the full panel height when `?`
+	// is open. helpReservedRows clamps so the main area never starves
+	// below 3 rows.
+	helpReserved := 1
+	if m.mode == viewModeHelp {
+		helpReserved = m.helpReservedRows()
+	}
+	mainH := m.height - helpReserved
 	if mainH < 1 {
 		mainH = 1
 	}
@@ -738,6 +772,28 @@ func (m Model) paneSizes() paneSizes {
 	return s
 }
 
+// helpReservedRows returns how many bottom rows the `?` help panel
+// claims. Defaults to helpExpandedHeight; small terminals halve it but
+// keep at least 3 rows. The result is clamped so the main area always
+// retains ≥ 3 rows — paneSizes already enforces mainH ≥ 1, but a
+// 1-row main pane is unusable.
+func (m Model) helpReservedRows() int {
+	want := helpExpandedHeight
+	if m.height/2 < want {
+		want = m.height / 2
+	}
+	if want < 3 {
+		want = 3
+	}
+	if upper := m.height - 3; upper > 0 && want > upper {
+		want = upper
+	}
+	if want < 1 {
+		want = 1
+	}
+	return want
+}
+
 var (
 	borderUnfocused = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -751,17 +807,12 @@ var (
 	statusErrS  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 )
 
-const (
-	helpTextNormal     = "tab focus · h/l switch tab · j/k nav · ctrl+↑/↓ resize · enter checkout · o jump ref · C detach · y copy · d patch · F fetch · P pull · r reload · q quit"
-	helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
-)
+const helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
 
-// helpRendered is the styled help line. The two help strings are const, so we
-// render once at package init instead of every View() frame.
-var (
-	helpRenderedNormal     = help.Render(helpTextNormal)
-	helpRenderedDiffWindow = help.Render(helpTextDiffWindow)
-)
+// helpRenderedDiffWindow pre-renders the diff-overlay hint at package init
+// since the string is fixed. The viewModeNormal hint is focus-aware and
+// composed in renderHelpStatus per frame.
+var helpRenderedDiffWindow = help.Render(helpTextDiffWindow)
 
 // confirmPromptS reuses the busy color and adds bold so the modal prompt
 // reads as "active dialog" rather than "an error just landed".
@@ -809,7 +860,8 @@ func (m Model) tabBody() string {
 // terminal is too narrow to fit both, status wins — the user just triggered
 // an action and seeing its outcome matters more than the help reminder.
 // The dirty-tree checkout modal replaces the whole line with its prompt
-// so the available choice keys are unambiguous.
+// so the available choice keys are unambiguous, and viewModeHelp expands
+// the line into a multi-row panel.
 func (m Model) renderHelpStatus() string {
 	if m.mode == viewModeCheckoutConfirm {
 		return confirmPromptS.Render(
@@ -817,8 +869,13 @@ func (m Model) renderHelpStatus() string {
 				"'? · [s] stash & checkout · [a] abort · [esc] cancel",
 		)
 	}
+	if m.mode == viewModeHelp {
+		return renderHelpPanel(m.width, m.helpReservedRows())
+	}
+	hintText := paneHints()[m.focused]
+	hintRendered := help.Render(hintText)
 	if m.status == "" {
-		return helpRenderedNormal
+		return hintRendered
 	}
 	statusRendered := m.statusStyle.Render(m.status)
 
@@ -826,9 +883,9 @@ func (m Model) renderHelpStatus() string {
 	if avail < 1 {
 		return statusRendered
 	}
-	helpPart := helpRenderedNormal
+	helpPart := hintRendered
 	if lipgloss.Width(helpPart) > avail {
-		helpPart = help.Render(runewidth.Truncate(helpTextNormal, avail, "…"))
+		helpPart = help.Render(runewidth.Truncate(hintText, avail, "…"))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, helpPart, " ", statusRendered)
 }

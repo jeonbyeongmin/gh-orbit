@@ -13,6 +13,164 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
+func TestPaneSizesShrinkWhenHelpExpanded(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	normal := m.paneSizes()
+	m.mode = viewModeHelp
+	expanded := m.paneSizes()
+
+	wantDelta := helpExpandedHeight - 1
+	gotDelta := (normal.graphH + normal.tabH) - (expanded.graphH + expanded.tabH)
+	if gotDelta != wantDelta {
+		t.Errorf("graph+tab delta on viewModeHelp = %d, want %d (helpExpandedHeight - 1)",
+			gotDelta, wantDelta)
+	}
+}
+
+func TestHelpToggleEntersAndExitsMode(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+	if m.mode != viewModeHelp {
+		t.Fatalf("? should enter viewModeHelp, got %v", m.mode)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Errorf("second ? should exit viewModeHelp, got %v", m.mode)
+	}
+}
+
+func TestHelpModeSwallowsQAndEsc(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeHelp
+
+	for _, k := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'q'}},
+		{Type: tea.KeyEsc},
+		{Type: tea.KeyRunes, Runes: []rune{'j'}},
+		{Type: tea.KeyRunes, Runes: []rune{'F'}},
+		{Type: tea.KeyRunes, Runes: []rune{'P'}},
+		{Type: tea.KeyRunes, Runes: []rune{'d'}},
+		{Type: tea.KeyTab},
+	} {
+		updated, cmd := m.Update(k)
+		m = updated.(Model)
+		if m.mode != viewModeHelp {
+			t.Errorf("key %v closed help mode (mode=%v)", k, m.mode)
+		}
+		if cmd != nil {
+			t.Errorf("key %v dispatched cmd %v in help mode, want nil", k, cmd)
+		}
+	}
+}
+
+func TestHelpModeIgnoredInDiffWindow(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeDiffWindow
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+	if m.mode != viewModeDiffWindow {
+		t.Errorf("? in diff overlay should be swallowed; mode = %v", m.mode)
+	}
+}
+
+func TestHelpModeIgnoredInCheckoutConfirm(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeCheckoutConfirm
+	m.pendingCheckout = pendingCheckout{ref: "feat"}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+	if m.mode != viewModeCheckoutConfirm {
+		t.Errorf("? in dirty-tree confirm should be swallowed; mode = %v", m.mode)
+	}
+}
+
+func TestQuitOnlyWhenHelpClosed(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	// q in normal mode quits.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Fatal("q in viewModeNormal should dispatch tea.Quit")
+	}
+
+	m.mode = viewModeHelp
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd != nil {
+		t.Errorf("q in viewModeHelp must not dispatch cmd, got %v", cmd)
+	}
+}
+
+func TestRenderHelpStatusReturnsPaneHint(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	m.focused = paneRefs
+	if got := m.renderHelpStatus(); !strings.Contains(got, "enter checkout") {
+		t.Errorf("paneRefs hint missing 'enter checkout': %q", got)
+	}
+
+	m.focused = paneGraph
+	if got := m.renderHelpStatus(); !strings.Contains(got, "C detach") {
+		t.Errorf("paneGraph hint missing 'C detach': %q", got)
+	}
+
+	m.focused = paneTab
+	if got := m.renderHelpStatus(); !strings.Contains(got, "y copy") {
+		t.Errorf("paneTab hint missing 'y copy': %q", got)
+	}
+}
+
+func TestRenderHelpStatusInHelpModeReturnsPanel(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeHelp
+
+	got := m.renderHelpStatus()
+	for _, want := range []string{"[Global]", "[Refs]", "[Graph]", "[Tab]"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("help-mode renderHelpStatus missing %q\n--- panel ---\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderHelpStatusStatusOverridesHint(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.focused = paneGraph
+	m.status = "fetching…"
+	m.statusStyle = statusBusyS
+
+	got := m.renderHelpStatus()
+	if !strings.Contains(got, "fetching…") {
+		t.Errorf("rendered line missing status: %q", got)
+	}
+	if !strings.Contains(got, "C detach") {
+		t.Errorf("rendered line should still carry the hint alongside status: %q", got)
+	}
+}
+
 func TestSplitRatioClampOnResize(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

@@ -108,7 +108,6 @@ var (
 	stashExec            = git.Stash
 	stashPopExec         = git.StashPop
 	mergeFFOnlyExec      = git.MergeFFOnly
-	isAncestorExec       = git.IsAncestor
 	countAheadExec       = git.CountAhead
 )
 
@@ -146,27 +145,29 @@ type stashThenFFMsg struct {
 	stashLabel string
 }
 
-// ffOnlyCmd runs `git merge --ff-only <hash>` against the cursor commit,
-// stamping the +N advance count via CountAhead before the merge fires.
-// Case 1 only: HEAD must already be attached to `branch` and `branch`'s
-// tip must be an ancestor of `hash`. The graph Enter evaluator pre-gates
-// both (IsAncestor + headBranch resolution); MergeFFOnly's --ff-only flag
-// is the runtime safety net.
-//
-// Failure wrapping mirrors the checkout family: ErrCheckoutNeedsCleanTree
-// → ffNeedsCleanTreeMsg, anything else → ffFailedMsg. ErrFFNotPossible
-// surfaces as ffFailedMsg with the wrapped error in the chain so the
-// status line can render the divergence reason; the modal is reserved
-// for dirty-tree only.
+// runFF stamps the +N advance count then invokes `git merge --ff-only`.
+// Shared body between ffOnlyCmd and stashThenFFCmd — the advance is
+// computed before the merge so even an FF rejection can carry the count
+// (callers ignore advance on the error path, but keeping the call
+// consistent matches the success-path msg layout). A rev-list error is
+// non-fatal: fall back to 0 and let the merge decide.
+func runFF(ctx context.Context, dir, hash string) (advance int, err error) {
+	advance, _ = countAheadExec(ctx, dir, "HEAD", hash)
+	err = mergeFFOnlyExec(ctx, dir, hash)
+	return
+}
+
+// ffOnlyCmd runs the no-checkout FF (Case 1: HEAD already on the branch
+// being advanced). Failure wrapping: ErrCheckoutNeedsCleanTree →
+// ffNeedsCleanTreeMsg (modal entry); anything else (incl. ErrFFNotPossible
+// on divergence) → ffFailedMsg so the status line surfaces the reason.
+// The modal is reserved for dirty-tree only.
 func ffOnlyCmd(dir, branch, hash string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), checkoutTimeout)
 		defer cancel()
-		// Compute advance up-front so the success path can stamp it. A
-		// rev-list error here is non-fatal — fall back to 0 and let the
-		// merge decide the final outcome.
-		advance, _ := countAheadExec(ctx, dir, "HEAD", hash)
-		if err := mergeFFOnlyExec(ctx, dir, hash); err != nil {
+		advance, err := runFF(ctx, dir, hash)
+		if err != nil {
 			if errors.Is(err, git.ErrCheckoutNeedsCleanTree) {
 				return ffNeedsCleanTreeMsg{branch: branch, hash: hash}
 			}
@@ -191,8 +192,8 @@ func stashThenFFCmd(dir, branch, hash string) tea.Cmd {
 
 		ffCtx, ffCancel := context.WithTimeout(context.Background(), checkoutTimeout)
 		defer ffCancel()
-		advance, _ := countAheadExec(ffCtx, dir, "HEAD", hash)
-		if err := mergeFFOnlyExec(ffCtx, dir, hash); err != nil {
+		advance, err := runFF(ffCtx, dir, hash)
+		if err != nil {
 			return ffFailedMsg{err: err}
 		}
 		return stashThenFFMsg{branch: branch, advance: advance, stashLabel: stashLabelHEAD}

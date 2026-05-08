@@ -117,17 +117,6 @@ type pendingCheckout struct {
 	ffHash     string
 }
 
-// pendingFF remembers the parameters of an in-flight graph-Enter FF so a
-// follow-up dirty-tree confirm modal can re-issue the same request after
-// stashing. Mirrors pendingCheckout's shape for the FF-specific path —
-// the dual struct keeps the FF and checkout flows independently
-// reconstructable rather than overloading pendingCheckout fields.
-type pendingFF struct {
-	branch  string
-	hash    string
-	advance int
-}
-
 type Model struct {
 	width, height int
 	focused       pane
@@ -197,15 +186,9 @@ type Model struct {
 	actionInFlight bool
 	// ffInFlight gates graph Enter while ffOnlyCmd / stashThenFFCmd is
 	// running. Tracked separately from checkoutInFlight so the FF and
-	// checkout chains can't collide on a status overwrite or a stale
-	// pendingFF / pendingCheckout slot. Cleared by ffSucceededMsg /
-	// ffFailedMsg / stashThenFFMsg.
+	// checkout chains can't collide on a status overwrite. Cleared by
+	// ffSucceededMsg / ffFailedMsg / ffNeedsCleanTreeMsg / stashThenFFMsg.
 	ffInFlight bool
-	// pendingFF mirrors pendingCheckout for the graph-Enter FF path. The
-	// dirty-tree confirm modal arms its `s` branch off pendingCheckout
-	// (with withFF=true), so this slot is only consulted while ffOnlyCmd
-	// is in flight.
-	pendingFF pendingFF
 	// branchPicker backs viewModeBranchPicker. Reset to the zero value on
 	// esc / enter; the picker reads candidates+cursor while open and
 	// dispatches a graph-Enter checkout on enter.
@@ -573,12 +556,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case graphActionFF:
 			m.ffInFlight = true
-			m.pendingFF = pendingFF{
-				branch:  msg.branch,
-				hash:    msg.hash,
-				advance: msg.advance,
-			}
-			m.status = fmt.Sprintf("fast-forward: %s +%d …", msg.branch, msg.advance)
+			m.status = ffLabel(msg.branch, msg.advance) + " …"
 			m.statusStyle = statusBusyS
 			return m, ffOnlyCmd("", msg.branch, msg.hash)
 		case graphActionDetach:
@@ -590,15 +568,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ffSucceededMsg:
 		m.ffInFlight = false
-		m.pendingFF = pendingFF{}
-		m.status = fmt.Sprintf("fast-forward: %s +%d", msg.branch, msg.advance)
+		m.status = ffLabel(msg.branch, msg.advance)
 		m.statusStyle = statusOkS
 		m.pendingHEADHash = pendingHEADSentinel
 		return m, m.reloadCmd()
 
 	case ffFailedMsg:
 		m.ffInFlight = false
-		m.pendingFF = pendingFF{}
 		m.status = "fast-forward failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
@@ -620,8 +596,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stashThenFFMsg:
 		m.ffInFlight = false
 		m.pendingCheckout = pendingCheckout{}
-		m.status = fmt.Sprintf("fast-forward: %s +%d (stashed before fast-forward: %s)",
-			msg.branch, msg.advance, msg.stashLabel)
+		m.status = ffLabel(msg.branch, msg.advance) +
+			" (stashed before fast-forward: " + msg.stashLabel + ")"
 		m.statusStyle = statusOkS
 		m.pendingHEADHash = pendingHEADSentinel
 		return m, m.reloadCmd()
@@ -780,7 +756,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
-			locals := m.refs.byKind[0]
+			locals := m.refs.LocalRefs()
 			if len(locals) == 0 {
 				m.status = "refs not loaded yet"
 				m.statusStyle = statusErrS
@@ -968,6 +944,13 @@ func checkoutLabel(ref string, detached bool) string {
 		return "checkout: detached at " + shortHash(ref)
 	}
 	return "checkout: " + ref
+}
+
+// ffLabel renders the user-facing "fast-forward: <branch> +<N>" status
+// prefix shared by busy / success / stash-then-success lines. Mirrors
+// checkoutLabel's role for the FF path.
+func ffLabel(branch string, advance int) string {
+	return fmt.Sprintf("fast-forward: %s +%d", branch, advance)
 }
 
 // beginDiffStat advances the request id, marks both Changes and Commit

@@ -172,9 +172,6 @@ func TestGraphActionMsgFFDispatchesFFOnly(t *testing.T) {
 	if !m.ffInFlight {
 		t.Error("graphActionFF should latch ffInFlight")
 	}
-	if m.pendingFF.branch != "main" || m.pendingFF.hash != "abc1234" || m.pendingFF.advance != 3 {
-		t.Errorf("pendingFF = %+v, want {main abc1234 3}", m.pendingFF)
-	}
 	if !strings.Contains(m.status, "fast-forward: main +3") {
 		t.Errorf("status = %q, want 'fast-forward: main +3'", m.status)
 	}
@@ -349,15 +346,11 @@ func TestFFSucceededReloadsAndJumpsHEAD(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	m.ffInFlight = true
-	m.pendingFF = pendingFF{branch: "main", hash: "abc1234", advance: 3}
 
 	updated, cmd := m.Update(ffSucceededMsg{branch: "main", advance: 3})
 	m = updated.(Model)
 	if m.ffInFlight {
 		t.Error("ffSucceededMsg should release ffInFlight")
-	}
-	if m.pendingFF.hash != "" {
-		t.Errorf("pendingFF should be cleared, got %+v", m.pendingFF)
 	}
 	if !strings.Contains(m.status, "fast-forward: main +3") {
 		t.Errorf("status = %q, want 'fast-forward: main +3'", m.status)
@@ -375,7 +368,6 @@ func TestFFFailedSurfacesError(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	m.ffInFlight = true
-	m.pendingFF = pendingFF{branch: "main", hash: "abc1234", advance: 3}
 
 	boom := errors.New("merge --ff-only: divergent")
 	updated, cmd := m.Update(ffFailedMsg{err: boom})

@@ -68,27 +68,24 @@ type branchPickerState struct {
 // evaluateGraphActionCmd runs the full Enter decision tree on a goroutine
 // so the model's Update never blocks on git. The decision splits into
 // chip-driven (Checkout / Picker / NoOp) and chipless (FF / Detach)
-// halves; only the chipless half ever invokes git (one IsAncestor call,
-// one CountAhead).
+// halves; only the chipless half ever invokes git, and only once
+// (CountAhead). HEAD info and chips are gathered in a single pass over
+// the locals slice.
 //
-// HEAD info is derived from the same locals slice the chip filter
-// consumes — refs.go marks the HEAD ref via Ref.IsHead and stamps its
-// ObjectName, so a single pass over the slice yields headBranch +
-// headHash. A detached HEAD shows as "no ref with IsHead=true" → empty
-// strings → fall through to graphActionDetach.
+// A detached HEAD shows as "no ref with IsHead=true" → empty headBranch
+// → chipless detach. Divergent cursor (HEAD shares an ancestor but
+// neither is reachable from the other) is dispatched as FF and surfaces
+// as ffFailedMsg with ErrFFNotPossible — by design, so the user sees the
+// rejection reason instead of a silent detach.
 func evaluateGraphActionCmd(dir, hash string, locals []git.Ref) tea.Cmd {
 	return func() tea.Msg {
 		var headBranch, headHash string
+		var chips []string
 		for _, r := range locals {
 			if r.IsHead {
 				headBranch = r.ShortName
 				headHash = r.ObjectName
-				break
 			}
-		}
-
-		var chips []string
-		for _, r := range locals {
 			if r.ObjectName == hash {
 				chips = append(chips, r.ShortName)
 			}
@@ -109,22 +106,11 @@ func evaluateGraphActionCmd(dir, hash string, locals []git.Ref) tea.Cmd {
 			return graphActionMsg{hash: hash, kind: graphActionPicker, candidates: chips}
 		}
 
-		// Chipless: FF if HEAD attached and ancestor of cursor, else detach.
 		if headBranch == "" || headHash == "" {
 			return graphActionMsg{hash: hash, kind: graphActionDetach}
 		}
-		if headHash == hash {
-			// Defensive — cursor at HEAD's tip but no chip showed up. Treat
-			// as already-there to avoid a confusing detach-on-self.
-			return graphActionMsg{hash: hash, kind: graphActionNoOp, branch: headBranch}
-		}
-
 		ctx, cancel := context.WithTimeout(context.Background(), checkoutTimeout)
 		defer cancel()
-		isAncestor, err := isAncestorExec(ctx, dir, headHash, hash)
-		if err != nil || !isAncestor {
-			return graphActionMsg{hash: hash, kind: graphActionDetach}
-		}
 		advance, err := countAheadExec(ctx, dir, headHash, hash)
 		if err != nil || advance == 0 {
 			return graphActionMsg{hash: hash, kind: graphActionDetach}

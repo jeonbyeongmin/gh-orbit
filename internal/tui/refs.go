@@ -191,6 +191,11 @@ func (r refModel) clampOffset(rowsLen, vh int) refModel {
 }
 
 // Selected returns the ref under the cursor, if any.
+// LocalRefs returns the cached local-branch slice. Other panes reach for
+// it (e.g., graph Enter's chip evaluator) without learning byKind's
+// section-index encoding — refSections owns that detail.
+func (r refModel) LocalRefs() []git.Ref { return r.byKind[0] }
+
 func (r refModel) Selected() (git.Ref, bool) {
 	rows := r.flatRows()
 	i, ok := r.cursorFlatRow(rows)

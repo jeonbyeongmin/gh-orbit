@@ -368,64 +368,6 @@ func TestStashPopReturnsConflictSentinel(t *testing.T) {
 	}
 }
 
-func TestIsAncestorIntegration(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-	work := t.TempDir()
-	gitRun(t, work, "init", "-b", "main")
-	gitRun(t, work, "config", "user.name", "Local")
-	gitRun(t, work, "config", "user.email", "local@example.com")
-	gitRun(t, work, "commit", "--allow-empty", "-m", "first")
-	first := gitOutput(t, work, "rev-parse", "HEAD")
-	gitRun(t, work, "commit", "--allow-empty", "-m", "second")
-	second := gitOutput(t, work, "rev-parse", "HEAD")
-
-	// first is ancestor of second.
-	got, err := IsAncestor(context.Background(), work, first, second)
-	if err != nil {
-		t.Fatalf("IsAncestor(first, second): %v", err)
-	}
-	if !got {
-		t.Errorf("IsAncestor(first, second) = false, want true")
-	}
-
-	// second is NOT an ancestor of first (descendant of self isn't ancestor).
-	got, err = IsAncestor(context.Background(), work, second, first)
-	if err != nil {
-		t.Fatalf("IsAncestor(second, first): %v", err)
-	}
-	if got {
-		t.Errorf("IsAncestor(second, first) = true, want false")
-	}
-
-	// Self-ancestry is true (git's contract).
-	got, err = IsAncestor(context.Background(), work, first, first)
-	if err != nil {
-		t.Fatalf("IsAncestor(first, first): %v", err)
-	}
-	if !got {
-		t.Errorf("IsAncestor(first, first) = false, want true")
-	}
-}
-
-func TestIsAncestorBadRefReturnsError(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-	work := t.TempDir()
-	gitRun(t, work, "init", "-b", "main")
-	gitRun(t, work, "config", "user.name", "Local")
-	gitRun(t, work, "config", "user.email", "local@example.com")
-	gitRun(t, work, "commit", "--allow-empty", "-m", "first")
-
-	// Bad ref → git exits with code 128, IsAncestor surfaces it as a wrapped err.
-	_, err := IsAncestor(context.Background(), work, "definitely-not-a-ref", "HEAD")
-	if err == nil {
-		t.Fatal("expected error on bad ancestor ref")
-	}
-}
-
 func TestMergeFFOnlyIntegration(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

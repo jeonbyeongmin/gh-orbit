@@ -2,37 +2,24 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
-// stubAncestry installs counterfeit isAncestorExec / countAheadExec for one
-// test, restoring the originals via t.Cleanup. The stubs answer in-memory
-// so no test invokes a real git subprocess.
-func stubAncestry(t *testing.T, ancestors map[string]bool, advances map[string]int) {
+// stubAdvances installs a counterfeit countAheadExec for one test,
+// restoring the original via t.Cleanup. The stub answers in-memory so no
+// test invokes a real git subprocess; "missing key" returns the divergent
+// case (zero advance) rather than an error so a test can omit ancestry
+// pairs it doesn't exercise.
+func stubAdvances(t *testing.T, advances map[string]int) {
 	t.Helper()
-	prevIA, prevCA := isAncestorExec, countAheadExec
-	isAncestorExec = func(_ context.Context, _ string, ancestor, descendant string) (bool, error) {
-		key := ancestor + "->" + descendant
-		v, ok := ancestors[key]
-		if !ok {
-			return false, errors.New("stubAncestry: missing key " + key)
-		}
-		return v, nil
-	}
+	prevCA := countAheadExec
 	countAheadExec = func(_ context.Context, _ string, ancestor, descendant string) (int, error) {
-		key := ancestor + "->" + descendant
-		v, ok := advances[key]
-		if !ok {
-			return 0, errors.New("stubAncestry: missing advance key " + key)
-		}
-		return v, nil
+		return advances[ancestor+"->"+descendant], nil
 	}
 	t.Cleanup(func() {
-		isAncestorExec = prevIA
 		countAheadExec = prevCA
 	})
 }
@@ -121,10 +108,7 @@ func TestGraphEvaluatorFFOnHeadAncestor(t *testing.T) {
 	locals := []git.Ref{
 		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true},
 	}
-	stubAncestry(t,
-		map[string]bool{headTip + "->" + cursor: true},
-		map[string]int{headTip + "->" + cursor: 3},
-	)
+	stubAdvances(t, map[string]int{headTip + "->" + cursor: 3})
 	got := runGraphEvaluator(t, cursor, locals)
 	if got.kind != graphActionFF {
 		t.Errorf("kind = %v, want FF", got.kind)
@@ -149,34 +133,15 @@ func TestGraphEvaluatorDetachWhenHeadDetached(t *testing.T) {
 	}
 }
 
-func TestGraphEvaluatorDetachWhenHeadNotAncestor(t *testing.T) {
+func TestGraphEvaluatorDetachWhenAdvanceZero(t *testing.T) {
+	// CountAhead returns 0 for both "behind ancestor" and "diverged" —
+	// the evaluator downgrades both cases to Detach.
 	cursor := "gggg"
 	headTip := "aaaa"
 	locals := []git.Ref{
 		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true},
 	}
-	stubAncestry(t,
-		map[string]bool{headTip + "->" + cursor: false},
-		map[string]int{},
-	)
-	got := runGraphEvaluator(t, cursor, locals)
-	if got.kind != graphActionDetach {
-		t.Errorf("kind = %v, want Detach", got.kind)
-	}
-}
-
-func TestGraphEvaluatorDetachOnAdvanceZero(t *testing.T) {
-	// Defensive — IsAncestor true but rev-list returns 0. The evaluator
-	// downgrades to Detach instead of dispatching a no-progress FF.
-	cursor := "hhhh"
-	headTip := "aaaa"
-	locals := []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true},
-	}
-	stubAncestry(t,
-		map[string]bool{headTip + "->" + cursor: true},
-		map[string]int{headTip + "->" + cursor: 0},
-	)
+	stubAdvances(t, map[string]int{headTip + "->" + cursor: 0})
 	got := runGraphEvaluator(t, cursor, locals)
 	if got.kind != graphActionDetach {
 		t.Errorf("kind = %v, want Detach", got.kind)
@@ -186,19 +151,15 @@ func TestGraphEvaluatorDetachOnAdvanceZero(t *testing.T) {
 func TestGraphEvaluatorRemoteChipFallsThroughToFF(t *testing.T) {
 	// Cursor row carries only an origin/main remote chip (no local chip
 	// here because local main is on a behind row). HEAD on local main →
-	// natural FF, the Fork "Checkout & Fast Forward" path.
+	// natural FF, the Fork "Checkout & Fast Forward" path. Remotes aren't
+	// in the locals slice the evaluator scans, so we just don't include
+	// origin/main — graphaction only consumes locals.
 	cursor := "iiii"
 	headTip := "aaaa"
 	locals := []git.Ref{
 		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true},
 	}
-	// Note: remotes aren't in the locals slice the evaluator scans, so we
-	// just don't include the origin/main entry — graphaction only consumes
-	// locals.
-	stubAncestry(t,
-		map[string]bool{headTip + "->" + cursor: true},
-		map[string]int{headTip + "->" + cursor: 5},
-	)
+	stubAdvances(t, map[string]int{headTip + "->" + cursor: 5})
 	got := runGraphEvaluator(t, cursor, locals)
 	if got.kind != graphActionFF {
 		t.Errorf("kind = %v, want FF (remote chip should not block FF path)", got.kind)
@@ -214,10 +175,7 @@ func TestGraphEvaluatorEchoesHash(t *testing.T) {
 	locals := []git.Ref{
 		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: "aaaa", IsHead: true},
 	}
-	stubAncestry(t,
-		map[string]bool{"aaaa->" + hash: false},
-		map[string]int{},
-	)
+	stubAdvances(t, map[string]int{}) // missing key → 0 → Detach
 	got := runGraphEvaluator(t, hash, locals)
 	if got.hash != hash {
 		t.Errorf("hash = %q, want %q (evaluator must echo for stale-drop)", got.hash, hash)

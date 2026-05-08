@@ -240,31 +240,10 @@ func runCheckout(ctx context.Context, dir string, args []string) error {
 	return wrapGitErr("git checkout", runErr, msg)
 }
 
-// IsAncestor reports whether `ancestor` is an ancestor of `descendant`,
-// using `git merge-base --is-ancestor`. The contract follows git's exit
-// codes: 0 → true, 1 → false, anything else (bad ref, repo error, …) →
-// wrapped error. Used by the graph Enter evaluator to decide whether HEAD
-// can fast-forward to the cursor commit before invoking MergeFFOnly.
-func IsAncestor(ctx context.Context, dir, ancestor, descendant string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "merge-base", "--is-ancestor", ancestor, descendant)
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err == nil {
-		return true, nil
-	}
-	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-		return false, nil
-	}
-	return false, wrapGitErr("git merge-base --is-ancestor", err, stderr.String())
-}
-
 // MergeFFOnly runs `git merge --ff-only <hash>`. On success the current
-// branch tip advances to <hash> with no merge commit and no checkout. The
-// caller is expected to gate this on IsAncestor first; the explicit
-// --ff-only flag is the runtime safety net.
+// branch tip advances to <hash> with no merge commit and no checkout.
+// Callers may pre-gate with CountAhead (advance > 0 implies the FF will
+// land); the --ff-only flag is the runtime safety net for divergence.
 //
 // Failure wrapping mirrors Checkout: dirty-tree wording (which `merge`
 // emits with the same "would be overwritten" / "Please commit your

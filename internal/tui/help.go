@@ -42,6 +42,7 @@ var helpCategories = []helpCategory{
 		title: "Refs",
 		entries: []helpEntry{
 			{"enter", "checkout"},
+			{"p", "checkout+pull"},
 			{"o", "jump to tip"},
 			{"a", "all refs"},
 		},
@@ -70,7 +71,7 @@ func helpData() []helpCategory { return helpCategories }
 // hint ends with `? help · q quit` so the user always sees how to expand
 // the panel or quit, regardless of which pane has focus.
 var paneHintTexts = map[pane]string{
-	paneRefs:  "enter checkout · o jump · ? help · q quit",
+	paneRefs:  "enter checkout · p checkout+pull · o jump · ? help · q quit",
 	paneGraph: "enter/d patch · C detach · ? help · q quit",
 	paneTab:   "h/l switch · y copy · ? help · q quit",
 }

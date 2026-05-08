@@ -4,6 +4,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"log"
 
 	"github.com/atotto/clipboard"
@@ -81,9 +82,22 @@ const helpExpandedHeight = 8
 // "[s]tash & checkout" branch in the confirm modal can re-issue the same
 // request after stashing. detached=true means graph 'C' (CheckoutDetached);
 // detached=false means a refs-pane Enter (named ref).
+//
+// withPull and skipReason carry the refs-pane `p` chain's state across
+// the dirty-tree confirm modal. Zero values mean "plain checkout" —
+// refCheckoutRequestedMsg (Enter) leaves them off, so the existing
+// behavior is unchanged. refCheckoutWithPullRequestedMsg (`p`) sets
+// withPull=true and stamps a non-empty skipReason for tag / detached /
+// no-upstream local refs (where pull will be elided); the modal's `s`
+// branch consults withPull to pick stashThenCheckoutThenPullThenPopCmd
+// vs. the legacy stashThenCheckoutCmd. skipReason being non-empty is
+// the single signal of "pull will be skipped" — the chain commands
+// derive their skip flag from that, no parallel boolean needed.
 type pendingCheckout struct {
-	ref      string
-	detached bool
+	ref        string
+	detached   bool
+	withPull   bool
+	skipReason string
 }
 
 type Model struct {
@@ -265,6 +279,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, cmd = m.beginCheckout(git.CheckoutTarget(msg.ref), false)
 		return m, cmd
 
+	case refCheckoutWithPullRequestedMsg:
+		// Pull eligibility is decided here, at keypress time, while we still
+		// have the full git.Ref (Kind + Upstream). The chain command itself
+		// stays dir-only; passing the decision in skipReason avoids a
+		// follow-up `git rev-parse @{upstream}` mid-chain.
+		var cmd tea.Cmd
+		m, cmd = m.beginCheckoutWithPull(git.CheckoutTarget(msg.ref), false, resolvePullEligibility(msg.ref))
+		return m, cmd
+
 	case checkoutSucceededMsg:
 		m.checkoutInFlight = false
 		m.pendingCheckout = pendingCheckout{}
@@ -298,6 +321,73 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusOkS
 		m.pendingHEADHash = pendingHEADSentinel
 		return m, m.reloadCmd()
+
+	case checkoutThenPullSucceededMsg:
+		m.checkoutInFlight = false
+		m.pendingCheckout = pendingCheckout{}
+		if msg.pullSkipped {
+			m.status = checkoutLabel(msg.ref, msg.detached) +
+				" (pull skipped: " + msg.skipReason + ")"
+		} else {
+			m.status = checkoutLabel(msg.ref, msg.detached) + "; pull: done"
+		}
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case checkoutThenPullConflictMsg:
+		// checkout landed; pull tripped on a merge/rebase conflict. HEAD now
+		// sits on a half-merged commit so we still reload refs+log, but we
+		// deliberately do NOT arm pendingHEADHash — the user is mid-conflict
+		// and should resolve in their terminal before the cursor jumps.
+		m.checkoutInFlight = false
+		m.pendingCheckout = pendingCheckout{}
+		m.status = checkoutLabel(msg.ref, msg.detached) +
+			"; pull: CONFLICT — resolve in your terminal"
+		m.statusStyle = statusErrS
+		return m, m.reloadCmd()
+
+	case stashThenCheckoutThenPullThenPopSucceededMsg:
+		m.checkoutInFlight = false
+		m.pendingCheckout = pendingCheckout{}
+		if msg.pullSkipped {
+			m.status = checkoutLabel(msg.ref, msg.detached) +
+				" (pull skipped: " + msg.skipReason + "); stashed → popped " + msg.stashLabel
+		} else {
+			m.status = checkoutLabel(msg.ref, msg.detached) +
+				"; stashed → pull → popped " + msg.stashLabel
+		}
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case stashThenCheckoutThenPullThenPopConflictMsg:
+		// Three sub-cases collapse into one msg type:
+		//   phase=Pull, ErrPullConflict → pop already ran; show conflict + label
+		//   phase=Pull, generic err     → pop never ran; stash preserved
+		//   phase=StashPop              → pop conflict; markers + stash preserved
+		m.checkoutInFlight = false
+		m.pendingCheckout = pendingCheckout{}
+		m.statusStyle = statusErrS
+		switch {
+		case msg.phase == chainPhasePull && errors.Is(msg.err, git.ErrPullConflict):
+			m.status = checkoutLabel(msg.ref, msg.detached) +
+				"; pull: CONFLICT — resolve in your terminal; stash preserved at " + msg.stashLabel
+			// HEAD is mid-conflict — no jump.
+			return m, m.reloadCmd()
+		case msg.phase == chainPhasePull:
+			m.status = checkoutLabel(msg.ref, msg.detached) +
+				"; pull failed: " + firstLine(msg.err.Error()) + "; stash preserved at " + msg.stashLabel
+			// HEAD did move (checkout landed). Jump to it on reload so the
+			// graph shows the user where they are.
+			m.pendingHEADHash = pendingHEADSentinel
+			return m, m.reloadCmd()
+		default: // chainPhaseStashPop
+			m.status = checkoutLabel(msg.ref, msg.detached) +
+				"; pull: done; pop conflict — resolve markers and run `git stash drop` (" + msg.stashLabel + ")"
+			m.pendingHEADHash = pendingHEADSentinel
+			return m, m.reloadCmd()
+		}
 
 	case refSelectedMsg:
 		// Unified graph: Enter no longer reloads; it jumps the graph cursor
@@ -425,12 +515,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == viewModeCheckoutConfirm {
 			switch msg.String() {
 			case "s":
-				ref, detached := m.pendingCheckout.ref, m.pendingCheckout.detached
+				p := m.pendingCheckout
 				m.mode = viewModeNormal
 				m.checkoutInFlight = true
-				m.status = "checkout: " + ref + " (stashing…)"
 				m.statusStyle = statusBusyS
-				return m, stashThenCheckoutCmd("", ref, detached)
+				if p.withPull {
+					if p.skipReason != "" {
+						m.status = "checkout: " + p.ref + " (pull skipped: " + p.skipReason + ", stashing…)"
+					} else {
+						m.status = "checkout: " + p.ref + " + pull (stashing…)"
+					}
+					return m, stashThenCheckoutThenPullThenPopCmd(
+						"", p.ref, p.detached, m.pullPrefStrategy, p.skipReason,
+					)
+				}
+				m.status = "checkout: " + p.ref + " (stashing…)"
+				return m, stashThenCheckoutCmd("", p.ref, p.detached)
 			case "a", "esc":
 				m.mode = viewModeNormal
 				m.pendingCheckout = pendingCheckout{}
@@ -623,6 +723,52 @@ func (m Model) beginCheckout(ref string, detached bool) (Model, tea.Cmd) {
 	m.status = checkoutLabel(ref, detached) + " …"
 	m.statusStyle = statusBusyS
 	return m, checkoutCmd("", ref, detached)
+}
+
+// resolvePullEligibility decides whether `p` should follow the checkout
+// with a pull. Returns a non-empty reason string when pull should be
+// skipped, "" when pull is eligible. Tags resolve to detached HEADs with
+// no upstream; local branches without an upstream have nowhere to pull
+// from; remote-tracking refs always become local tracking branches via
+// dwim and are pull-eligible. The decision happens at keypress time so
+// the chain command itself stays dir-only and doesn't need to re-resolve
+// refs across async steps.
+func resolvePullEligibility(ref git.Ref) (skipReason string) {
+	switch ref.Kind {
+	case git.RefKindTag:
+		return "tag has no upstream"
+	case git.RefKindLocal:
+		if ref.Upstream == "" {
+			return "local branch has no upstream"
+		}
+	}
+	return ""
+}
+
+// beginCheckoutWithPull dispatches the refs-pane `p` chain. Same gating
+// as beginCheckout (one in-flight at a time) plus pendingCheckout fields
+// that survive the dirty-tree confirm modal so its `s` branch can re-issue
+// the chain instead of falling back to the plain checkout-only flow.
+// A non-empty skipReason means pull will be skipped — that single value
+// drives both the busy-status text and the chain command's skip flag.
+func (m Model) beginCheckoutWithPull(ref string, detached bool, skipReason string) (Model, tea.Cmd) {
+	if m.checkoutInFlight {
+		return m, nil
+	}
+	m.checkoutInFlight = true
+	m.pendingCheckout = pendingCheckout{
+		ref:        ref,
+		detached:   detached,
+		withPull:   true,
+		skipReason: skipReason,
+	}
+	if skipReason != "" {
+		m.status = checkoutLabel(ref, detached) + " (pull skipped: " + skipReason + ") …"
+	} else {
+		m.status = checkoutLabel(ref, detached) + " + pull …"
+	}
+	m.statusStyle = statusBusyS
+	return m, checkoutThenPullCmd("", ref, detached, m.pullPrefStrategy, skipReason)
 }
 
 // checkoutLabel renders the user-facing "checkout: …" prefix shared by the
@@ -843,10 +989,28 @@ func (m Model) tabBody() string {
 // the line into a multi-row panel.
 func (m Model) renderHelpStatus() string {
 	if m.mode == viewModeCheckoutConfirm {
-		return confirmPromptS.Render(
-			"Uncommitted changes — checkout '" + m.pendingCheckout.ref +
-				"'? · [s] stash & checkout · [a] abort · [esc] cancel",
-		)
+		// Three modal variants. The skipReason check sits BEFORE the withPull
+		// branch — when pull will be elided we want the legacy "stash & checkout"
+		// text plus the skip reason, not "and pull?" which would over-promise.
+		p := m.pendingCheckout
+		switch {
+		case p.withPull && p.skipReason == "":
+			return confirmPromptS.Render(
+				"Uncommitted changes — checkout '" + p.ref +
+					"' and pull? · [s] stash & checkout & pull · [a] abort · [esc] cancel",
+			)
+		case p.withPull:
+			return confirmPromptS.Render(
+				"Uncommitted changes — checkout '" + p.ref +
+					"' (pull skipped: " + p.skipReason +
+					")? · [s] stash & checkout · [a] abort · [esc] cancel",
+			)
+		default:
+			return confirmPromptS.Render(
+				"Uncommitted changes — checkout '" + p.ref +
+					"'? · [s] stash & checkout · [a] abort · [esc] cancel",
+			)
+		}
 	}
 	if m.mode == viewModeHelp {
 		return renderHelpPanel(m.width, m.helpReservedRows())

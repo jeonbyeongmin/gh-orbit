@@ -44,6 +44,15 @@ type refSelectedMsg struct{ ref git.Ref }
 // branches and tags pass through verbatim.
 type refCheckoutRequestedMsg struct{ ref git.Ref }
 
+// refCheckoutWithPullRequestedMsg is emitted when the user presses `p`
+// on a ref. The root model decides pull eligibility from the ref's Kind
+// and Upstream fields (tags / detached / upstream-less local branches
+// skip pull) and dispatches the chain command. Lower-case `p` is
+// distinct from the global upper-case `P` (plain pull) — the keys form a
+// case-mirror so refs-pane `p` reads as "the global pull's cursor-bound
+// variant".
+type refCheckoutWithPullRequestedMsg struct{ ref git.Ref }
+
 func loadRefsCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), refLoadTimeout)
@@ -90,6 +99,11 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 		case "o":
 			if ref, ok := r.Selected(); ok {
 				return r, func() tea.Msg { return refSelectedMsg{ref: ref} }
+			}
+			return r, nil
+		case "p":
+			if ref, ok := r.Selected(); ok {
+				return r, func() tea.Msg { return refCheckoutWithPullRequestedMsg{ref: ref} }
 			}
 			return r, nil
 		}

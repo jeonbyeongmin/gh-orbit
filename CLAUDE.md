@@ -83,6 +83,7 @@ right). `File Tree` is reserved for a follow-up backlog.
 | `h` / `l` / `←` / `→` | tab pane | switch between Commit and Changes (toggle, wraps) |
 | `ctrl+↑` / `ctrl+↓` | global    | resize graph/tab split (5% per press)          |
 | `enter`         | refs          | checkout the cursor ref (see "Checkout Behavior") |
+| `p`             | refs          | checkout the cursor ref then pull (skip pull on tag / detached / no-upstream) |
 | `o`             | refs          | jump graph cursor to ref tip                   |
 | `a`             | refs          | show every ref's commits (unified `--all`)     |
 | `C`             | graph         | checkout cursor commit as detached HEAD        |
@@ -107,7 +108,7 @@ navigate the focused pane, etc.). The panel is suppressed inside the
 `d` patch overlay and the dirty-tree checkout prompt — those modes keep
 their dedicated single-line hint and own their key gating.
 
-The bottom hint is focus-aware: refs shows `enter checkout · o jump`,
+The bottom hint is focus-aware: refs shows `enter checkout · p checkout+pull · o jump`,
 graph shows `enter/d patch · C detach`, tab shows `h/l switch · y copy`.
 Every focus appends `? help · q quit`.
 
@@ -170,3 +171,20 @@ Dirty working tree handling:
 - On `ErrCheckoutNeedsCleanTree`, the TUI enters a confirm prompt (mode `viewModeCheckoutConfirm`) where only `s` / `a` / `esc` / `ctrl+c` work; every other key is swallowed.
 - `s` runs `git stash push -m "gh-orbit: before checkout <ref>"` (no `-u`, so untracked files stay in the working tree) and then re-issues the checkout. The stash is **not** popped automatically — the status bar surfaces the conventional `stash@{0}` label so the user can resolve it on their own time.
 - `a` / `esc` clear `pendingCheckout` and leave the working tree alone.
+
+### Combined checkout + pull (`p`)
+
+`p` on the refs pane is the cursor-bound mirror of the global `P`: it checks out the cursor ref and immediately runs `git pull` on the resulting branch. Only the lower-case `p` is bound on the refs pane — the global upper-case `P` (plain pull on the current branch) is unchanged, so the case-pair reads as "global pull vs. cursor-bound pull".
+
+Pull eligibility is decided at keypress time from the ref's `Kind` and `Upstream`:
+
+- Tag → checkout-only (status: `pull skipped: tag has no upstream`). Tags resolve to a detached HEAD with no upstream.
+- Local branch with no upstream → checkout-only (`pull skipped: local branch has no upstream`).
+- Local branch with an upstream → checkout, then pull.
+- Remote-tracking ref → checkout (dwim creates a local tracking branch), then pull.
+
+Dirty working tree handling differs from `enter` / `s`. With `p`, the modal text is `[s] stash & checkout & pull` and `s` chains `stash → checkout → pull → stash pop` automatically — the user's local edits land on top of the freshly-pulled HEAD. Failure modes:
+
+- `pull` conflict: stash pop still runs (the chain treats pop as the final step). Status bar: `pull: CONFLICT — resolve in your terminal; stash preserved at stash@{0}`.
+- `pull` generic failure (transport, auth, non-fast-forward): stash is preserved and pop is **not** attempted. Status bar: `pull failed: <reason>; stash preserved at stash@{0}`. Working tree sits on the new ref's clean state; resolve the pull failure manually and `git stash pop` when ready.
+- `stash pop` conflict (after a successful pull): conflict markers are written into the working tree and the stash entry is preserved. Status bar: `pop conflict — resolve markers and run \`git stash drop\` (stash@{0})`. No modal — the status bar is the only surface, mirroring the policy for `pull` conflicts.

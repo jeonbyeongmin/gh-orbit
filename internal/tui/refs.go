@@ -196,6 +196,12 @@ func (r refModel) clampOffset(rowsLen, vh int) refModel {
 // section-index encoding — refSections owns that detail.
 func (r refModel) LocalRefs() []git.Ref { return r.byKind[0] }
 
+// RemoteRefs returns the cached remote-tracking slice (origin/<branch>
+// entries). The graph Enter evaluator uses it to detect cursor rows
+// carrying only a remote chip — those drive the "checkout local that
+// tracks this remote, then FF" cross-branch path.
+func (r refModel) RemoteRefs() []git.Ref { return r.byKind[1] }
+
 func (r refModel) Selected() (git.Ref, bool) {
 	rows := r.flatRows()
 	i, ok := r.cursorFlatRow(rows)

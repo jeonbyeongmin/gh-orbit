@@ -102,19 +102,27 @@ const helpExpandedHeight = 8
 // the single signal of "pull will be skipped" — the chain commands
 // derive their skip flag from that, no parallel boolean needed.
 //
-// withFF / ffHash flag the graph-Enter FF path (graphActionFF) so the
-// dirty-tree confirm modal can route `s` to stashThenFFCmd instead of
-// stashThenCheckoutCmd. ref then carries the branch name (HEAD's, since
-// FF is a Case 1 op with no checkout step) and ffHash carries the cursor
-// commit MergeFFOnly should advance to. withFF is mutually exclusive
-// with withPull — graph FF and refs `p` originate from different keys.
+// withFF / withCheckoutFF / ffHash flag the graph-Enter FF paths so the
+// dirty-tree confirm modal can route `s` to the right chain. ref carries
+// the local-branch name; ffHash carries the cursor commit MergeFFOnly
+// should advance to.
+//
+//   - withFF: HEAD is already on ref. Modal `s` → stashThenFFCmd
+//     (no checkout step).
+//   - withCheckoutFF: HEAD is on a different branch (cross-branch case
+//     from a remote chip). Modal `s` → stashThenCheckoutThenFFCmd
+//     (checkout ref then FF).
+//
+// Both are mutually exclusive with withPull (different keys originate
+// the chains).
 type pendingCheckout struct {
-	ref        string
-	detached   bool
-	withPull   bool
-	skipReason string
-	withFF     bool
-	ffHash     string
+	ref            string
+	detached       bool
+	withPull       bool
+	skipReason     string
+	withFF         bool
+	withCheckoutFF bool
+	ffHash         string
 }
 
 type Model struct {
@@ -559,6 +567,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = ffLabel(msg.branch, msg.advance) + " …"
 			m.statusStyle = statusBusyS
 			return m, ffOnlyCmd("", msg.branch, msg.hash)
+		case graphActionCheckoutAndFF:
+			m.ffInFlight = true
+			m.status = "fast-forward: " + msg.branch + " (checkout + ff) …"
+			m.statusStyle = statusBusyS
+			return m, checkoutThenFFCmd("", msg.branch, msg.hash)
 		case graphActionDetach:
 			var cmd tea.Cmd
 			m, cmd = m.beginCheckout(msg.hash, true)
@@ -599,6 +612,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingCheckout = pendingCheckout{}
 		m.status = ffLabel(msg.branch, msg.advance) +
 			" (stashed before fast-forward: " + msg.stashLabel + ")"
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case checkoutThenFFSucceededMsg:
+		m.ffInFlight = false
+		m.status = ffLabel(msg.branch, msg.advance) + " (after checkout)"
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case ffCheckoutNeedsCleanTreeMsg:
+		// Modal owns the next decision; release the in-flight gate so
+		// 's' → stashThenCheckoutThenFFCmd can re-arm it without colliding.
+		m.ffInFlight = false
+		m.pendingCheckout = pendingCheckout{
+			ref:            msg.branch,
+			withCheckoutFF: true,
+			ffHash:         msg.hash,
+		}
+		m.mode = viewModeCheckoutConfirm
+		m.status = "checkout+fast-forward: " + msg.branch + " — uncommitted changes"
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case stashThenCheckoutThenFFMsg:
+		m.ffInFlight = false
+		m.pendingCheckout = pendingCheckout{}
+		m.status = ffLabel(msg.branch, msg.advance) +
+			" (stashed before checkout+fast-forward: " + msg.stashLabel + ")"
 		m.statusStyle = statusOkS
 		m.pendingHEADHash = pendingHEADSentinel
 		return m, m.reloadCmd()
@@ -667,6 +710,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.status = "fast-forward: " + p.ref + " (stashing…)"
 					return m, stashThenFFCmd("", p.ref, p.ffHash)
 				}
+				if p.withCheckoutFF {
+					m.ffInFlight = true
+					m.status = "fast-forward: " + p.ref + " (checkout + ff, stashing…)"
+					return m, stashThenCheckoutThenFFCmd("", p.ref, p.ffHash)
+				}
 				m.checkoutInFlight = true
 				if p.withPull {
 					if p.skipReason != "" {
@@ -684,9 +732,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mode = viewModeNormal
 				p := m.pendingCheckout
 				m.pendingCheckout = pendingCheckout{}
-				if p.withFF {
+				switch {
+				case p.withFF, p.withCheckoutFF:
 					m.status = "fast-forward: aborted"
-				} else {
+				default:
 					m.status = "checkout: aborted"
 				}
 				m.statusStyle = statusOkS
@@ -763,11 +812,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusStyle = statusErrS
 				return m, nil
 			}
+			remotes := m.refs.RemoteRefs()
 			m.actionInFlight = true
 			m.status = "→ resolving…"
 			m.statusStyle = statusBusyS
-			log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d)", shortHash(c.Hash), len(locals))
-			return m, evaluateGraphActionCmd("", c.Hash, locals)
+			log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d, remotes=%d)",
+				shortHash(c.Hash), len(locals), len(remotes))
+			return m, evaluateGraphActionCmd("", c.Hash, locals, remotes)
 		case "d":
 			c, ok := m.graph.Selected()
 			if !ok {
@@ -1225,6 +1276,11 @@ func (m Model) renderHelpStatus() string {
 			return confirmPromptS.Render(
 				"Uncommitted changes — fast-forward '" + p.ref +
 					"'? · [s] stash & fast-forward · [a] abort · [esc] cancel",
+			)
+		case p.withCheckoutFF:
+			return confirmPromptS.Render(
+				"Uncommitted changes — checkout '" + p.ref +
+					"' and fast-forward? · [s] stash & checkout & fast-forward · [a] abort · [esc] cancel",
 			)
 		case p.withPull && p.skipReason == "":
 			return confirmPromptS.Render(

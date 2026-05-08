@@ -145,6 +145,35 @@ type stashThenFFMsg struct {
 	stashLabel string
 }
 
+// checkoutThenFFSucceededMsg fires when the cross-branch chain (checkout
+// local + FF to cursor) completed without dirty-tree refusal. branch is
+// the local that was checked out; advance is the +N commit count between
+// the post-checkout tip and the FF target.
+type checkoutThenFFSucceededMsg struct {
+	branch  string
+	advance int
+}
+
+// ffCheckoutNeedsCleanTreeMsg fires when checkoutThenFFCmd's checkout
+// step was refused because the working tree had uncommitted changes
+// git would have to clobber. Distinguished from ffNeedsCleanTreeMsg so
+// the modal's `s` branch knows to chain stash → checkout → FF instead
+// of stash → FF (no checkout step).
+type ffCheckoutNeedsCleanTreeMsg struct {
+	branch string
+	hash   string
+}
+
+// stashThenCheckoutThenFFMsg fires when the dirty-tree `s` branch chained
+// stash → checkout → FF for the cross-branch case. Mirrors stashThenFFMsg
+// in shape; the status text shows "stashed before checkout+fast-forward"
+// so the user knows both steps ran post-stash.
+type stashThenCheckoutThenFFMsg struct {
+	branch     string
+	advance    int
+	stashLabel string
+}
+
 // runFF stamps the +N advance count then invokes `git merge --ff-only`.
 // Shared body between ffOnlyCmd and stashThenFFCmd — the advance is
 // computed before the merge so even an FF rejection can carry the count
@@ -197,6 +226,65 @@ func stashThenFFCmd(dir, branch, hash string) tea.Cmd {
 			return ffFailedMsg{err: err}
 		}
 		return stashThenFFMsg{branch: branch, advance: advance, stashLabel: stashLabelHEAD}
+	}
+}
+
+// checkoutThenFFCmd runs the cross-branch chain: checkout local `branch`,
+// then FF that branch up to `hash`. Used for the Fork "Checkout & Fast
+// Forward" path the graph evaluator emits when the cursor row carries a
+// remote chip whose upstream-tracking local isn't HEAD.
+//
+// Failure routing:
+//   - checkout dirty → ffCheckoutNeedsCleanTreeMsg (modal entry, withCheckoutFF=true)
+//   - checkout other err → ffFailedMsg (chain never advanced past checkout)
+//   - FF err → ffFailedMsg (we're now on the new branch but it didn't advance)
+//   - success → checkoutThenFFSucceededMsg
+func checkoutThenFFCmd(dir, branch, hash string) tea.Cmd {
+	return func() tea.Msg {
+		coCtx, coCancel := context.WithTimeout(context.Background(), checkoutTimeout)
+		coErr := checkoutExec(coCtx, dir, branch)
+		coCancel()
+		if coErr != nil {
+			if errors.Is(coErr, git.ErrCheckoutNeedsCleanTree) {
+				return ffCheckoutNeedsCleanTreeMsg{branch: branch, hash: hash}
+			}
+			return ffFailedMsg{err: coErr}
+		}
+		ffCtx, ffCancel := context.WithTimeout(context.Background(), checkoutTimeout)
+		defer ffCancel()
+		advance, err := runFF(ffCtx, dir, hash)
+		if err != nil {
+			return ffFailedMsg{err: err}
+		}
+		return checkoutThenFFSucceededMsg{branch: branch, advance: advance}
+	}
+}
+
+// stashThenCheckoutThenFFCmd runs the dirty-tree `s` branch of the
+// cross-branch chain: stash → checkout → FF. Same no-auto-pop policy
+// as stashThenCheckoutCmd / stashThenFFCmd — the stash stays at
+// stash@{0} for the user to handle.
+func stashThenCheckoutThenFFCmd(dir, branch, hash string) tea.Cmd {
+	return func() tea.Msg {
+		stCtx, stCancel := context.WithTimeout(context.Background(), checkoutTimeout)
+		stashErr := stashExec(stCtx, dir, "gh-orbit: before checkout+fast-forward "+branch)
+		stCancel()
+		if stashErr != nil {
+			return ffFailedMsg{err: stashErr}
+		}
+		coCtx, coCancel := context.WithTimeout(context.Background(), checkoutTimeout)
+		coErr := checkoutExec(coCtx, dir, branch)
+		coCancel()
+		if coErr != nil {
+			return ffFailedMsg{err: coErr}
+		}
+		ffCtx, ffCancel := context.WithTimeout(context.Background(), checkoutTimeout)
+		defer ffCancel()
+		advance, err := runFF(ffCtx, dir, hash)
+		if err != nil {
+			return ffFailedMsg{err: err}
+		}
+		return stashThenCheckoutThenFFMsg{branch: branch, advance: advance, stashLabel: stashLabelHEAD}
 	}
 }
 

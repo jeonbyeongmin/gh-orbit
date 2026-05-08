@@ -199,13 +199,20 @@ Dirty working tree handling differs from `enter` / `s`. With `p`, the modal text
 | local branch chip 1 (`B`), HEAD elsewhere                          | —                                               | `checkout B`                                                 |
 | local branch chips ≥ 2, HEAD on one of them                        | —                                               | no-op                                                        |
 | local branch chips ≥ 2, HEAD elsewhere                             | —                                               | open `viewModeBranchPicker` → user picks → `checkout`        |
+| no local chip, remote chip with upstream-tracking local `L` (`L` ≠ HEAD) | —                                         | `checkout L` then `git merge --ff-only <cursor>` (cross-branch) |
 | no local chip (mid-commit or remote-only chip)                     | attached, tip is ancestor of cursor (≠ cursor)  | `git merge --ff-only <cursor>` (Case 1, no checkout step)    |
 | no local chip                                                      | detached, **or** not an ancestor of cursor      | `git checkout --detach <cursor>`                             |
 
 Notes:
 
-- Fork's "Checkout & Fast-Forward" emerges naturally — when HEAD is on local `main` and the cursor row carries only an `origin/main` remote chip (no local main chip there because main is behind), the chipless path picks up Case 1 FF on `main`. No explicit "remote-tracking" code path.
+- Fork's "Checkout & Fast-Forward" surfaces in two ways:
+  - Same-branch case: HEAD is on local `main`, cursor row has only an `origin/main` chip → chipless Case 1 FF on `main`. No checkout.
+  - Cross-branch case: HEAD is on `feat/foo`, cursor row has only an `origin/develop` chip whose upstream-tracking local is `develop` → `checkout develop` then `git merge --ff-only <cursor>`. The local-tracker rule excludes HEAD itself so the same-branch case stays in the FF lane.
+- Multiple locals tracking the same upstream: cross-branch picks the alphabetically first. Picker UX is reserved for ambiguous local-chip rows; for cross-branch, the refs panel `p` (checkout + pull) is the explicit-choice escape hatch.
 - `viewModeBranchPicker` is a modal: `j` / `k` move the cursor, `enter` confirms, `esc` cancels. Every other key is swallowed.
 - The decision is computed asynchronously (`evaluateGraphActionCmd`) so the model never blocks Update on git. `actionInFlight` swallows a second Enter while the evaluator is running. A cursor move between Enter dispatch and the evaluator's reply causes the reply to be dropped — re-press Enter on the new row.
-- Dirty working tree handling reuses `viewModeCheckoutConfirm`: the FF path arrives at the modal with `pendingCheckout.withFF=true` so the prompt reads `Uncommitted changes — fast-forward 'main'? · [s] stash & fast-forward · [a] abort · [esc] cancel`. The chain (`stashThenFFCmd`) follows the same no-auto-pop policy as `stashThenCheckoutCmd`.
-- Status surfaces are one-line: `fast-forward: main +3` on success, `fast-forward failed: <reason>` on a generic failure, `already on main` for the no-op path, `branch select cancelled` after esc on the picker.
+- Dirty working tree handling reuses `viewModeCheckoutConfirm` with the matching flag:
+  - `withFF=true` → `[s] stash & fast-forward` (same-branch FF, no checkout step).
+  - `withCheckoutFF=true` → `[s] stash & checkout & fast-forward` (cross-branch chain).
+  All chains follow the no-auto-pop policy of `stashThenCheckoutCmd`.
+- Status surfaces are one-line: `fast-forward: main +3`, `fast-forward: develop +2 (after checkout)`, `fast-forward failed: <reason>`, `already on main`, `branch select cancelled`.

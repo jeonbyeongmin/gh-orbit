@@ -26,7 +26,12 @@ func stubAdvances(t *testing.T, advances map[string]int) {
 
 func runGraphEvaluator(t *testing.T, hash string, locals []git.Ref) graphActionMsg {
 	t.Helper()
-	cmd := evaluateGraphActionCmd("", hash, locals)
+	return runGraphEvaluatorWithRemotes(t, hash, locals, nil)
+}
+
+func runGraphEvaluatorWithRemotes(t *testing.T, hash string, locals, remotes []git.Ref) graphActionMsg {
+	t.Helper()
+	cmd := evaluateGraphActionCmd("", hash, locals, remotes)
 	if cmd == nil {
 		t.Fatal("evaluateGraphActionCmd returned nil")
 	}
@@ -148,24 +153,108 @@ func TestGraphEvaluatorDetachWhenAdvanceZero(t *testing.T) {
 	}
 }
 
-func TestGraphEvaluatorRemoteChipFallsThroughToFF(t *testing.T) {
-	// Cursor row carries only an origin/main remote chip (no local chip
-	// here because local main is on a behind row). HEAD on local main →
-	// natural FF, the Fork "Checkout & Fast Forward" path. Remotes aren't
-	// in the locals slice the evaluator scans, so we just don't include
-	// origin/main — graphaction only consumes locals.
+func TestGraphEvaluatorRemoteChipFallsThroughToFFWhenHeadIsTracker(t *testing.T) {
+	// Cursor row has origin/main; HEAD is local main with Upstream
+	// pointing at origin/main. Cross-branch path skips main (HEAD is the
+	// tracker), so we fall through to plain FF on HEAD's branch.
 	cursor := "iiii"
 	headTip := "aaaa"
 	locals := []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true},
+		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true, Upstream: "origin/main"},
+	}
+	remotes := []git.Ref{
+		{ShortName: "origin/main", Kind: git.RefKindRemote, ObjectName: cursor},
 	}
 	stubAdvances(t, map[string]int{headTip + "->" + cursor: 5})
-	got := runGraphEvaluator(t, cursor, locals)
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
 	if got.kind != graphActionFF {
-		t.Errorf("kind = %v, want FF (remote chip should not block FF path)", got.kind)
+		t.Errorf("kind = %v, want FF (HEAD on tracker → plain FF, not cross-branch)", got.kind)
 	}
 	if got.advance != 5 {
 		t.Errorf("advance = %d, want 5", got.advance)
+	}
+}
+
+func TestGraphEvaluatorRemoteChipDispatchesCrossBranchFF(t *testing.T) {
+	// Cursor row has origin/develop; HEAD is on feat/foo (different
+	// branch). Local develop has Upstream=origin/develop. → checkout
+	// develop + FF (Fork "Checkout & Fast Forward"). No git call needed
+	// for advance — the FF cmd computes it post-checkout.
+	cursor := "jjjj"
+	locals := []git.Ref{
+		{ShortName: "develop", Kind: git.RefKindLocal, ObjectName: "behind", Upstream: "origin/develop"},
+		{ShortName: "feat/foo", Kind: git.RefKindLocal, ObjectName: "feattip", IsHead: true},
+	}
+	remotes := []git.Ref{
+		{ShortName: "origin/develop", Kind: git.RefKindRemote, ObjectName: cursor},
+	}
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
+	if got.kind != graphActionCheckoutAndFF {
+		t.Errorf("kind = %v, want CheckoutAndFF", got.kind)
+	}
+	if got.branch != "develop" {
+		t.Errorf("branch = %q, want develop (the upstream-tracking local)", got.branch)
+	}
+}
+
+func TestGraphEvaluatorCrossBranchPicksAlphabeticalOnMulti(t *testing.T) {
+	// Two locals (develop-backup, develop) both track origin/develop. HEAD
+	// is on feat/foo so neither is HEAD. Pick alphabetical: "develop".
+	cursor := "kkkk"
+	locals := []git.Ref{
+		{ShortName: "develop-backup", Kind: git.RefKindLocal, ObjectName: "x", Upstream: "origin/develop"},
+		{ShortName: "develop", Kind: git.RefKindLocal, ObjectName: "y", Upstream: "origin/develop"},
+		{ShortName: "feat/foo", Kind: git.RefKindLocal, ObjectName: "z", IsHead: true},
+	}
+	remotes := []git.Ref{
+		{ShortName: "origin/develop", Kind: git.RefKindRemote, ObjectName: cursor},
+	}
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
+	if got.kind != graphActionCheckoutAndFF {
+		t.Errorf("kind = %v, want CheckoutAndFF", got.kind)
+	}
+	if got.branch != "develop" {
+		t.Errorf("branch = %q, want develop (alphabetical first)", got.branch)
+	}
+}
+
+func TestGraphEvaluatorCrossBranchFiresEvenWhenHeadDetached(t *testing.T) {
+	// HEAD detached + cursor on origin/develop chip + local develop with
+	// matching upstream → checkout develop + FF. Better UX than detaching
+	// to the cursor commit.
+	cursor := "llll"
+	locals := []git.Ref{
+		// No IsHead=true → detached.
+		{ShortName: "develop", Kind: git.RefKindLocal, ObjectName: "behind", Upstream: "origin/develop"},
+	}
+	remotes := []git.Ref{
+		{ShortName: "origin/develop", Kind: git.RefKindRemote, ObjectName: cursor},
+	}
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
+	if got.kind != graphActionCheckoutAndFF {
+		t.Errorf("kind = %v, want CheckoutAndFF (detached HEAD should still cross-branch)", got.kind)
+	}
+	if got.branch != "develop" {
+		t.Errorf("branch = %q, want develop", got.branch)
+	}
+}
+
+func TestGraphEvaluatorRemoteChipWithoutTrackerFallsThroughToDetach(t *testing.T) {
+	// Cursor has origin/dangling chip but no local has Upstream pointing
+	// to it. No cross-branch candidate. HEAD is on feat/foo, advance = 0
+	// (cursor not descendant of feat/foo) → detach.
+	cursor := "mmmm"
+	headTip := "aaaa"
+	locals := []git.Ref{
+		{ShortName: "feat/foo", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true},
+	}
+	remotes := []git.Ref{
+		{ShortName: "origin/dangling", Kind: git.RefKindRemote, ObjectName: cursor},
+	}
+	stubAdvances(t, map[string]int{headTip + "->" + cursor: 0})
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
+	if got.kind != graphActionDetach {
+		t.Errorf("kind = %v, want Detach", got.kind)
 	}
 }
 

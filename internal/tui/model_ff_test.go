@@ -441,6 +441,122 @@ func TestCheckoutConfirmStashWithFFRunsStashThenFFChain(t *testing.T) {
 	}
 }
 
+func TestGraphActionMsgCheckoutAndFFDispatchesCheckoutThenFF(t *testing.T) {
+	var coCalled, ffCalled bool
+	withChainStubs(t, chainStubs{
+		checkout:    func(context.Context, string, string) error { coCalled = true; return nil },
+		mergeFFOnly: func(context.Context, string, string) error { ffCalled = true; return nil },
+		countAhead:  func(context.Context, string, string, string) (int, error) { return 2, nil },
+	})
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m = seedGraphCursor(t, m, "abc1234")
+	m.actionInFlight = true
+
+	updated, cmd := m.Update(graphActionMsg{
+		hash: "abc1234", kind: graphActionCheckoutAndFF, branch: "develop",
+	})
+	m = updated.(Model)
+	if !m.ffInFlight {
+		t.Error("CheckoutAndFF should latch ffInFlight")
+	}
+	if !strings.Contains(m.status, "checkout + ff") {
+		t.Errorf("status = %q, want it to mention 'checkout + ff'", m.status)
+	}
+	if cmd == nil {
+		t.Fatal("CheckoutAndFF should return a cmd")
+	}
+	_ = cmd()
+	if !coCalled || !ffCalled {
+		t.Errorf("co=%v ff=%v, want both true", coCalled, ffCalled)
+	}
+}
+
+func TestFFCheckoutNeedsCleanTreeEntersConfirmModalWithCheckoutFF(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.ffInFlight = true
+
+	updated, cmd := m.Update(ffCheckoutNeedsCleanTreeMsg{branch: "develop", hash: "abc1234"})
+	m = updated.(Model)
+	if m.ffInFlight {
+		t.Error("ffCheckoutNeedsCleanTreeMsg should release ffInFlight")
+	}
+	if m.mode != viewModeCheckoutConfirm {
+		t.Errorf("mode = %v, want viewModeCheckoutConfirm", m.mode)
+	}
+	if !m.pendingCheckout.withCheckoutFF {
+		t.Errorf("pendingCheckout = %+v, want withCheckoutFF=true", m.pendingCheckout)
+	}
+	if m.pendingCheckout.ref != "develop" || m.pendingCheckout.ffHash != "abc1234" {
+		t.Errorf("pendingCheckout = %+v, want ref=develop ffHash=abc1234", m.pendingCheckout)
+	}
+	if cmd != nil {
+		t.Error("modal entry should not dispatch a cmd")
+	}
+}
+
+func TestCheckoutConfirmStashWithCheckoutFFRunsChain(t *testing.T) {
+	var stCalled, coCalled, ffCalled bool
+	withChainStubs(t, chainStubs{
+		stash:       func(context.Context, string, string) error { stCalled = true; return nil },
+		checkout:    func(context.Context, string, string) error { coCalled = true; return nil },
+		mergeFFOnly: func(context.Context, string, string) error { ffCalled = true; return nil },
+		countAhead:  func(context.Context, string, string, string) (int, error) { return 1, nil },
+	})
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeCheckoutConfirm
+	m.pendingCheckout = pendingCheckout{ref: "develop", withCheckoutFF: true, ffHash: "abc1234"}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Errorf("mode = %v, want viewModeNormal after s", m.mode)
+	}
+	if !m.ffInFlight {
+		t.Error("modal s on withCheckoutFF should latch ffInFlight (not checkoutInFlight)")
+	}
+	if m.checkoutInFlight {
+		t.Error("modal s on withCheckoutFF should NOT latch checkoutInFlight")
+	}
+	if cmd == nil {
+		t.Fatal("modal s should return stashThenCheckoutThenFFCmd")
+	}
+	_ = cmd()
+	if !stCalled || !coCalled || !ffCalled {
+		t.Errorf("st=%v co=%v ff=%v, want all true", stCalled, coCalled, ffCalled)
+	}
+}
+
+func TestCheckoutThenFFSucceededMsgReloadsAndJumpsHEAD(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.ffInFlight = true
+
+	updated, cmd := m.Update(checkoutThenFFSucceededMsg{branch: "develop", advance: 2})
+	m = updated.(Model)
+	if m.ffInFlight {
+		t.Error("checkoutThenFFSucceededMsg should release ffInFlight")
+	}
+	if !strings.Contains(m.status, "fast-forward: develop +2") {
+		t.Errorf("status = %q, want '+2' advance", m.status)
+	}
+	if !strings.Contains(m.status, "after checkout") {
+		t.Errorf("status = %q, want it to mention 'after checkout'", m.status)
+	}
+	if m.pendingHEADHash != pendingHEADSentinel {
+		t.Errorf("pendingHEADHash = %q, want sentinel", m.pendingHEADHash)
+	}
+	if cmd == nil {
+		t.Fatal("checkoutThenFFSucceededMsg should dispatch reload cmd")
+	}
+}
+
 func TestStashThenFFMsgReloadsAndJumpsHEAD(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

@@ -10,7 +10,7 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
-// graphActionKind partitions the five outcomes of pressing Enter on the
+// graphActionKind partitions the six outcomes of pressing Enter on the
 // graph pane. The evaluator (evaluateGraphActionCmd) decides which kind
 // applies; the model's graphActionMsg handler dispatches to the matching
 // command (or modal mode).
@@ -32,9 +32,16 @@ const (
 	// (mid-commit or remote-only) and HEAD's tip is a strict ancestor of
 	// the cursor commit. Drives ffOnlyCmd to advance HEAD's branch.
 	graphActionFF
+	// graphActionCheckoutAndFF fires for the cross-branch case: cursor
+	// row has a remote chip (e.g., origin/develop) whose upstream-tracking
+	// local (e.g., develop) is NOT HEAD. Drives checkoutThenFFCmd —
+	// checkout the local then FF it to the cursor. Fork's "Checkout & Fast
+	// Forward" intent, made explicit instead of relying on the chipless
+	// FF path to coincidentally do the right thing.
+	graphActionCheckoutAndFF
 	// graphActionDetach fires when none of the above apply: no chip and
-	// either HEAD detached or HEAD not an ancestor of cursor. Drives
-	// CheckoutDetached on the cursor hash.
+	// either HEAD detached + no cross-branch candidate, or HEAD not an
+	// ancestor of cursor. Drives CheckoutDetached on the cursor hash.
 	graphActionDetach
 )
 
@@ -68,17 +75,23 @@ type branchPickerState struct {
 
 // evaluateGraphActionCmd runs the full Enter decision tree on a goroutine
 // so the model's Update never blocks on git. The decision splits into
-// chip-driven (Checkout / Picker / NoOp) and chipless (FF / Detach)
-// halves; only the chipless half ever invokes git, and only once
-// (CountAhead). HEAD info and chips are gathered in a single pass over
-// the locals slice.
+// chip-driven (Checkout / Picker / NoOp) and chipless (CheckoutAndFF /
+// FF / Detach) halves; only the chipless half ever invokes git, and only
+// once (CountAhead). HEAD info and local chips are gathered in a single
+// pass over the locals slice.
 //
-// A detached HEAD shows as "no ref with IsHead=true" → empty headBranch
-// → chipless detach. Divergent cursor (HEAD shares an ancestor but
-// neither is reachable from the other) is dispatched as FF and surfaces
-// as ffFailedMsg with ErrFFNotPossible — by design, so the user sees the
-// rejection reason instead of a silent detach.
-func evaluateGraphActionCmd(dir, hash string, locals []git.Ref) tea.Cmd {
+// Chipless precedence: a remote chip whose upstream-tracking local isn't
+// HEAD wins (Fork's "Checkout & Fast Forward" — go to that local and
+// advance it). Otherwise fall back to advancing HEAD's branch, or a
+// final detach.
+//
+// A detached HEAD shows as "no ref with IsHead=true" → empty headBranch.
+// Cross-branch can still fire then (Enter on origin/develop while
+// detached → checkout local develop + FF). Divergent cursor (HEAD shares
+// an ancestor but neither is reachable from the other) dispatches as FF
+// and surfaces as ffFailedMsg with ErrFFNotPossible — by design, so the
+// user sees the rejection reason instead of a silent detach.
+func evaluateGraphActionCmd(dir, hash string, locals, remotes []git.Ref) tea.Cmd {
 	return func() tea.Msg {
 		var headBranch, headHash string
 		var chips []string
@@ -107,6 +120,15 @@ func evaluateGraphActionCmd(dir, hash string, locals []git.Ref) tea.Cmd {
 			return graphActionMsg{hash: hash, kind: graphActionPicker, candidates: chips}
 		}
 
+		// Cross-branch path: cursor row carries a remote chip whose
+		// upstream-tracking local is something other than HEAD. Pick the
+		// alphabetically first matching local — picker for cross-branch is
+		// out of scope (rare; refs panel `p` still works for explicit choice).
+		if crossBranch := findCrossBranchTarget(hash, locals, remotes, headBranch); crossBranch != "" {
+			log.Printf("graph enter: checkout+ff (%s → %s)", crossBranch, shortHash(hash))
+			return graphActionMsg{hash: hash, kind: graphActionCheckoutAndFF, branch: crossBranch}
+		}
+
 		if headBranch == "" || headHash == "" {
 			log.Printf("graph enter: detach (no HEAD branch in locals; HEAD likely detached)")
 			return graphActionMsg{hash: hash, kind: graphActionDetach}
@@ -127,4 +149,29 @@ func evaluateGraphActionCmd(dir, hash string, locals []git.Ref) tea.Cmd {
 			headBranch, advance, shortHash(headHash), shortHash(hash))
 		return graphActionMsg{hash: hash, kind: graphActionFF, branch: headBranch, advance: advance}
 	}
+}
+
+// findCrossBranchTarget returns the local branch name to checkout-and-FF
+// when the cursor row has only remote chips. For each remote chip on the
+// cursor row, we look for a local whose Upstream points at that remote;
+// HEAD's own branch is excluded so the chipless FF path can handle "FF
+// my own branch" without going through the cross-branch chain. Multiple
+// candidates are resolved alphabetically — the picker UX is reserved for
+// multi-local-chip rows where the choice is genuinely ambiguous.
+func findCrossBranchTarget(hash string, locals, remotes []git.Ref, headBranch string) string {
+	var picked string
+	for _, r := range remotes {
+		if r.ObjectName != hash {
+			continue
+		}
+		for _, l := range locals {
+			if l.Upstream != r.ShortName || l.ShortName == headBranch {
+				continue
+			}
+			if picked == "" || l.ShortName < picked {
+				picked = l.ShortName
+			}
+		}
+	}
+	return picked
 }

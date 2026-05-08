@@ -128,3 +128,104 @@ func TestStashThenFFCmdStashFailureBlocksFF(t *testing.T) {
 		t.Errorf("err = %v, want chain to include %v", got.err, boom)
 	}
 }
+
+func TestCheckoutThenFFCmdSuccess(t *testing.T) {
+	var coRan, ffRan bool
+	var coBranch, ffHash string
+	withChainStubs(t, chainStubs{
+		checkout: func(_ context.Context, _, branch string) error {
+			coRan = true
+			coBranch = branch
+			return nil
+		},
+		mergeFFOnly: func(_ context.Context, _, hash string) error {
+			ffRan = true
+			ffHash = hash
+			if !coRan {
+				t.Error("FF ran before checkout")
+			}
+			return nil
+		},
+		countAhead: func(context.Context, string, string, string) (int, error) { return 4, nil },
+	})
+
+	msg := checkoutThenFFCmd("", "develop", "abc1234")()
+	if !coRan || !ffRan {
+		t.Errorf("co=%v ff=%v, want both true", coRan, ffRan)
+	}
+	if coBranch != "develop" || ffHash != "abc1234" {
+		t.Errorf("checkout branch=%q ff hash=%q, want develop/abc1234", coBranch, ffHash)
+	}
+	got, ok := msg.(checkoutThenFFSucceededMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want checkoutThenFFSucceededMsg", msg)
+	}
+	if got.branch != "develop" || got.advance != 4 {
+		t.Errorf("got = %+v, want {develop 4}", got)
+	}
+}
+
+func TestCheckoutThenFFCmdDirtyTreeRoutesToFFCheckoutNeedsCleanTree(t *testing.T) {
+	withChainStubs(t, chainStubs{
+		checkout: func(context.Context, string, string) error {
+			return fmt.Errorf("git checkout: %w", git.ErrCheckoutNeedsCleanTree)
+		},
+		mergeFFOnly: func(context.Context, string, string) error { return nil },
+		countAhead:  func(context.Context, string, string, string) (int, error) { return 0, nil },
+	})
+
+	msg := checkoutThenFFCmd("", "develop", "abc1234")()
+	got, ok := msg.(ffCheckoutNeedsCleanTreeMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want ffCheckoutNeedsCleanTreeMsg", msg)
+	}
+	if got.branch != "develop" || got.hash != "abc1234" {
+		t.Errorf("got = %+v, want {develop abc1234}", got)
+	}
+}
+
+func TestCheckoutThenFFCmdFFFailureSurfaces(t *testing.T) {
+	boom := fmt.Errorf("git merge --ff-only: %w", git.ErrFFNotPossible)
+	withChainStubs(t, chainStubs{
+		checkout:    func(context.Context, string, string) error { return nil },
+		mergeFFOnly: func(context.Context, string, string) error { return boom },
+		countAhead:  func(context.Context, string, string, string) (int, error) { return 0, nil },
+	})
+
+	msg := checkoutThenFFCmd("", "develop", "abc1234")()
+	got, ok := msg.(ffFailedMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want ffFailedMsg", msg)
+	}
+	if !errors.Is(got.err, git.ErrFFNotPossible) {
+		t.Errorf("err = %v, want ErrFFNotPossible chain", got.err)
+	}
+}
+
+func TestStashThenCheckoutThenFFCmdSuccess(t *testing.T) {
+	var stRan, coRan, ffRan bool
+	withChainStubs(t, chainStubs{
+		stash:    func(context.Context, string, string) error { stRan = true; return nil },
+		checkout: func(context.Context, string, string) error { coRan = true; return nil },
+		mergeFFOnly: func(context.Context, string, string) error {
+			ffRan = true
+			if !stRan || !coRan {
+				t.Error("FF ran before stash/checkout")
+			}
+			return nil
+		},
+		countAhead: func(context.Context, string, string, string) (int, error) { return 2, nil },
+	})
+
+	msg := stashThenCheckoutThenFFCmd("", "develop", "abc1234")()
+	if !stRan || !coRan || !ffRan {
+		t.Errorf("st=%v co=%v ff=%v, want all true", stRan, coRan, ffRan)
+	}
+	got, ok := msg.(stashThenCheckoutThenFFMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want stashThenCheckoutThenFFMsg", msg)
+	}
+	if got.advance != 2 || got.stashLabel != stashLabelHEAD {
+		t.Errorf("got = %+v, want advance=2 stashLabel=%q", got, stashLabelHEAD)
+	}
+}

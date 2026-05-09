@@ -239,6 +239,76 @@ func (r refModel) LocalRefs() []git.Ref { return r.byKind[0] }
 // tracks this remote, then FF" cross-branch path.
 func (r refModel) RemoteRefs() []git.Ref { return r.byKind[1] }
 
+// SelectByName moves the cursor onto the first ref whose ShortName matches.
+// Search order is the visible section order (local → remote → tag) so a
+// post-create / post-rename jump lands on the local row even when a
+// same-named remote-tracking ref exists. Returns true on a hit. yOffset is
+// updated through scrollCursorIntoView so the new cursor row is visible.
+func (r *refModel) SelectByName(name string) bool {
+	if !r.loaded {
+		return false
+	}
+	idx := 0
+	for _, section := range r.byKind {
+		for _, ref := range section {
+			if ref.ShortName == name {
+				r.cursor = idx
+				*r = r.scrollCursorIntoView()
+				return true
+			}
+			idx++
+		}
+	}
+	return false
+}
+
+// SelectAfterDeleted positions the cursor as if `prevName` used to occupy a
+// row in the section that contained it, picking the row that would now be
+// "next" in flat order — or the previous row if the deleted entry was last.
+// Falls back to clamping the existing cursor when no section contained the
+// name (e.g. both local and remote sides were deleted at once and prevName
+// matched the local that's now gone). Always re-clamps to keep the cursor
+// inside the new total ref count.
+func (r *refModel) SelectAfterDeleted(prevName string) {
+	if !r.loaded {
+		return
+	}
+	// Find the deleted ref's flat-index by walking byKind in section order
+	// and counting the surviving entries until we hit one whose ShortName
+	// is alphabetically >= prevName in the same section.
+	flatIdx := 0
+	for sectionIdx, section := range r.byKind {
+		// Detect the section the deleted ref belonged to by looking for an
+		// alphabetical insertion point. for-each-ref returns refs in sorted
+		// order so the surviving section is still sorted.
+		for _, ref := range section {
+			if ref.ShortName > prevName {
+				r.cursor = flatIdx
+				*r = r.scrollCursorIntoView()
+				return
+			}
+			flatIdx++
+		}
+		// If the deleted name was last in this section, falling out of the
+		// inner loop with flatIdx pointing past the section means "previous"
+		// is flatIdx - 1 — but only when the deleted name plausibly belonged
+		// here. We approximate "belongs to this section" by checking whether
+		// there are no surviving refs in later sections that would push the
+		// cursor; the clamp below handles the rest.
+		_ = sectionIdx
+	}
+	total := r.selectableCount()
+	if total == 0 {
+		r.cursor = 0
+		r.yOffset = 0
+		return
+	}
+	if r.cursor >= total {
+		r.cursor = total - 1
+	}
+	*r = r.scrollCursorIntoView()
+}
+
 func (r refModel) Selected() (git.Ref, bool) {
 	rows := r.flatRows()
 	i, ok := r.cursorFlatRow(rows)

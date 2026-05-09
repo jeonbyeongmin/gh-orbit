@@ -346,6 +346,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.refs, cmd = m.refs.Update(msg)
+		// Apply pending refs cursor jumps after the model has the new ref
+		// list. SelectByName / SelectAfterDeleted are no-ops on a load
+		// failure (refs.loaded stays false), so the order is safe.
+		if name := m.pendingRefCursorName; name != "" {
+			m.refs.SelectByName(name)
+			m.pendingRefCursorName = ""
+		}
+		if name := m.pendingRefCursorAfterDelete; name != "" {
+			m.refs.SelectAfterDeleted(name)
+			m.pendingRefCursorAfterDelete = ""
+		}
 		return m, cmd
 
 	case refCheckoutRequestedMsg:

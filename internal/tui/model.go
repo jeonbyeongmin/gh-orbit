@@ -864,11 +864,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "j", "down":
 				if m.branchPicker.cursor < len(m.branchPicker.candidates)-1 {
 					m.branchPicker.cursor++
+					m.branchPicker.scrollIntoView(branchPickerVisibleRows(m.height, len(m.branchPicker.candidates)))
 				}
 				return m, nil
 			case "k", "up":
 				if m.branchPicker.cursor > 0 {
 					m.branchPicker.cursor--
+					m.branchPicker.scrollIntoView(branchPickerVisibleRows(m.height, len(m.branchPicker.candidates)))
 				}
 				return m, nil
 			case "enter":

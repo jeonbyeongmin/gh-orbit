@@ -77,6 +77,16 @@ const (
 	// chips at the cursor row (graphActionPicker). The 3-pane layout stays
 	// visible underneath; only j/k/enter/esc are accepted while open.
 	viewModeBranchPicker
+	// viewModeRefNameInput hosts the create / rename name-entry modal. The
+	// 3-pane layout stays visible above; only the bottom panel takes typed
+	// keys via bubbles/textinput. Enter validates with check-ref-format and
+	// dispatches the create or rename cmd; esc cancels.
+	viewModeRefNameInput
+	// viewModeRefDeleteConfirm hosts the 4-axis delete confirm modal. The
+	// hint row's available keys depend on whether a matching local +
+	// remote pair exists for the cursor — y/Y/f/F covers the local+remote
+	// matrix; remote-only cursors show just y. esc cancels.
+	viewModeRefDeleteConfirm
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
@@ -201,6 +211,29 @@ type Model struct {
 	// esc / enter; the picker reads candidates+cursor while open and
 	// dispatches a graph-Enter checkout on enter.
 	branchPicker branchPickerState
+	// refNameInput backs viewModeRefNameInput (create / rename modal).
+	// Reset to the zero value on esc / success; while open the textinput
+	// owns key routing for typed characters and the model handles
+	// enter / esc / validation.
+	refNameInput refNameInputState
+	// pendingRefDelete backs viewModeRefDeleteConfirm. Stamped on `d`
+	// keypress with the cursor's local/remote matching state so the modal
+	// renderer + key router can branch off the flags without re-deriving
+	// from refs.
+	pendingRefDelete refDeleteState
+	// pendingRefCursorName carries the new ref name across a refs reload
+	// after create / rename success so the post-reload refsLoadedMsg can
+	// move the cursor onto the new row. Empty string means no jump.
+	pendingRefCursorName string
+	// pendingRefCursorAfterDelete carries the deleted ref name across a
+	// refs reload after delete success so the cursor lands on the next
+	// (or previous, if last) ref in the same section. Empty string means
+	// no adjustment.
+	pendingRefCursorAfterDelete string
+	// refActionInFlight gates the n / d / m keys while a branch-write cmd
+	// is running. Distinct from checkoutInFlight so a stuck refs write
+	// can't deadlock checkout / pull / FF chains.
+	refActionInFlight bool
 }
 
 func New() Model {
@@ -1082,6 +1115,10 @@ func (m Model) paneSizes() paneSizes {
 		helpReserved = m.helpReservedRows()
 	case viewModeBranchPicker:
 		helpReserved = m.branchPickerReservedRows()
+	case viewModeRefNameInput:
+		helpReserved = m.refNameInputReservedRows()
+	case viewModeRefDeleteConfirm:
+		helpReserved = m.refDeleteConfirmReservedRows()
 	}
 	mainH := m.height - helpReserved
 	if mainH < 1 {
@@ -1158,6 +1195,31 @@ func (m Model) branchPickerReservedRows() int {
 	want := len(m.branchPicker.candidates) + 2
 	if want < 3 {
 		want = 3
+	}
+	if upper := m.height - 3; upper > 0 {
+		want = min(want, upper)
+	}
+	return max(want, 1)
+}
+
+// refNameInputReservedRows returns the bottom-row budget for the create /
+// rename modal: header + textinput + (inlineErr|spacer) + hint = 4. Floor 1
+// matches the other panels.
+func (m Model) refNameInputReservedRows() int {
+	want := 4
+	if upper := m.height - 3; upper > 0 {
+		want = min(want, upper)
+	}
+	return max(want, 1)
+}
+
+// refDeleteConfirmReservedRows returns the bottom-row budget for the delete
+// confirm modal. The unmerged hint row is conditional: 3 rows without it
+// (header + sub-header + hint), 4 with it.
+func (m Model) refDeleteConfirmReservedRows() int {
+	want := 3
+	if m.pendingRefDelete.unmerged {
+		want = 4
 	}
 	if upper := m.height - 3; upper > 0 {
 		want = min(want, upper)

@@ -9,10 +9,55 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
+
+// refNameInputMode distinguishes which action the modal will dispatch on
+// Enter. The two modes share the same input + validation flow but route to
+// different cmds; keeping them on a single state struct lets the bottom
+// panel render with one renderer.
+type refNameInputMode int
+
+const (
+	refNameInputCreate refNameInputMode = iota
+	refNameInputRename
+)
+
+// refNameInputState backs viewModeRefNameInput. The struct survives across
+// the validating async hop: the model arms validating=true on Enter so a
+// second Enter while the check-ref-format process is in flight is swallowed
+// (mirrors actionInFlight gating on graph Enter). inlineErr is the modal's
+// own error line — populated either by validation failure or by a server-
+// side rejection that needs the user to fix the typed value before retrying.
+type refNameInputState struct {
+	mode      refNameInputMode
+	target    git.Ref // rename: the source ref. create: zero value.
+	base      string  // create only: resolved hash or HEAD ("" → HEAD).
+	baseLabel string  // create only: short label shown to the user.
+	input     textinput.Model
+	inlineErr string
+	validating bool
+}
+
+// refDeleteState backs viewModeRefDeleteConfirm. The four flags below decide
+// which keys the modal accepts and what label the renderer shows; the model
+// stamps them when entering the modal so subsequent key handling stays
+// branchless. lastScope preserves the user's prior choice across an unmerged
+// rejection so re-entering the modal reads "press [f] or [F] to force" while
+// still letting the user pick either force pair.
+type refDeleteState struct {
+	target       git.Ref
+	localName    string
+	remote       string // e.g. "origin"; empty when hasRemote is false.
+	remoteBranch string // e.g. "feat/foo"; empty when hasRemote is false.
+	hasLocal     bool
+	hasRemote    bool
+	unmerged     bool
+	lastScope    deleteScope
+}
 
 // Package-level seams over git.* — same rationale as checkout.go's set.
 // Tests inject in-memory stubs by reassigning these in t.Cleanup'd helpers.

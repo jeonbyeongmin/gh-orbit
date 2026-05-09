@@ -1259,6 +1259,100 @@ func (m Model) renderBranchPicker(width, height int) string {
 	return strings.Join(rendered, "\n")
 }
 
+// renderRefNameInput draws the create / rename modal: a header row naming
+// the action, the textinput's view (one row), an optional inline-error row
+// (or a blank spacer when there is none — keeps row count constant so the
+// hint doesn't bounce as the user types/clears), and a trailing hint row.
+func (m Model) renderRefNameInput(width, height int) string {
+	if width < 1 || height < 1 {
+		return ""
+	}
+	var header string
+	switch m.refNameInput.mode {
+	case refNameInputCreate:
+		base := m.refNameInput.baseLabel
+		if base == "" {
+			base = "HEAD"
+		}
+		header = "[Create branch from '" + base + "']"
+	case refNameInputRename:
+		header = "[Rename '" + m.refNameInput.target.ShortName + "' →]"
+	}
+
+	inputView := m.refNameInput.input.View()
+
+	errLine := " "
+	if m.refNameInput.inlineErr != "" {
+		errLine = statusErrS.Render(m.refNameInput.inlineErr)
+	} else if m.refNameInput.validating {
+		errLine = statusBusyS.Render("validating…")
+	}
+
+	hint := "[enter] confirm · [esc] cancel"
+
+	lines := []string{header, inputView, errLine, hint}
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	rendered := make([]string, len(lines))
+	for i, ln := range lines {
+		rendered[i] = fitHelpLine(ln, width)
+	}
+	return strings.Join(rendered, "\n")
+}
+
+// renderRefDeleteConfirm draws the delete confirm modal. The hint row's
+// available keys depend on hasLocal × hasRemote so the user only ever sees
+// keys that will actually fire. unmerged adds a "use [f] or [F] to force"
+// callout above the hint.
+func (m Model) renderRefDeleteConfirm(width, height int) string {
+	if width < 1 || height < 1 {
+		return ""
+	}
+	d := m.pendingRefDelete
+
+	var header, sub string
+	switch {
+	case d.hasLocal && d.hasRemote:
+		header = "Delete branch '" + d.localName + "'?"
+		sub = "(matched remote: '" + d.remote + "/" + d.remoteBranch + "')"
+	case d.hasLocal:
+		header = "Delete branch '" + d.localName + "'? (no upstream)"
+	default: // remote only
+		header = "Delete remote-tracking '" + d.remote + "/" + d.remoteBranch + "'?"
+		sub = "(no matching local — remote ref will be deleted on '" + d.remote + "')"
+	}
+
+	var hint string
+	switch {
+	case d.hasLocal && d.hasRemote:
+		hint = "[y] local · [Y] local+remote · [f] force local · [F] force local+remote · [esc] cancel"
+	case d.hasLocal:
+		hint = "[y] delete · [f] force delete · [esc] cancel"
+	default:
+		hint = "[y] delete remote · [esc] cancel"
+	}
+
+	var lines []string
+	lines = append(lines, confirmPromptS.Render(header))
+	if sub != "" {
+		lines = append(lines, statusOkS.Render(sub))
+	}
+	if d.unmerged {
+		lines = append(lines, statusErrS.Render("(unmerged) — use [f] or [F] to force delete local"))
+	}
+	lines = append(lines, hint)
+
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	rendered := make([]string, len(lines))
+	for i, ln := range lines {
+		rendered[i] = fitHelpLine(ln, width)
+	}
+	return strings.Join(rendered, "\n")
+}
+
 var (
 	borderUnfocused = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -1364,6 +1458,12 @@ func (m Model) renderHelpStatus() string {
 	}
 	if m.mode == viewModeBranchPicker {
 		return m.renderBranchPicker(m.width, m.branchPickerReservedRows())
+	}
+	if m.mode == viewModeRefNameInput {
+		return m.renderRefNameInput(m.width, m.refNameInputReservedRows())
+	}
+	if m.mode == viewModeRefDeleteConfirm {
+		return m.renderRefDeleteConfirm(m.width, m.refDeleteConfirmReservedRows())
 	}
 	if m.mode == viewModeHelp {
 		return renderHelpPanel(m.width, m.helpReservedRows())

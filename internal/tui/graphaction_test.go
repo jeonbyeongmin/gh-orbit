@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -331,5 +332,51 @@ func TestGraphEvaluatorEchoesHash(t *testing.T) {
 	got := runGraphEvaluator(t, hash, locals)
 	if got.hash != hash {
 		t.Errorf("hash = %q, want %q (evaluator must echo for stale-drop)", got.hash, hash)
+	}
+}
+
+// TestBranchPickerInnerScroll seeds the picker with more candidates than
+// fit in the visible window and walks the cursor down past the cap. The
+// viewportTop must slide so the cursor stays in view.
+func TestBranchPickerInnerScroll(t *testing.T) {
+	const screenH = 30
+	const candCount = 25
+	visible := branchPickerVisibleRows(screenH, candCount)
+	if visible <= 0 || visible >= candCount {
+		t.Fatalf("branchPickerVisibleRows(%d, %d) = %d, want a strict subset", screenH, candCount, visible)
+	}
+
+	s := branchPickerState{}
+	s.candidates = make([]string, candCount)
+	for i := range s.candidates {
+		s.candidates[i] = fmt.Sprintf("branch-%02d", i)
+	}
+
+	// Cursor inside the initial window — viewportTop must stay 0.
+	s.cursor = visible - 1
+	s.scrollIntoView(visible)
+	if s.viewportTop != 0 {
+		t.Errorf("cursor=%d viewportTop=%d, want 0 (last in initial window)", s.cursor, s.viewportTop)
+	}
+
+	// Cursor moves below the bottom of the window — viewportTop slides.
+	s.cursor = visible
+	s.scrollIntoView(visible)
+	if s.viewportTop != 1 {
+		t.Errorf("cursor=%d viewportTop=%d, want 1 (one past the window)", s.cursor, s.viewportTop)
+	}
+
+	// Cursor at the end — viewportTop = candCount - visible.
+	s.cursor = candCount - 1
+	s.scrollIntoView(visible)
+	if s.viewportTop != candCount-visible {
+		t.Errorf("cursor=%d viewportTop=%d, want %d (last candidate)", s.cursor, s.viewportTop, candCount-visible)
+	}
+
+	// Walk back to the top — viewportTop must follow the cursor up.
+	s.cursor = 0
+	s.scrollIntoView(visible)
+	if s.viewportTop != 0 {
+		t.Errorf("cursor=0 viewportTop=%d, want 0 (back to top)", s.viewportTop)
 	}
 }

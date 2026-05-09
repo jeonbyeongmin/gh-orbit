@@ -263,40 +263,50 @@ func (r *refModel) SelectByName(name string) bool {
 }
 
 // SelectAfterDeleted positions the cursor as if `prevName` used to occupy a
-// row in the section that contained it, picking the row that would now be
-// "next" in flat order — or the previous row if the deleted entry was last.
-// Falls back to clamping the existing cursor when no section contained the
-// name (e.g. both local and remote sides were deleted at once and prevName
-// matched the local that's now gone). Always re-clamps to keep the cursor
-// inside the new total ref count.
-func (r *refModel) SelectAfterDeleted(prevName string) {
+// row in the section identified by `kind`, picking the row that would now
+// be "next" in flat order — or the previous row if the deleted entry was
+// last in that section. Scoping to a single section is necessary so the
+// cursor doesn't bleed into a neighboring section just because that
+// section's first entry happens to sort alphabetically after `prevName`.
+func (r *refModel) SelectAfterDeleted(prevName string, kind git.RefKind) {
 	if !r.loaded {
 		return
 	}
-	// Find the deleted ref's flat-index by walking byKind in section order
-	// and counting the surviving entries until we hit one whose ShortName
-	// is alphabetically >= prevName in the same section.
-	flatIdx := 0
-	for sectionIdx, section := range r.byKind {
-		// Detect the section the deleted ref belonged to by looking for an
-		// alphabetical insertion point. for-each-ref returns refs in sorted
-		// order so the surviving section is still sorted.
-		for _, ref := range section {
-			if ref.ShortName > prevName {
-				r.cursor = flatIdx
-				*r = r.scrollCursorIntoView()
-				return
-			}
-			flatIdx++
+	sectionIdx := -1
+	for i, sec := range refSections {
+		if sec.kind == kind {
+			sectionIdx = i
+			break
 		}
-		// If the deleted name was last in this section, falling out of the
-		// inner loop with flatIdx pointing past the section means "previous"
-		// is flatIdx - 1 — but only when the deleted name plausibly belonged
-		// here. We approximate "belongs to this section" by checking whether
-		// there are no surviving refs in later sections that would push the
-		// cursor; the clamp below handles the rest.
-		_ = sectionIdx
 	}
+	if sectionIdx == -1 {
+		return
+	}
+	// Walk to the start of the matching section in flat-row space.
+	flatIdx := 0
+	for i := 0; i < sectionIdx; i++ {
+		flatIdx += len(r.byKind[i])
+	}
+	// Inside the section, take the alphabetical insertion point of prevName.
+	// for-each-ref already returned refs sorted, so the surviving section
+	// stays sorted.
+	section := r.byKind[sectionIdx]
+	for _, ref := range section {
+		if ref.ShortName > prevName {
+			r.cursor = flatIdx
+			*r = r.scrollCursorIntoView()
+			return
+		}
+		flatIdx++
+	}
+	// prevName was last in its section. Step back one row when possible so
+	// the cursor stays in the same section instead of jumping forward.
+	if len(section) > 0 {
+		r.cursor = flatIdx - 1
+		*r = r.scrollCursorIntoView()
+		return
+	}
+	// Section emptied entirely — clamp to the new total.
 	total := r.selectableCount()
 	if total == 0 {
 		r.cursor = 0

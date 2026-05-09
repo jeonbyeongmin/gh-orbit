@@ -57,7 +57,7 @@ func TestBranchCreateCmdSucceeds(t *testing.T) {
 			return nil
 		},
 	})
-	msg := branchCreateCmd("dir", "feat/foo", "abc1234", "abc1234")()
+	msg := branchCreateCmd("dir", "feat/foo", "abc1234")()
 	if calls != 1 {
 		t.Errorf("branchCreateExec calls = %d, want 1", calls)
 	}
@@ -68,7 +68,7 @@ func TestBranchCreateCmdSucceeds(t *testing.T) {
 	if !ok {
 		t.Fatalf("msg type = %T, want branchCreateSucceededMsg", msg)
 	}
-	if got.name != "feat/foo" || got.baseLabel != "abc1234" {
+	if got.name != "feat/foo" {
 		t.Errorf("succeeded msg = %+v", got)
 	}
 }
@@ -78,7 +78,7 @@ func TestBranchCreateCmdFails(t *testing.T) {
 	withRefsActionStubs(t, refsActionStubs{
 		branchCreate: func(context.Context, string, string, string) error { return want },
 	})
-	msg := branchCreateCmd("dir", "feat/foo", "", "HEAD")()
+	msg := branchCreateCmd("dir", "feat/foo", "")()
 	got, ok := msg.(branchCreateFailedMsg)
 	if !ok {
 		t.Fatalf("msg type = %T, want branchCreateFailedMsg", msg)

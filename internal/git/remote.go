@@ -69,25 +69,21 @@ var ErrStashPopConflict = errors.New("stash pop conflict")
 // "not a fast-forward" from transport / lock errors.
 var ErrFFNotPossible = errors.New("fast-forward not possible")
 
-// ErrBranchAlreadyExists marks a `git branch <name>` / `git branch -m` failure
-// where the new name collides with an existing local branch. Callers
-// `errors.Is` to surface "already exists" inline in the create/rename modal.
+// ErrBranchAlreadyExists marks a `git branch <name>` / `git branch -m`
+// failure whose stderr matched the "already exists" wording.
 var ErrBranchAlreadyExists = errors.New("branch already exists")
 
-// ErrBranchNotFullyMerged marks a `git branch -d` rejection because the branch
-// has commits not reachable from HEAD or its upstream. The TUI uses this to
-// route a "press [f] or [F] to force" hint instead of a raw stderr dump.
+// ErrBranchNotFullyMerged marks a `git branch -d` rejection because the
+// branch has commits not reachable from HEAD or its upstream. Callers can
+// branch on `errors.Is` to suggest a force delete.
 var ErrBranchNotFullyMerged = errors.New("branch not fully merged")
 
-// ErrBranchNotFound marks a `git branch -d` / `git branch -m` failure where the
-// target branch doesn't exist. Usually means a stale TUI cache after another
-// tool already deleted the branch — we trigger a refs reload and let the user
-// retry.
+// ErrBranchNotFound marks a `git branch -d` / `git branch -m` failure
+// whose stderr matched a missing-branch phrase.
 var ErrBranchNotFound = errors.New("branch not found")
 
-// ErrInvalidRefName marks a `git check-ref-format --branch` failure (or the
-// same-style rejection from create/rename). Surfaces as inline modal feedback
-// so the user can fix the typed name without leaving the prompt.
+// ErrInvalidRefName marks a `git check-ref-format` failure (or the same-
+// style rejection from create / rename).
 var ErrInvalidRefName = errors.New("invalid ref name")
 
 // gitEnv returns the locale-locked, prompt-disabled env shared by every
@@ -362,6 +358,44 @@ func wrapGitErr(label string, runErr error, stderr string) error {
 	return fmt.Errorf("%s: %w: %s", label, runErr, msg)
 }
 
+// branchSentinelMatch pairs a stderr-substring predicate with the sentinel
+// error to wrap with when it matches. Order matters — the first matcher
+// whose predicate returns true wins. Callers list sentinels in the order
+// they should be classified; an empty list means "no sentinels, fall
+// through to wrapGitErr".
+type branchSentinelMatch struct {
+	matches  func(string) bool
+	sentinel error
+}
+
+// runGitWrite is the shared body of the local-only branch wrappers. It
+// runs the command with locale-locked env, captures stderr, and on failure
+// classifies the error against `sentinels` before falling back to
+// wrapGitErr. Returning the same error layout (`<label>: <sentinel>: <msg>`)
+// for every wrapper keeps the TUI's stderr surface uniform.
+func runGitWrite(ctx context.Context, dir, label string, sentinels []branchSentinelMatch, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	cmd.Stdout = io.Discard
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	if runErr == nil {
+		return nil
+	}
+	msg := strings.TrimSpace(stderr.String())
+	for _, m := range sentinels {
+		if m.matches(msg) {
+			if msg == "" {
+				return fmt.Errorf("%s: %w", label, m.sentinel)
+			}
+			return fmt.Errorf("%s: %w: %s", label, m.sentinel, msg)
+		}
+	}
+	return wrapGitErr(label, runErr, msg)
+}
+
 // BranchCreate runs `git branch <name> [<base>]`. An empty base means HEAD —
 // git itself defaults to HEAD when the second arg is omitted. The TUI passes
 // either a commit hash (graph cursor) or a ref tip (refs cursor); resolving
@@ -371,128 +405,52 @@ func BranchCreate(ctx context.Context, dir, name, base string) error {
 	if base != "" {
 		args = append(args, base)
 	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	cmd.Stdout = io.Discard
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if isBranchAlreadyExists(msg) {
-			if msg == "" {
-				return fmt.Errorf("git branch: %w", ErrBranchAlreadyExists)
-			}
-			return fmt.Errorf("git branch: %w: %s", ErrBranchAlreadyExists, msg)
-		}
-		return wrapGitErr("git branch", err, msg)
-	}
-	return nil
+	return runGitWrite(ctx, dir, "git branch", []branchSentinelMatch{
+		{isBranchAlreadyExists, ErrBranchAlreadyExists},
+	}, args...)
 }
 
 // BranchDelete runs `git branch -d <name>` (force=false) or `git branch -D
-// <name>` (force=true). The unmerged-rejection phrase ("not fully merged") is
-// wrapped with ErrBranchNotFullyMerged so the TUI can route a force-retry
-// hint; missing-branch routes to ErrBranchNotFound. Anything else falls
-// through to wrapGitErr.
+// <name>` (force=true). The unmerged-rejection phrase ("not fully merged")
+// is wrapped with ErrBranchNotFullyMerged; missing-branch routes to
+// ErrBranchNotFound.
 func BranchDelete(ctx context.Context, dir, name string, force bool) error {
 	flag := "-d"
 	if force {
 		flag = "-D"
 	}
-	cmd := exec.CommandContext(ctx, "git", "branch", flag, name)
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	cmd.Stdout = io.Discard
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if isBranchNotFullyMerged(msg) {
-			if msg == "" {
-				return fmt.Errorf("git branch -d: %w", ErrBranchNotFullyMerged)
-			}
-			return fmt.Errorf("git branch -d: %w: %s", ErrBranchNotFullyMerged, msg)
-		}
-		if isBranchNotFound(msg) {
-			if msg == "" {
-				return fmt.Errorf("git branch -d: %w", ErrBranchNotFound)
-			}
-			return fmt.Errorf("git branch -d: %w: %s", ErrBranchNotFound, msg)
-		}
-		return wrapGitErr("git branch -d", err, msg)
-	}
-	return nil
+	return runGitWrite(ctx, dir, "git branch -d", []branchSentinelMatch{
+		{isBranchNotFullyMerged, ErrBranchNotFullyMerged},
+		{isBranchNotFound, ErrBranchNotFound},
+	}, "branch", flag, name)
 }
 
-// BranchRename runs `git branch -m <old> <new>`. An existing branch with the
-// new name surfaces ErrBranchAlreadyExists; a missing source branch surfaces
-// ErrBranchNotFound. HEAD-on-old is allowed by git itself (the rename moves
-// HEAD too), so the wrapper does not pre-gate.
+// BranchRename runs `git branch -m <old> <new>`. HEAD-on-old is allowed by
+// git itself (the rename moves HEAD too), so the wrapper does not pre-gate.
 func BranchRename(ctx context.Context, dir, oldName, newName string) error {
-	cmd := exec.CommandContext(ctx, "git", "branch", "-m", oldName, newName)
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	cmd.Stdout = io.Discard
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if isBranchAlreadyExists(msg) {
-			if msg == "" {
-				return fmt.Errorf("git branch -m: %w", ErrBranchAlreadyExists)
-			}
-			return fmt.Errorf("git branch -m: %w: %s", ErrBranchAlreadyExists, msg)
-		}
-		if isBranchNotFound(msg) {
-			if msg == "" {
-				return fmt.Errorf("git branch -m: %w", ErrBranchNotFound)
-			}
-			return fmt.Errorf("git branch -m: %w: %s", ErrBranchNotFound, msg)
-		}
-		return wrapGitErr("git branch -m", err, msg)
-	}
-	return nil
+	return runGitWrite(ctx, dir, "git branch -m", []branchSentinelMatch{
+		{isBranchAlreadyExists, ErrBranchAlreadyExists},
+		{isBranchNotFound, ErrBranchNotFound},
+	}, "branch", "-m", oldName, newName)
 }
 
-// RemoteBranchDelete runs `git push <remote> --delete <branch>`. There is no
-// force flag — the delete-ref operation is unconditional from the local side,
-// and any rejection (protected branch, auth, missing ref) is meaningful as-is.
-// stderr is surfaced verbatim through wrapGitErr because the failure space is
-// too varied to classify (network / auth / branch-protection / not-found).
+// RemoteBranchDelete runs `git push <remote> --delete <branch>`. There is
+// no force flag — the delete-ref operation is unconditional from the local
+// side, and any rejection (protected branch, auth, missing ref) is
+// meaningful as-is. stderr is surfaced verbatim because the failure space
+// is too varied to classify (network / auth / branch-protection / not-found).
 func RemoteBranchDelete(ctx context.Context, dir, remote, branch string) error {
-	cmd := exec.CommandContext(ctx, "git", "push", remote, "--delete", branch)
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	cmd.Stdout = io.Discard
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return wrapGitErr("git push --delete", err, stderr.String())
-	}
-	return nil
+	return runGitWrite(ctx, dir, "git push --delete", nil,
+		"push", remote, "--delete", branch)
 }
 
-// CheckRefFormat runs `git check-ref-format --branch <name>`. The command is
-// cwd-independent (it doesn't read the repo) but we keep the dir parameter
-// for shape symmetry with the other wrappers and so future callers can pass
-// the working directory uniformly. A non-zero exit wraps ErrInvalidRefName
-// so the modal can show inline feedback.
+// CheckRefFormat runs `git check-ref-format --branch <name>`. A non-zero
+// exit always means an invalid name (the command has no other failure
+// modes), so we route every error to ErrInvalidRefName.
 func CheckRefFormat(ctx context.Context, dir, name string) error {
-	cmd := exec.CommandContext(ctx, "git", "check-ref-format", "--branch", name)
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	cmd.Stdout = io.Discard
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			return fmt.Errorf("git check-ref-format: %w", ErrInvalidRefName)
-		}
-		return fmt.Errorf("git check-ref-format: %w: %s", ErrInvalidRefName, msg)
-	}
-	return nil
+	return runGitWrite(ctx, dir, "git check-ref-format",
+		[]branchSentinelMatch{{func(string) bool { return true }, ErrInvalidRefName}},
+		"check-ref-format", "--branch", name)
 }
 
 // isBranchAlreadyExists matches git's wording when create/rename collides

@@ -341,7 +341,8 @@ func TestBranchCreateSucceededArmsCursorAndReloads(t *testing.T) {
 	})
 	m.focused = paneRefs
 	m.mode = viewModeRefNameInput
-	updated, cmd := m.Update(branchCreateSucceededMsg{name: "feat/bar", baseLabel: "HEAD"})
+	m.refNameInput = refNameInputState{baseLabel: "HEAD"}
+	updated, cmd := m.Update(branchCreateSucceededMsg{name: "feat/bar"})
 	m = updated.(Model)
 	if m.mode != viewModeNormal {
 		t.Errorf("mode after success = %v, want viewModeNormal", m.mode)
@@ -352,7 +353,7 @@ func TestBranchCreateSucceededArmsCursorAndReloads(t *testing.T) {
 	if cmd == nil {
 		t.Error("success handler should dispatch reloadCmd")
 	}
-	if !strings.Contains(m.status, "created 'feat/bar'") {
+	if !strings.Contains(m.status, "created 'feat/bar'") || !strings.Contains(m.status, "from HEAD") {
 		t.Errorf("status = %q", m.status)
 	}
 }

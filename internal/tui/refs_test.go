@@ -318,10 +318,43 @@ func TestRefModelSelectAfterDeleted(t *testing.T) {
 		{ShortName: "alpha", Kind: git.RefKindLocal},
 		{ShortName: "gamma", Kind: git.RefKindLocal}, // beta was the deleted name
 	}})
-	r.SelectAfterDeleted("beta")
+	r.SelectAfterDeleted("beta", git.RefKindLocal)
 	got, ok := r.Selected()
 	if !ok || got.ShortName != "gamma" {
 		t.Errorf("after SelectAfterDeleted('beta') Selected=%+v, want gamma", got)
+	}
+}
+
+func TestRefModelSelectAfterDeletedStaysInSection(t *testing.T) {
+	// Regression: a deleted local that's alphabetically after every other
+	// local must not bleed into the remote section just because the first
+	// remote ref happens to sort after it.
+	r := newRefsModel()
+	r.SetSize(40, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
+		{ShortName: "alpha", Kind: git.RefKindLocal},
+		{ShortName: "beta", Kind: git.RefKindLocal}, // "zfoo" was the deleted local
+		{ShortName: "origin/zzz", Kind: git.RefKindRemote},
+	}})
+	r.SelectAfterDeleted("zfoo", git.RefKindLocal)
+	got, ok := r.Selected()
+	if !ok || got.ShortName != "beta" {
+		t.Errorf("after SelectAfterDeleted('zfoo', local) Selected=%+v, want beta (last in local section)", got)
+	}
+}
+
+func TestRefModelSelectAfterDeletedRemoteSection(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
+		{ShortName: "main", Kind: git.RefKindLocal},
+		{ShortName: "origin/alpha", Kind: git.RefKindRemote},
+		{ShortName: "origin/gamma", Kind: git.RefKindRemote}, // origin/beta deleted
+	}})
+	r.SelectAfterDeleted("origin/beta", git.RefKindRemote)
+	got, ok := r.Selected()
+	if !ok || got.ShortName != "origin/gamma" {
+		t.Errorf("after SelectAfterDeleted('origin/beta', remote) Selected=%+v, want origin/gamma", got)
 	}
 }
 

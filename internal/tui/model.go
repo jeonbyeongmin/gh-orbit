@@ -226,11 +226,11 @@ type Model struct {
 	// after create / rename success so the post-reload refsLoadedMsg can
 	// move the cursor onto the new row. Empty string means no jump.
 	pendingRefCursorName string
-	// pendingRefCursorAfterDelete carries the deleted ref name across a
-	// refs reload after delete success so the cursor lands on the next
-	// (or previous, if last) ref in the same section. Empty string means
+	// pendingRefCursorAfterDelete carries the deleted ref name + section
+	// across a refs reload after delete success so the cursor lands on the
+	// next (or previous, if last) ref in the same section. Zero name means
 	// no adjustment.
-	pendingRefCursorAfterDelete string
+	pendingRefCursorAfterDelete deletedRefHandle
 	// refActionInFlight gates the n / d / m keys while a branch-write cmd
 	// is running. Distinct from checkoutInFlight so a stuck refs write
 	// can't deadlock checkout / pull / FF chains.
@@ -353,9 +353,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refs.SelectByName(name)
 			m.pendingRefCursorName = ""
 		}
-		if name := m.pendingRefCursorAfterDelete; name != "" {
-			m.refs.SelectAfterDeleted(name)
-			m.pendingRefCursorAfterDelete = ""
+		if h := m.pendingRefCursorAfterDelete; h.name != "" {
+			m.refs.SelectAfterDeleted(h.name, h.kind)
+			m.pendingRefCursorAfterDelete = deletedRefHandle{}
 		}
 		return m, cmd
 
@@ -727,13 +727,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case branchCreateSucceededMsg:
 		m.refActionInFlight = false
-		m.mode = viewModeNormal
-		m.refNameInput = refNameInputState{}
-		m.applyPaneSizes()
-		base := msg.baseLabel
+		base := m.refNameInput.baseLabel
 		if base == "" {
 			base = "HEAD"
 		}
+		m.mode = viewModeNormal
+		m.refNameInput = refNameInputState{}
+		m.applyPaneSizes()
 		m.status = "created '" + msg.name + "' (from " + base + ")"
 		m.statusStyle = statusOkS
 		m.pendingRefCursorName = msg.name
@@ -794,9 +794,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// else the remote shortname so the cursor lands somewhere sensible
 		// in the remote section.
 		if msg.localDeleted {
-			m.pendingRefCursorAfterDelete = msg.target.localName
+			m.pendingRefCursorAfterDelete = deletedRefHandle{
+				name: msg.target.localName,
+				kind: git.RefKindLocal,
+			}
 		} else if msg.remoteDeleted {
-			m.pendingRefCursorAfterDelete = msg.target.remote + "/" + msg.target.remoteBranch
+			m.pendingRefCursorAfterDelete = deletedRefHandle{
+				name: msg.target.remote + "/" + msg.target.remoteBranch,
+				kind: git.RefKindRemote,
+			}
 		}
 		return m, m.reloadCmd()
 
@@ -810,7 +816,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		// Local was deleted — move the cursor off it. Remote is still there.
 		if msg.localDeleted {
-			m.pendingRefCursorAfterDelete = msg.target.localName
+			m.pendingRefCursorAfterDelete = deletedRefHandle{
+				name: msg.target.localName,
+				kind: git.RefKindLocal,
+			}
 		}
 		return m, m.reloadCmd()
 
@@ -1351,8 +1360,6 @@ func (m Model) dispatchRefDelete(scope deleteScope) (Model, tea.Cmd) {
 		remote:       d.remote,
 		remoteBranch: d.remoteBranch,
 	}
-	d.lastScope = scope
-	m.pendingRefDelete = d
 
 	m.refActionInFlight = true
 	m.mode = viewModeNormal
@@ -1379,13 +1386,9 @@ func (m Model) dispatchRefCreate(name string) (Model, tea.Cmd) {
 	}
 	m.refActionInFlight = true
 	m.refNameInput.validating = false
-	label := m.refNameInput.baseLabel
-	if label == "" {
-		label = "HEAD"
-	}
 	m.status = "creating '" + name + "'…"
 	m.statusStyle = statusBusyS
-	return m, branchCreateCmd("", name, m.refNameInput.base, label)
+	return m, branchCreateCmd("", name, m.refNameInput.base)
 }
 
 // dispatchRefRename fires branchRenameCmd from the validated modal state.
@@ -1586,13 +1589,9 @@ func (m Model) refNameInputReservedRows() int {
 }
 
 // refDeleteConfirmReservedRows returns the bottom-row budget for the delete
-// confirm modal. The unmerged hint row is conditional: 3 rows without it
-// (header + sub-header + hint), 4 with it.
+// confirm modal: header + sub-header + hint = 3.
 func (m Model) refDeleteConfirmReservedRows() int {
 	want := 3
-	if m.pendingRefDelete.unmerged {
-		want = 4
-	}
 	if upper := m.height - 3; upper > 0 {
 		want = min(want, upper)
 	}
@@ -1709,9 +1708,6 @@ func (m Model) renderRefDeleteConfirm(width, height int) string {
 	lines = append(lines, confirmPromptS.Render(header))
 	if sub != "" {
 		lines = append(lines, statusOkS.Render(sub))
-	}
-	if d.unmerged {
-		lines = append(lines, statusErrS.Render("(unmerged) — use [f] or [F] to force delete local"))
 	}
 	lines = append(lines, hint)
 

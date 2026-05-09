@@ -42,12 +42,10 @@ type refNameInputState struct {
 	validating bool
 }
 
-// refDeleteState backs viewModeRefDeleteConfirm. The four flags below decide
+// refDeleteState backs viewModeRefDeleteConfirm. The flags below decide
 // which keys the modal accepts and what label the renderer shows; the model
 // stamps them when entering the modal so subsequent key handling stays
-// branchless. lastScope preserves the user's prior choice across an unmerged
-// rejection so re-entering the modal reads "press [f] or [F] to force" while
-// still letting the user pick either force pair.
+// branchless.
 type refDeleteState struct {
 	target       git.Ref
 	localName    string
@@ -55,8 +53,6 @@ type refDeleteState struct {
 	remoteBranch string // e.g. "feat/foo"; empty when hasRemote is false.
 	hasLocal     bool
 	hasRemote    bool
-	unmerged     bool
-	lastScope    deleteScope
 }
 
 // Package-level seams over git.* — same rationale as checkout.go's set.
@@ -83,18 +79,15 @@ const (
 	scopeRemoteOnly
 )
 
-// includesLocal reports whether the scope wants the local branch deleted.
 func (s deleteScope) includesLocal() bool {
 	return s == scopeLocalSafe || s == scopeLocalForce ||
 		s == scopeBothSafe || s == scopeBothForce
 }
 
-// includesRemote reports whether the scope wants the remote ref deleted.
 func (s deleteScope) includesRemote() bool {
 	return s == scopeBothSafe || s == scopeBothForce || s == scopeRemoteOnly
 }
 
-// localForce reports whether the local-side delete should pass `-D`.
 func (s deleteScope) localForce() bool {
 	return s == scopeLocalForce || s == scopeBothForce
 }
@@ -108,13 +101,20 @@ type deleteTarget struct {
 	remoteBranch string // e.g. "feat/foo" (no remote prefix); empty likewise.
 }
 
+// deletedRefHandle pairs a deleted ref's display name with the section it
+// belonged to, so the post-reload cursor jump can scope its insertion-point
+// search to the matching section instead of bleeding across sections.
+type deletedRefHandle struct {
+	name string
+	kind git.RefKind
+}
+
 // branchCreateSucceededMsg fires when `git branch <name> [<base>]` returned
-// without error. baseLabel mirrors what the modal showed to the user
-// ("HEAD" / short hash / ref shortname) so the status bar surfaces the same
-// wording the user picked rather than the resolved hash.
+// without error. The status-bar handler reads the modal's preserved
+// baseLabel to render "from <label>" — round-tripping it through the cmd
+// would just be display state crossing the async boundary for nothing.
 type branchCreateSucceededMsg struct {
-	name      string
-	baseLabel string
+	name string
 }
 
 // branchCreateFailedMsg fires for any failure path; the model formats a
@@ -198,14 +198,14 @@ type refNameValidatedMsg struct {
 // passes through unchanged — the wrapper omits the arg when base is empty,
 // which means HEAD. checkoutTimeout is reused (60s) because branch create
 // is local-only.
-func branchCreateCmd(dir, name, base, baseLabel string) tea.Cmd {
+func branchCreateCmd(dir, name, base string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), checkoutTimeout)
 		defer cancel()
 		if err := branchCreateExec(ctx, dir, name, base); err != nil {
 			return branchCreateFailedMsg{err: err, name: name}
 		}
-		return branchCreateSucceededMsg{name: name, baseLabel: baseLabel}
+		return branchCreateSucceededMsg{name: name}
 	}
 }
 

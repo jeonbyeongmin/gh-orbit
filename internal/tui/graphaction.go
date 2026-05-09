@@ -67,10 +67,65 @@ type graphActionMsg struct {
 // branchPickerState backs viewModeBranchPicker. Reset to the zero value
 // when the picker exits (esc / enter); the picker reads candidates+cursor
 // to render and writes a refCheckoutRequestedMsg-like dispatch on enter.
+//
+// viewportTop is the index of the first candidate visible inside the
+// scroll window. The picker's renderer caps visible rows at ~70% of the
+// screen height; j/k handlers slide viewportTop so the cursor stays in
+// the window. Zero value (0) is the natural top-of-list start.
 type branchPickerState struct {
-	candidates []string
-	cursor     int
-	hash       string
+	candidates  []string
+	cursor      int
+	hash        string
+	viewportTop int
+}
+
+// scrollIntoView slides viewportTop so the current cursor sits inside the
+// [viewportTop, viewportTop+visibleRows) window. Called from the j/k
+// handlers after the cursor moves; visibleRows is computed by
+// branchPickerVisibleRows from the model's screen height.
+func (s *branchPickerState) scrollIntoView(visibleRows int) {
+	if visibleRows <= 0 {
+		s.viewportTop = s.cursor
+		return
+	}
+	if s.cursor < s.viewportTop {
+		s.viewportTop = s.cursor
+	} else if s.cursor >= s.viewportTop+visibleRows {
+		s.viewportTop = s.cursor - visibleRows + 1
+	}
+	if s.viewportTop < 0 {
+		s.viewportTop = 0
+	}
+}
+
+// branchPickerVisibleRows caps the candidate row count at ~70% of the
+// screen height minus the modal box's chrome and the picker's fixed
+// header + hint + two scroll-marker rows ("↑ N more" / "↓ N more"
+// always reserved so the cap stays valid even when overflow kicks in).
+// On terminals too small to fit the cap math the floor is 1 — small
+// terminals stay usable instead of squashing the box flat.
+const (
+	branchPickerHeaderRows  = 1
+	branchPickerHintRows    = 1
+	branchPickerMarkerRows  = 2
+	branchPickerHeightRatio = 7
+	branchPickerHeightDenom = 10
+)
+
+// branchPickerVisibleRows returns the count of candidate rows that fit
+// inside the picker's inner content area for a given screen height and
+// candidate count. The result is always ≥ 1 so the cursor is reachable.
+func branchPickerVisibleRows(screenH, candidates int) int {
+	chromeH := modalBoxStyle.GetVerticalFrameSize()
+	rows := screenH*branchPickerHeightRatio/branchPickerHeightDenom -
+		chromeH - branchPickerHeaderRows - branchPickerHintRows - branchPickerMarkerRows
+	if rows < 1 {
+		rows = 1
+	}
+	if candidates < rows {
+		return candidates
+	}
+	return rows
 }
 
 // evaluateGraphActionCmd runs the full Enter decision tree on a goroutine

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -1905,10 +1906,10 @@ func TestModelCheckoutConfirmModalShowsPullVariant(t *testing.T) {
 	m.mode = viewModeCheckoutConfirm
 	m.pendingCheckout = pendingCheckout{ref: "feat", withPull: true}
 
-	got := m.renderHelpStatus()
+	got := ansi.Strip(m.View())
 	for _, want := range []string{"checkout 'feat' and pull", "stash & checkout & pull"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("modal text %q missing %q", got, want)
+			t.Errorf("modal text missing %q\n--- view ---\n%s", want, got)
 		}
 	}
 }
@@ -1924,16 +1925,16 @@ func TestModelCheckoutConfirmModalShowsSkipVariantWhenPullElided(t *testing.T) {
 		ref: "v1.0", withPull: true, skipReason: "tag has no upstream",
 	}
 
-	got := m.renderHelpStatus()
+	got := ansi.Strip(m.View())
 	if strings.Contains(got, "and pull") {
-		t.Errorf("modal must not say 'and pull' when pull is skipped: %q", got)
+		t.Errorf("modal must not say 'and pull' when pull is skipped\n--- view ---\n%s", got)
 	}
 	if strings.Contains(got, "stash & checkout & pull") {
-		t.Errorf("modal must not advertise 'stash & checkout & pull' when pull is skipped: %q", got)
+		t.Errorf("modal must not advertise 'stash & checkout & pull' when pull is skipped\n--- view ---\n%s", got)
 	}
 	for _, want := range []string{"v1.0", "pull skipped: tag has no upstream", "stash & checkout"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("modal text %q missing %q", got, want)
+			t.Errorf("modal text missing %q\n--- view ---\n%s", want, got)
 		}
 	}
 }
@@ -1957,5 +1958,56 @@ func TestModelGraphCNoOpWhenRefsFocused(t *testing.T) {
 	}
 	if m.checkoutInFlight {
 		t.Error("checkoutInFlight should not latch on refs-focused 'C'")
+	}
+}
+
+// TestOverlayCenters verifies the modal box lands near the screen center
+// when the model is in a centered modal mode. We locate the row carrying
+// the modal's header text and assert its index is in the neighborhood of
+// (height - modalH) / 2 + 1 (header is the first inner row).
+func TestOverlayCenters(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	m, _ = m.beginRefCreate(git.Ref{}, false)
+	view := m.View()
+	rows := strings.Split(view, "\n")
+
+	const headerText = "Create branch from"
+	headerRow := -1
+	for i, r := range rows {
+		if strings.Contains(ansi.Strip(r), headerText) {
+			headerRow = i
+			break
+		}
+	}
+	if headerRow == -1 {
+		t.Fatalf("modal header %q not found in view\n--- view ---\n%s", headerText, ansi.Strip(view))
+	}
+	// Create-branch modal: 4 inner rows + 2 chrome = 6 outer. On a 30-row
+	// screen the centered top edge sits at (30-6)/2 = 12; the header is
+	// the first inner row at row 13. ±2 slack absorbs future tweaks.
+	const wantHeaderRow = 13
+	if headerRow < wantHeaderRow-2 || headerRow > wantHeaderRow+2 {
+		t.Errorf("modal header row = %d, want around %d", headerRow, wantHeaderRow)
+	}
+}
+
+// TestOverlayDimsBackdrop checks that backdrop rows around the modal
+// carry the dim 256-color SGR. Without the dim wrap the focused-modal UX
+// breaks: the background still reads as the active surface.
+func TestOverlayDimsBackdrop(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	m, _ = m.beginRefCreate(git.Ref{}, false)
+	view := m.View()
+	rows := strings.Split(view, "\n")
+
+	// Row 0 is far above the modal — must be dimmed.
+	if !strings.Contains(rows[0], "\x1b[38;5;240m") {
+		t.Errorf("backdrop row 0 missing dim 256-color SGR\nrow=%q", rows[0])
 	}
 }

@@ -605,7 +605,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.status = fmt.Sprintf("branch select: %d candidates", len(msg.candidates))
 			m.statusStyle = statusBusyS
-			m.applyPaneSizes()
 			return m, nil
 		case graphActionFF:
 			m.ffInFlight = true
@@ -733,7 +732,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = viewModeNormal
 		m.refNameInput = refNameInputState{}
-		m.applyPaneSizes()
 		m.status = "created '" + msg.name + "' (from " + base + ")"
 		m.statusStyle = statusOkS
 		m.pendingRefCursorName = msg.name
@@ -749,7 +747,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = viewModeNormal
 		m.refNameInput = refNameInputState{}
-		m.applyPaneSizes()
 		m.status = "create failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
@@ -758,7 +755,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refActionInFlight = false
 		m.mode = viewModeNormal
 		m.refNameInput = refNameInputState{}
-		m.applyPaneSizes()
 		m.status = "renamed '" + msg.oldName + "' → '" + msg.newName + "'"
 		m.statusStyle = statusOkS
 		m.pendingRefCursorName = msg.newName
@@ -778,7 +774,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = viewModeNormal
 		m.refNameInput = refNameInputState{}
-		m.applyPaneSizes()
 		m.status = "rename failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
@@ -787,7 +782,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refActionInFlight = false
 		m.mode = viewModeNormal
 		m.pendingRefDelete = refDeleteState{}
-		m.applyPaneSizes()
 		m.status = formatDeleteSuccess(msg.target, msg.scope, msg.localDeleted, msg.remoteDeleted)
 		m.statusStyle = statusOkS
 		// Cursor follow-up: prefer the local name when local was deleted,
@@ -810,7 +804,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refActionInFlight = false
 		m.mode = viewModeNormal
 		m.pendingRefDelete = refDeleteState{}
-		m.applyPaneSizes()
 		m.status = "deleted '" + msg.target.localName + "'; remote push failed: " +
 			firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
@@ -827,7 +820,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refActionInFlight = false
 		m.mode = viewModeNormal
 		m.pendingRefDelete = refDeleteState{}
-		m.applyPaneSizes()
 		m.status = "delete failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
@@ -836,7 +828,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refActionInFlight = false
 		m.mode = viewModeNormal
 		m.pendingRefDelete = refDeleteState{}
-		m.applyPaneSizes()
 		m.status = "delete: '" + msg.target.localName +
 			"' not fully merged — press [f] or [F] to force"
 		m.statusStyle = statusErrS
@@ -864,11 +855,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "j", "down":
 				if m.branchPicker.cursor < len(m.branchPicker.candidates)-1 {
 					m.branchPicker.cursor++
+					m.branchPicker.scrollIntoView(branchPickerVisibleRows(m.height, len(m.branchPicker.candidates)))
 				}
 				return m, nil
 			case "k", "up":
 				if m.branchPicker.cursor > 0 {
 					m.branchPicker.cursor--
+					m.branchPicker.scrollIntoView(branchPickerVisibleRows(m.height, len(m.branchPicker.candidates)))
 				}
 				return m, nil
 			case "enter":
@@ -878,7 +871,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				branch := m.branchPicker.candidates[m.branchPicker.cursor]
 				m.branchPicker = branchPickerState{}
 				m.mode = viewModeNormal
-				m.applyPaneSizes()
 				var cmd tea.Cmd
 				m, cmd = m.beginCheckout(branch, false)
 				return m, cmd
@@ -887,7 +879,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.branchPicker = branchPickerState{}
 				m.status = "branch select cancelled"
 				m.statusStyle = statusOkS
-				m.applyPaneSizes()
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
@@ -902,7 +893,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refNameInput = refNameInputState{}
 				m.status = "ref input cancelled"
 				m.statusStyle = statusOkS
-				m.applyPaneSizes()
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
@@ -931,7 +921,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pendingRefDelete = refDeleteState{}
 				m.status = "delete: cancelled"
 				m.statusStyle = statusOkS
-				m.applyPaneSizes()
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
@@ -1282,7 +1271,6 @@ func (m Model) beginRefCreate(refsCursorRef git.Ref, refsHasCursor bool) (Model,
 	}
 	m.mode = viewModeRefNameInput
 	m.status = ""
-	m.applyPaneSizes()
 	return m, textinput.Blink
 }
 
@@ -1309,7 +1297,6 @@ func (m Model) beginRefRename(target git.Ref) (Model, tea.Cmd) {
 	}
 	m.mode = viewModeRefNameInput
 	m.status = ""
-	m.applyPaneSizes()
 	return m, textinput.Blink
 }
 
@@ -1346,7 +1333,6 @@ func (m Model) beginRefDelete() (Model, tea.Cmd) {
 	m.pendingRefDelete = st
 	m.mode = viewModeRefDeleteConfirm
 	m.status = ""
-	m.applyPaneSizes()
 	return m, nil
 }
 
@@ -1363,7 +1349,6 @@ func (m Model) dispatchRefDelete(scope deleteScope) (Model, tea.Cmd) {
 
 	m.refActionInFlight = true
 	m.mode = viewModeNormal
-	m.applyPaneSizes()
 
 	switch scope {
 	case scopeLocalSafe, scopeLocalForce:
@@ -1481,19 +1466,15 @@ func (m Model) paneSizes() paneSizes {
 	if m.width == 0 || m.height == 0 {
 		return s
 	}
-	// Reserve 1 row for the help line, or the full panel height when `?`
-	// is open. helpReservedRows clamps so the main area never starves
-	// below 3 rows.
+	// Reserve 1 row for the bottom help/status line, or the full panel
+	// height when `?` is open. The four centered overlay modal modes
+	// (branchPicker / refNameInput / refDeleteConfirm / checkoutConfirm)
+	// don't reserve extra rows here — composeOverlay paints them on top
+	// of the unchanged 3-pane base, so paneSizes is mode-agnostic outside
+	// viewModeHelp.
 	helpReserved := 1
-	switch m.mode {
-	case viewModeHelp:
+	if m.mode == viewModeHelp {
 		helpReserved = m.helpReservedRows()
-	case viewModeBranchPicker:
-		helpReserved = m.branchPickerReservedRows()
-	case viewModeRefNameInput:
-		helpReserved = m.refNameInputReservedRows()
-	case viewModeRefDeleteConfirm:
-		helpReserved = m.refDeleteConfirmReservedRows()
 	}
 	mainH := m.height - helpReserved
 	if mainH < 1 {
@@ -1562,82 +1543,62 @@ func (m Model) helpReservedRows() int {
 	return max(want, 1)
 }
 
-// branchPickerReservedRows returns how many bottom rows the picker panel
-// claims: one per candidate plus a header row plus a hint row. Same
-// "main area gets at least 3 rows" floor as helpReservedRows so the
-// panel shrinks before starving the graph. Floor: 1.
-func (m Model) branchPickerReservedRows() int {
-	want := len(m.branchPicker.candidates) + 2
-	if want < 3 {
-		want = 3
-	}
-	if upper := m.height - 3; upper > 0 {
-		want = min(want, upper)
-	}
-	return max(want, 1)
-}
+// modalHeaderS is the bold style applied to the header row of the create /
+// rename / picker modals. Delete confirm reuses confirmPromptS (busy-color
+// + bold), which is its existing visual; checkout confirm uses
+// confirmPromptS too. modalHeaderS is plain-bold so create/rename/picker
+// don't read as a "warning" alongside the textinput cursor.
+var modalHeaderS = lipgloss.NewStyle().Bold(true)
 
-// refNameInputReservedRows returns the bottom-row budget for the create /
-// rename modal: header + textinput + (inlineErr|spacer) + hint = 4. Floor 1
-// matches the other panels.
-func (m Model) refNameInputReservedRows() int {
-	want := 4
-	if upper := m.height - 3; upper > 0 {
-		want = min(want, upper)
+// renderBranchPickerInner returns the multi-line picker content. Built
+// for composeOverlay — no border / size / hint chrome here, just rows.
+//
+// Scroll: candidate rows are sliced to a window of branchPickerVisibleRows
+// starting at viewportTop. When the list overflows the window, the slice
+// is sandwiched between "↑ N more" / "↓ N more" lines so the user knows
+// there are off-screen candidates.
+func (m Model) renderBranchPickerInner() string {
+	visibleRows := branchPickerVisibleRows(m.height, len(m.branchPicker.candidates))
+	if visibleRows < 1 {
+		visibleRows = 1
 	}
-	return max(want, 1)
-}
-
-// refDeleteConfirmReservedRows returns the bottom-row budget for the delete
-// confirm modal: header + sub-header + hint = 3.
-func (m Model) refDeleteConfirmReservedRows() int {
-	want := 3
-	if upper := m.height - 3; upper > 0 {
-		want = min(want, upper)
+	top := m.branchPicker.viewportTop
+	if top < 0 {
+		top = 0
 	}
-	return max(want, 1)
-}
-
-// renderBranchPicker draws the picker panel as a `[Branch select]` header
-// row, one row per candidate (cursor row prefixed with "> "), and a
-// trailing hint row. Rows past `height` are dropped — same shrink-rather-
-// than-overflow behavior as renderHelpPanel.
-func (m Model) renderBranchPicker(width, height int) string {
-	if width < 1 || height < 1 {
-		return ""
-	}
-	var lines []string
-	lines = append(lines, "[Branch select]")
-	for i, c := range m.branchPicker.candidates {
-		marker := "  "
-		if i == m.branchPicker.cursor {
-			marker = "> "
+	end := top + visibleRows
+	if end > len(m.branchPicker.candidates) {
+		end = len(m.branchPicker.candidates)
+		top = end - visibleRows
+		if top < 0 {
+			top = 0
 		}
-		row := marker + c
+	}
+
+	lines := []string{modalHeaderS.Render("[Branch select]")}
+	if top > 0 {
+		lines = append(lines, help.Render(fmt.Sprintf("↑ %d more", top)))
+	}
+	for i := top; i < end; i++ {
 		if i == m.branchPicker.cursor {
-			row = selectedStyle.Render(row)
+			lines = append(lines, selectedStyle.Render("> "+m.branchPicker.candidates[i]))
+		} else {
+			lines = append(lines, "  "+m.branchPicker.candidates[i])
 		}
-		lines = append(lines, row)
 	}
-	lines = append(lines, helpTextBranchPicker)
-	if len(lines) > height {
-		lines = lines[:height]
+	if rest := len(m.branchPicker.candidates) - end; rest > 0 {
+		lines = append(lines, help.Render(fmt.Sprintf("↓ %d more", rest)))
 	}
-	rendered := make([]string, len(lines))
-	for i, ln := range lines {
-		rendered[i] = fitHelpLine(ln, width)
-	}
-	return strings.Join(rendered, "\n")
+	lines = append(lines, help.Render(helpTextBranchPicker))
+
+	return strings.Join(lines, "\n")
 }
 
-// renderRefNameInput draws the create / rename modal: a header row naming
-// the action, the textinput's view (one row), an optional inline-error row
-// (or a blank spacer when there is none — keeps row count constant so the
-// hint doesn't bounce as the user types/clears), and a trailing hint row.
-func (m Model) renderRefNameInput(width, height int) string {
-	if width < 1 || height < 1 {
-		return ""
-	}
+// renderRefNameInputInner returns the multi-line content for the create /
+// rename name-entry modal. Four rows: header (bold), textinput view,
+// inline-error or spacer (constant row count so the hint never bounces),
+// and a trailing hint.
+func (m Model) renderRefNameInputInner() string {
 	var header string
 	switch m.refNameInput.mode {
 	case refNameInputCreate:
@@ -1659,27 +1620,20 @@ func (m Model) renderRefNameInput(width, height int) string {
 		errLine = statusBusyS.Render("validating…")
 	}
 
-	hint := "[enter] confirm · [esc] cancel"
+	hint := help.Render("[enter] confirm · [esc] cancel")
 
-	lines := []string{header, inputView, errLine, hint}
-	if len(lines) > height {
-		lines = lines[:height]
-	}
-	rendered := make([]string, len(lines))
-	for i, ln := range lines {
-		rendered[i] = fitHelpLine(ln, width)
-	}
-	return strings.Join(rendered, "\n")
+	return strings.Join([]string{
+		modalHeaderS.Render(header),
+		inputView,
+		errLine,
+		hint,
+	}, "\n")
 }
 
-// renderRefDeleteConfirm draws the delete confirm modal. The hint row's
-// available keys depend on hasLocal × hasRemote so the user only ever sees
-// keys that will actually fire. unmerged adds a "use [f] or [F] to force"
-// callout above the hint.
-func (m Model) renderRefDeleteConfirm(width, height int) string {
-	if width < 1 || height < 1 {
-		return ""
-	}
+// renderRefDeleteConfirmInner returns the multi-line content for the
+// delete confirm modal. Header (confirmPromptS — bold + busy color) plus
+// optional sub-line plus hint matrix derived from hasLocal × hasRemote.
+func (m Model) renderRefDeleteConfirmInner() string {
 	d := m.pendingRefDelete
 
 	var header, sub string
@@ -1704,21 +1658,46 @@ func (m Model) renderRefDeleteConfirm(width, height int) string {
 		hint = "[y] delete remote · [esc] cancel"
 	}
 
-	var lines []string
-	lines = append(lines, confirmPromptS.Render(header))
+	lines := []string{confirmPromptS.Render(header)}
 	if sub != "" {
 		lines = append(lines, statusOkS.Render(sub))
 	}
-	lines = append(lines, hint)
+	lines = append(lines, help.Render(hint))
+	return strings.Join(lines, "\n")
+}
 
-	if len(lines) > height {
-		lines = lines[:height]
+// renderCheckoutConfirmInner returns the 3-row content for the dirty-tree
+// confirm modal: bold "Uncommitted changes" header, a variant body line,
+// and a variant hint line. The withPull case sits above the skip-reason
+// case so a no-skip pull advertises "and pull"; the skip variant falls
+// through to "stash & checkout" instead, since the chain elides the pull.
+func (m Model) renderCheckoutConfirmInner() string {
+	p := m.pendingCheckout
+
+	var body, hint string
+	switch {
+	case p.withFF:
+		body = "fast-forward '" + p.ref + "'?"
+		hint = "[s] stash & fast-forward · [a] abort · [esc] cancel"
+	case p.withCheckoutFF:
+		body = "checkout '" + p.ref + "' and fast-forward?"
+		hint = "[s] stash & checkout & fast-forward · [a] abort · [esc] cancel"
+	case p.withPull && p.skipReason == "":
+		body = "checkout '" + p.ref + "' and pull?"
+		hint = "[s] stash & checkout & pull · [a] abort · [esc] cancel"
+	case p.withPull:
+		body = "checkout '" + p.ref + "' (pull skipped: " + p.skipReason + ")?"
+		hint = "[s] stash & checkout · [a] abort · [esc] cancel"
+	default:
+		body = "checkout '" + p.ref + "'?"
+		hint = "[s] stash & checkout · [a] abort · [esc] cancel"
 	}
-	rendered := make([]string, len(lines))
-	for i, ln := range lines {
-		rendered[i] = fitHelpLine(ln, width)
-	}
-	return strings.Join(rendered, "\n")
+
+	return strings.Join([]string{
+		confirmPromptS.Render("Uncommitted changes"),
+		statusBusyS.Render(body),
+		help.Render(hint),
+	}, "\n")
 }
 
 var (
@@ -1728,11 +1707,21 @@ var (
 	borderFocused = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("205"))
-	help        = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	statusBusyS = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	statusOkS   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	statusErrS  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	// modalBoxStyle frames the centered overlay modals (create / rename
+	// name input, delete confirm, branch picker, dirty-tree confirm). It
+	// reuses the focused pane's border color/shape so the modal reads as
+	// "the new active surface" — same visual vocabulary, just centered.
+	modalBoxStyle = borderFocused.Padding(0, 1)
+	help          = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	statusBusyS   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	statusOkS     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	statusErrS    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 )
+
+// renderModalBox wraps inner content in modalBoxStyle.
+func renderModalBox(inner string) string {
+	return modalBoxStyle.Render(inner)
+}
 
 const helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
 
@@ -1757,7 +1746,19 @@ func (m Model) View() string {
 
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
 	main := lipgloss.JoinHorizontal(lipgloss.Top, refsBox, rightCol)
-	return lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
+	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
+
+	switch m.mode {
+	case viewModeBranchPicker:
+		return composeOverlay(base, renderModalBox(m.renderBranchPickerInner()), m.width, m.height)
+	case viewModeRefNameInput:
+		return composeOverlay(base, renderModalBox(m.renderRefNameInputInner()), m.width, m.height)
+	case viewModeRefDeleteConfirm:
+		return composeOverlay(base, renderModalBox(m.renderRefDeleteConfirmInner()), m.width, m.height)
+	case viewModeCheckoutConfirm:
+		return composeOverlay(base, renderModalBox(m.renderCheckoutConfirmInner()), m.width, m.height)
+	}
+	return base
 }
 
 func boxStyle(focused bool) lipgloss.Style {
@@ -1783,57 +1784,20 @@ func (m Model) tabBody() string {
 // renderHelpStatus lays out the bottom line as "help … status". When the
 // terminal is too narrow to fit both, status wins — the user just triggered
 // an action and seeing its outcome matters more than the help reminder.
-// The dirty-tree checkout modal replaces the whole line with its prompt
-// so the available choice keys are unambiguous, and viewModeHelp expands
-// the line into a multi-row panel.
+//
+// Centered modal modes (branch picker / ref name input / ref delete /
+// dirty-tree checkout confirm) drop their hint here: the modal box owns
+// its own [esc] hint row, so duplicating it on the bottom line would just
+// double the prompt. A blank space keeps the row count stable across the
+// modal toggle so View()'s base frame doesn't jump in height.
+//
+// viewModeHelp expands the bottom line into a multi-row panel so the
+// shortcut reference can fit the full key matrix.
 func (m Model) renderHelpStatus() string {
-	if m.mode == viewModeCheckoutConfirm {
-		// Four modal variants. The skipReason check sits BEFORE the withPull
-		// branch — when pull will be elided we want the legacy "stash & checkout"
-		// text plus the skip reason, not "and pull?" which would over-promise.
-		// withFF is mutually exclusive with withPull (different keys originate
-		// the chain) and gets its own prompt so the user sees "fast-forward",
-		// not "checkout".
-		p := m.pendingCheckout
-		switch {
-		case p.withFF:
-			return confirmPromptS.Render(
-				"Uncommitted changes — fast-forward '" + p.ref +
-					"'? · [s] stash & fast-forward · [a] abort · [esc] cancel",
-			)
-		case p.withCheckoutFF:
-			return confirmPromptS.Render(
-				"Uncommitted changes — checkout '" + p.ref +
-					"' and fast-forward? · [s] stash & checkout & fast-forward · [a] abort · [esc] cancel",
-			)
-		case p.withPull && p.skipReason == "":
-			return confirmPromptS.Render(
-				"Uncommitted changes — checkout '" + p.ref +
-					"' and pull? · [s] stash & checkout & pull · [a] abort · [esc] cancel",
-			)
-		case p.withPull:
-			return confirmPromptS.Render(
-				"Uncommitted changes — checkout '" + p.ref +
-					"' (pull skipped: " + p.skipReason +
-					")? · [s] stash & checkout · [a] abort · [esc] cancel",
-			)
-		default:
-			return confirmPromptS.Render(
-				"Uncommitted changes — checkout '" + p.ref +
-					"'? · [s] stash & checkout · [a] abort · [esc] cancel",
-			)
-		}
-	}
-	if m.mode == viewModeBranchPicker {
-		return m.renderBranchPicker(m.width, m.branchPickerReservedRows())
-	}
-	if m.mode == viewModeRefNameInput {
-		return m.renderRefNameInput(m.width, m.refNameInputReservedRows())
-	}
-	if m.mode == viewModeRefDeleteConfirm {
-		return m.renderRefDeleteConfirm(m.width, m.refDeleteConfirmReservedRows())
-	}
-	if m.mode == viewModeHelp {
+	switch m.mode {
+	case viewModeBranchPicker, viewModeRefNameInput, viewModeRefDeleteConfirm, viewModeCheckoutConfirm:
+		return " "
+	case viewModeHelp:
 		return renderHelpPanel(m.width, m.helpReservedRows())
 	}
 	if m.status == "" {

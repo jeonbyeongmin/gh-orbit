@@ -1728,11 +1728,72 @@ var (
 	borderFocused = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("205"))
-	help        = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	statusBusyS = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	statusOkS   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	statusErrS  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	// modalBoxStyle frames the centered overlay modals (create / rename
+	// name input, delete confirm, branch picker, dirty-tree confirm). It
+	// reuses the focused pane's border color/shape so the modal reads as
+	// "the new active surface" — same visual vocabulary, just centered.
+	modalBoxStyle = borderFocused.Padding(0, 1)
+	help          = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	statusBusyS   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	statusOkS     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	statusErrS    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 )
+
+// modalChromeWidth / modalChromeHeight are the per-axis cells the
+// RoundedBorder + Padding(0,1) decoration adds around the inner content.
+// Width: 2 border + 2 padding = 4. Height: 2 border = 2.
+const (
+	modalChromeWidth  = 4
+	modalChromeHeight = 2
+	modalMinInnerW    = 20
+	modalMinInnerH    = 1
+)
+
+// renderModalBox wraps inner content in modalBoxStyle. Kept as a one-line
+// helper so future hooks (centered title, footer slot, etc.) have a
+// single place to land.
+func renderModalBox(inner string) string {
+	return modalBoxStyle.Render(inner)
+}
+
+// modalSize returns the outer width and height of the modal box for the
+// given inner content, clamped to fit within screenW × screenH. The
+// returned dimensions include the border + padding chrome, so they are
+// directly comparable to the screen dimensions used by composeOverlay.
+func modalSize(content string, screenW, screenH int) (w, h int) {
+	innerW := 0
+	innerH := 1
+	for _, line := range strings.Split(content, "\n") {
+		if cw := lipgloss.Width(line); cw > innerW {
+			innerW = cw
+		}
+	}
+	innerH = strings.Count(content, "\n") + 1
+
+	if innerW < modalMinInnerW {
+		innerW = modalMinInnerW
+	}
+	if innerH < modalMinInnerH {
+		innerH = modalMinInnerH
+	}
+
+	maxInnerW := screenW - modalChromeWidth
+	if maxInnerW < 1 {
+		maxInnerW = 1
+	}
+	if innerW > maxInnerW {
+		innerW = maxInnerW
+	}
+	maxInnerH := screenH - modalChromeHeight
+	if maxInnerH < 1 {
+		maxInnerH = 1
+	}
+	if innerH > maxInnerH {
+		innerH = maxInnerH
+	}
+
+	return innerW + modalChromeWidth, innerH + modalChromeHeight
+}
 
 const helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
 

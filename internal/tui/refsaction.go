@@ -33,12 +33,12 @@ const (
 // own error line — populated either by validation failure or by a server-
 // side rejection that needs the user to fix the typed value before retrying.
 type refNameInputState struct {
-	mode      refNameInputMode
-	target    git.Ref // rename: the source ref. create: zero value.
-	base      string  // create only: resolved hash or HEAD ("" → HEAD).
-	baseLabel string  // create only: short label shown to the user.
-	input     textinput.Model
-	inlineErr string
+	mode       refNameInputMode
+	target     git.Ref // rename: the source ref. create: zero value.
+	base       string  // create only: resolved hash or HEAD ("" → HEAD).
+	baseLabel  string  // create only: short label shown to the user.
+	input      textinput.Model
+	inlineErr  string
 	validating bool
 }
 

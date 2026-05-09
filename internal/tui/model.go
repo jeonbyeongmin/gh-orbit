@@ -1600,46 +1600,63 @@ func (m Model) refDeleteConfirmReservedRows() int {
 	return max(want, 1)
 }
 
-// renderBranchPicker draws the picker panel as a `[Branch select]` header
-// row, one row per candidate (cursor row prefixed with "> "), and a
-// trailing hint row. Rows past `height` are dropped — same shrink-rather-
-// than-overflow behavior as renderHelpPanel.
-func (m Model) renderBranchPicker(width, height int) string {
-	if width < 1 || height < 1 {
-		return ""
+// modalHeaderS is the bold style applied to the header row of the create /
+// rename / picker modals. Delete confirm reuses confirmPromptS (busy-color
+// + bold), which is its existing visual; checkout confirm uses
+// confirmPromptS too. modalHeaderS is plain-bold so create/rename/picker
+// don't read as a "warning" alongside the textinput cursor.
+var modalHeaderS = lipgloss.NewStyle().Bold(true)
+
+// renderBranchPickerInner returns the multi-line picker content. Built
+// for composeOverlay — no border / size / hint chrome here, just rows.
+//
+// Scroll: candidate rows are sliced to a window of branchPickerVisibleRows
+// starting at viewportTop. When the list overflows the window, the slice
+// is sandwiched between "↑ N more" / "↓ N more" lines so the user knows
+// there are off-screen candidates.
+func (m Model) renderBranchPickerInner() string {
+	visibleRows := branchPickerVisibleRows(m.height, len(m.branchPicker.candidates))
+	if visibleRows < 1 {
+		visibleRows = 1
 	}
-	var lines []string
-	lines = append(lines, "[Branch select]")
-	for i, c := range m.branchPicker.candidates {
-		marker := "  "
-		if i == m.branchPicker.cursor {
-			marker = "> "
+	top := m.branchPicker.viewportTop
+	if top < 0 {
+		top = 0
+	}
+	end := top + visibleRows
+	if end > len(m.branchPicker.candidates) {
+		end = len(m.branchPicker.candidates)
+		top = end - visibleRows
+		if top < 0 {
+			top = 0
 		}
-		row := marker + c
+	}
+
+	lines := []string{modalHeaderS.Render("[Branch select]")}
+	if top > 0 {
+		lines = append(lines, help.Render(fmt.Sprintf("↑ %d more", top)))
+	}
+	for i := top; i < end; i++ {
+		marker := "  "
+		row := marker + m.branchPicker.candidates[i]
 		if i == m.branchPicker.cursor {
-			row = selectedStyle.Render(row)
+			row = selectedStyle.Render("> " + m.branchPicker.candidates[i])
 		}
 		lines = append(lines, row)
 	}
-	lines = append(lines, helpTextBranchPicker)
-	if len(lines) > height {
-		lines = lines[:height]
+	if rest := len(m.branchPicker.candidates) - end; rest > 0 {
+		lines = append(lines, help.Render(fmt.Sprintf("↓ %d more", rest)))
 	}
-	rendered := make([]string, len(lines))
-	for i, ln := range lines {
-		rendered[i] = fitHelpLine(ln, width)
-	}
-	return strings.Join(rendered, "\n")
+	lines = append(lines, help.Render(helpTextBranchPicker))
+
+	return strings.Join(lines, "\n")
 }
 
-// renderRefNameInput draws the create / rename modal: a header row naming
-// the action, the textinput's view (one row), an optional inline-error row
-// (or a blank spacer when there is none — keeps row count constant so the
-// hint doesn't bounce as the user types/clears), and a trailing hint row.
-func (m Model) renderRefNameInput(width, height int) string {
-	if width < 1 || height < 1 {
-		return ""
-	}
+// renderRefNameInputInner returns the multi-line content for the create /
+// rename name-entry modal. Four rows: header (bold), textinput view,
+// inline-error or spacer (constant row count so the hint never bounces),
+// and a trailing hint.
+func (m Model) renderRefNameInputInner() string {
 	var header string
 	switch m.refNameInput.mode {
 	case refNameInputCreate:
@@ -1661,27 +1678,20 @@ func (m Model) renderRefNameInput(width, height int) string {
 		errLine = statusBusyS.Render("validating…")
 	}
 
-	hint := "[enter] confirm · [esc] cancel"
+	hint := help.Render("[enter] confirm · [esc] cancel")
 
-	lines := []string{header, inputView, errLine, hint}
-	if len(lines) > height {
-		lines = lines[:height]
-	}
-	rendered := make([]string, len(lines))
-	for i, ln := range lines {
-		rendered[i] = fitHelpLine(ln, width)
-	}
-	return strings.Join(rendered, "\n")
+	return strings.Join([]string{
+		modalHeaderS.Render(header),
+		inputView,
+		errLine,
+		hint,
+	}, "\n")
 }
 
-// renderRefDeleteConfirm draws the delete confirm modal. The hint row's
-// available keys depend on hasLocal × hasRemote so the user only ever sees
-// keys that will actually fire. unmerged adds a "use [f] or [F] to force"
-// callout above the hint.
-func (m Model) renderRefDeleteConfirm(width, height int) string {
-	if width < 1 || height < 1 {
-		return ""
-	}
+// renderRefDeleteConfirmInner returns the multi-line content for the
+// delete confirm modal. Header (confirmPromptS — bold + busy color) plus
+// optional sub-line plus hint matrix derived from hasLocal × hasRemote.
+func (m Model) renderRefDeleteConfirmInner() string {
 	d := m.pendingRefDelete
 
 	var header, sub string
@@ -1706,21 +1716,56 @@ func (m Model) renderRefDeleteConfirm(width, height int) string {
 		hint = "[y] delete remote · [esc] cancel"
 	}
 
-	var lines []string
-	lines = append(lines, confirmPromptS.Render(header))
+	lines := []string{confirmPromptS.Render(header)}
 	if sub != "" {
 		lines = append(lines, statusOkS.Render(sub))
 	}
-	lines = append(lines, hint)
+	lines = append(lines, help.Render(hint))
+	return strings.Join(lines, "\n")
+}
 
-	if len(lines) > height {
-		lines = lines[:height]
+// renderCheckoutConfirmInner returns the 3-row content for the dirty-tree
+// confirm modal:
+//
+//	[Bold] Uncommitted changes
+//	body          ← variant-specific question line
+//	hint          ← variant-specific [s] / [a] / [esc] keys
+//
+// Variant precedence matches the legacy renderHelpStatus prose:
+//   - withFF: same-branch fast-forward (no checkout step).
+//   - withCheckoutFF: cross-branch case (checkout + fast-forward chain).
+//   - withPull && skipReason == "": checkout + pull chain.
+//   - withPull && skipReason != "": pull will be elided — body advertises
+//     "(pull skipped: <reason>)" and the hint stays on plain "stash &
+//     checkout" so the user isn't promised a step that won't run.
+//   - default: plain checkout.
+func (m Model) renderCheckoutConfirmInner() string {
+	p := m.pendingCheckout
+
+	var body, hint string
+	switch {
+	case p.withFF:
+		body = "fast-forward '" + p.ref + "'?"
+		hint = "[s] stash & fast-forward · [a] abort · [esc] cancel"
+	case p.withCheckoutFF:
+		body = "checkout '" + p.ref + "' and fast-forward?"
+		hint = "[s] stash & checkout & fast-forward · [a] abort · [esc] cancel"
+	case p.withPull && p.skipReason == "":
+		body = "checkout '" + p.ref + "' and pull?"
+		hint = "[s] stash & checkout & pull · [a] abort · [esc] cancel"
+	case p.withPull:
+		body = "checkout '" + p.ref + "' (pull skipped: " + p.skipReason + ")?"
+		hint = "[s] stash & checkout · [a] abort · [esc] cancel"
+	default:
+		body = "checkout '" + p.ref + "'?"
+		hint = "[s] stash & checkout · [a] abort · [esc] cancel"
 	}
-	rendered := make([]string, len(lines))
-	for i, ln := range lines {
-		rendered[i] = fitHelpLine(ln, width)
-	}
-	return strings.Join(rendered, "\n")
+
+	return strings.Join([]string{
+		confirmPromptS.Render("Uncommitted changes"),
+		statusBusyS.Render(body),
+		help.Render(hint),
+	}, "\n")
 }
 
 var (
@@ -1888,13 +1933,13 @@ func (m Model) renderHelpStatus() string {
 		}
 	}
 	if m.mode == viewModeBranchPicker {
-		return m.renderBranchPicker(m.width, m.branchPickerReservedRows())
+		return renderModalBox(m.renderBranchPickerInner())
 	}
 	if m.mode == viewModeRefNameInput {
-		return m.renderRefNameInput(m.width, m.refNameInputReservedRows())
+		return renderModalBox(m.renderRefNameInputInner())
 	}
 	if m.mode == viewModeRefDeleteConfirm {
-		return m.renderRefDeleteConfirm(m.width, m.refDeleteConfirmReservedRows())
+		return renderModalBox(m.renderRefDeleteConfirmInner())
 	}
 	if m.mode == viewModeHelp {
 		return renderHelpPanel(m.width, m.helpReservedRows())

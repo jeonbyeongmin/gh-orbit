@@ -1865,7 +1865,19 @@ func (m Model) View() string {
 
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
 	main := lipgloss.JoinHorizontal(lipgloss.Top, refsBox, rightCol)
-	return lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
+	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
+
+	switch m.mode {
+	case viewModeBranchPicker:
+		return composeOverlay(base, renderModalBox(m.renderBranchPickerInner()), m.width, m.height)
+	case viewModeRefNameInput:
+		return composeOverlay(base, renderModalBox(m.renderRefNameInputInner()), m.width, m.height)
+	case viewModeRefDeleteConfirm:
+		return composeOverlay(base, renderModalBox(m.renderRefDeleteConfirmInner()), m.width, m.height)
+	case viewModeCheckoutConfirm:
+		return composeOverlay(base, renderModalBox(m.renderCheckoutConfirmInner()), m.width, m.height)
+	}
+	return base
 }
 
 func boxStyle(focused bool) lipgloss.Style {
@@ -1891,57 +1903,20 @@ func (m Model) tabBody() string {
 // renderHelpStatus lays out the bottom line as "help … status". When the
 // terminal is too narrow to fit both, status wins — the user just triggered
 // an action and seeing its outcome matters more than the help reminder.
-// The dirty-tree checkout modal replaces the whole line with its prompt
-// so the available choice keys are unambiguous, and viewModeHelp expands
-// the line into a multi-row panel.
+//
+// Centered modal modes (branch picker / ref name input / ref delete /
+// dirty-tree checkout confirm) drop their hint here: the modal box owns
+// its own [esc] hint row, so duplicating it on the bottom line would just
+// double the prompt. A blank space keeps the row count stable across the
+// modal toggle so View()'s base frame doesn't jump in height.
+//
+// viewModeHelp expands the bottom line into a multi-row panel so the
+// shortcut reference can fit the full key matrix.
 func (m Model) renderHelpStatus() string {
-	if m.mode == viewModeCheckoutConfirm {
-		// Four modal variants. The skipReason check sits BEFORE the withPull
-		// branch — when pull will be elided we want the legacy "stash & checkout"
-		// text plus the skip reason, not "and pull?" which would over-promise.
-		// withFF is mutually exclusive with withPull (different keys originate
-		// the chain) and gets its own prompt so the user sees "fast-forward",
-		// not "checkout".
-		p := m.pendingCheckout
-		switch {
-		case p.withFF:
-			return confirmPromptS.Render(
-				"Uncommitted changes — fast-forward '" + p.ref +
-					"'? · [s] stash & fast-forward · [a] abort · [esc] cancel",
-			)
-		case p.withCheckoutFF:
-			return confirmPromptS.Render(
-				"Uncommitted changes — checkout '" + p.ref +
-					"' and fast-forward? · [s] stash & checkout & fast-forward · [a] abort · [esc] cancel",
-			)
-		case p.withPull && p.skipReason == "":
-			return confirmPromptS.Render(
-				"Uncommitted changes — checkout '" + p.ref +
-					"' and pull? · [s] stash & checkout & pull · [a] abort · [esc] cancel",
-			)
-		case p.withPull:
-			return confirmPromptS.Render(
-				"Uncommitted changes — checkout '" + p.ref +
-					"' (pull skipped: " + p.skipReason +
-					")? · [s] stash & checkout · [a] abort · [esc] cancel",
-			)
-		default:
-			return confirmPromptS.Render(
-				"Uncommitted changes — checkout '" + p.ref +
-					"'? · [s] stash & checkout · [a] abort · [esc] cancel",
-			)
-		}
-	}
-	if m.mode == viewModeBranchPicker {
-		return renderModalBox(m.renderBranchPickerInner())
-	}
-	if m.mode == viewModeRefNameInput {
-		return renderModalBox(m.renderRefNameInputInner())
-	}
-	if m.mode == viewModeRefDeleteConfirm {
-		return renderModalBox(m.renderRefDeleteConfirmInner())
-	}
-	if m.mode == viewModeHelp {
+	switch m.mode {
+	case viewModeBranchPicker, viewModeRefNameInput, viewModeRefDeleteConfirm, viewModeCheckoutConfirm:
+		return " "
+	case viewModeHelp:
 		return renderHelpPanel(m.width, m.helpReservedRows())
 	}
 	if m.status == "" {

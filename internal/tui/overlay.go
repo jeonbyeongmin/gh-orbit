@@ -44,11 +44,14 @@ var sgrSequence = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 // pointless `\x1b[2m\x1b[38;5;240m\x1b[0m` that would still register as a
 // non-empty line in lipgloss.Width.
 func dimLine(line string) string {
-	stripped := sgrSequence.ReplaceAllString(line, "")
-	if stripped == "" {
+	if line == "" {
 		return line
 	}
-	return dimEnable + stripped + dimReset
+	if !strings.ContainsRune(line, '\x1b') {
+		// No SGR to strip — skip the regex pass and just wrap.
+		return dimEnable + line + dimReset
+	}
+	return dimEnable + sgrSequence.ReplaceAllString(line, "") + dimReset
 }
 
 // composeOverlay paints `modal` over `base` at screen center. The modal
@@ -99,14 +102,10 @@ func composeOverlay(base, modal string, baseW, baseH int) string {
 		modalLines = clamped
 	}
 
+	// Clamps above guarantee modalH ≤ baseH and modalW ≤ baseW, so both
+	// halves of the integer divides land in [0, baseDim).
 	top := (baseH - modalH) / 2
-	if top < 0 {
-		top = 0
-	}
 	left := (baseW - modalW) / 2
-	if left < 0 {
-		left = 0
-	}
 
 	out := make([]string, len(baseLines))
 	for i, line := range baseLines {

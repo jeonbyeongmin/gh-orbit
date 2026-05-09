@@ -1580,12 +1580,11 @@ func (m Model) renderBranchPickerInner() string {
 		lines = append(lines, help.Render(fmt.Sprintf("↑ %d more", top)))
 	}
 	for i := top; i < end; i++ {
-		marker := "  "
-		row := marker + m.branchPicker.candidates[i]
 		if i == m.branchPicker.cursor {
-			row = selectedStyle.Render("> " + m.branchPicker.candidates[i])
+			lines = append(lines, selectedStyle.Render("> "+m.branchPicker.candidates[i]))
+		} else {
+			lines = append(lines, "  "+m.branchPicker.candidates[i])
 		}
-		lines = append(lines, row)
 	}
 	if rest := len(m.branchPicker.candidates) - end; rest > 0 {
 		lines = append(lines, help.Render(fmt.Sprintf("↓ %d more", rest)))
@@ -1668,20 +1667,10 @@ func (m Model) renderRefDeleteConfirmInner() string {
 }
 
 // renderCheckoutConfirmInner returns the 3-row content for the dirty-tree
-// confirm modal:
-//
-//	[Bold] Uncommitted changes
-//	body          ← variant-specific question line
-//	hint          ← variant-specific [s] / [a] / [esc] keys
-//
-// Variant precedence matches the legacy renderHelpStatus prose:
-//   - withFF: same-branch fast-forward (no checkout step).
-//   - withCheckoutFF: cross-branch case (checkout + fast-forward chain).
-//   - withPull && skipReason == "": checkout + pull chain.
-//   - withPull && skipReason != "": pull will be elided — body advertises
-//     "(pull skipped: <reason>)" and the hint stays on plain "stash &
-//     checkout" so the user isn't promised a step that won't run.
-//   - default: plain checkout.
+// confirm modal: bold "Uncommitted changes" header, a variant body line,
+// and a variant hint line. The withPull case sits above the skip-reason
+// case so a no-skip pull advertises "and pull"; the skip variant falls
+// through to "stash & checkout" instead, since the chain elides the pull.
 func (m Model) renderCheckoutConfirmInner() string {
 	p := m.pendingCheckout
 
@@ -1729,60 +1718,9 @@ var (
 	statusErrS    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 )
 
-// modalChromeWidth / modalChromeHeight are the per-axis cells the
-// RoundedBorder + Padding(0,1) decoration adds around the inner content.
-// Width: 2 border + 2 padding = 4. Height: 2 border = 2.
-const (
-	modalChromeWidth  = 4
-	modalChromeHeight = 2
-	modalMinInnerW    = 20
-	modalMinInnerH    = 1
-)
-
-// renderModalBox wraps inner content in modalBoxStyle. Kept as a one-line
-// helper so future hooks (centered title, footer slot, etc.) have a
-// single place to land.
+// renderModalBox wraps inner content in modalBoxStyle.
 func renderModalBox(inner string) string {
 	return modalBoxStyle.Render(inner)
-}
-
-// modalSize returns the outer width and height of the modal box for the
-// given inner content, clamped to fit within screenW × screenH. The
-// returned dimensions include the border + padding chrome, so they are
-// directly comparable to the screen dimensions used by composeOverlay.
-func modalSize(content string, screenW, screenH int) (w, h int) {
-	innerW := 0
-	innerH := 1
-	for _, line := range strings.Split(content, "\n") {
-		if cw := lipgloss.Width(line); cw > innerW {
-			innerW = cw
-		}
-	}
-	innerH = strings.Count(content, "\n") + 1
-
-	if innerW < modalMinInnerW {
-		innerW = modalMinInnerW
-	}
-	if innerH < modalMinInnerH {
-		innerH = modalMinInnerH
-	}
-
-	maxInnerW := screenW - modalChromeWidth
-	if maxInnerW < 1 {
-		maxInnerW = 1
-	}
-	if innerW > maxInnerW {
-		innerW = maxInnerW
-	}
-	maxInnerH := screenH - modalChromeHeight
-	if maxInnerH < 1 {
-		maxInnerH = 1
-	}
-	if innerH > maxInnerH {
-		innerH = maxInnerH
-	}
-
-	return innerW + modalChromeWidth, innerH + modalChromeHeight
 }
 
 const helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"

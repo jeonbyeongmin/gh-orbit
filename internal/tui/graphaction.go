@@ -99,28 +99,33 @@ func (s *branchPickerState) scrollIntoView(visibleRows int) {
 }
 
 // branchPickerVisibleRows caps the candidate row count at ~70% of the
-// screen height minus the modal box's chrome (border) and the picker's
-// fixed header + hint rows. Below `branchPickerVisibleRowsFloor` the
-// picker shows a single candidate at a time — small terminals stay
-// usable instead of squashing the box flat.
+// screen height minus the modal box's chrome and the picker's fixed
+// header + hint + two scroll-marker rows ("↑ N more" / "↓ N more"
+// always reserved so the cap stays valid even when overflow kicks in).
+// On terminals too small to fit the cap math the floor is 1 — small
+// terminals stay usable instead of squashing the box flat.
 const (
 	branchPickerHeaderRows  = 1
 	branchPickerHintRows    = 1
-	branchPickerHeightRatio = 0.7
+	branchPickerMarkerRows  = 2
+	branchPickerHeightRatio = 7
+	branchPickerHeightDenom = 10
 )
 
 // branchPickerVisibleRows returns the count of candidate rows that fit
 // inside the picker's inner content area for a given screen height and
 // candidate count. The result is always ≥ 1 so the cursor is reachable.
 func branchPickerVisibleRows(screenH, candidates int) int {
-	cap := int(float64(screenH)*branchPickerHeightRatio) - modalChromeHeight - branchPickerHeaderRows - branchPickerHintRows
-	if cap < 1 {
-		cap = 1
+	chromeH := modalBoxStyle.GetVerticalFrameSize()
+	rows := screenH*branchPickerHeightRatio/branchPickerHeightDenom -
+		chromeH - branchPickerHeaderRows - branchPickerHintRows - branchPickerMarkerRows
+	if rows < 1 {
+		rows = 1
 	}
-	if candidates < cap {
+	if candidates < rows {
 		return candidates
 	}
-	return cap
+	return rows
 }
 
 // evaluateGraphActionCmd runs the full Enter decision tree on a goroutine

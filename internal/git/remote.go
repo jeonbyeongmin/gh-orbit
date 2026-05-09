@@ -469,12 +469,15 @@ func isBranchNotFullyMerged(stderr string) bool {
 }
 
 // isBranchNotFound matches git's missing-branch rejection for `branch -d` /
-// `branch -m`. Wording differs by subcommand:
+// `branch -m`. Wording differs by subcommand AND across versions:
 //   - `branch -d <missing>` → "error: branch '<x>' not found."
-//   - `branch -m <missing> <new>` → "fatal: No branch named '<x>'."
+//   - `branch -m <missing> <new>` → "fatal: No branch named '<x>'." (older)
+//     or "fatal: no branch named '<x>'" (newer; lowercase 'no').
 //
-// We accept either substring; no other branch-failure mode uses them.
+// strings.Contains is case-sensitive, so we match both casings of the
+// rename phrase. No other branch-failure mode uses these substrings.
 func isBranchNotFound(stderr string) bool {
 	return strings.Contains(stderr, "not found") ||
-		strings.Contains(stderr, "No branch named")
+		strings.Contains(stderr, "No branch named") ||
+		strings.Contains(stderr, "no branch named")
 }

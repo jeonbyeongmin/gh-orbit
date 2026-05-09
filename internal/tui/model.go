@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -679,6 +680,148 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingHEADHash = pendingHEADSentinel
 		return m, m.reloadCmd()
 
+	case refCreateRequestedMsg:
+		var cmd tea.Cmd
+		m, cmd = m.beginRefCreate(msg.cursorRef, msg.hasCursor)
+		return m, cmd
+
+	case refRenameRequestedMsg:
+		var cmd tea.Cmd
+		m, cmd = m.beginRefRename(msg.ref)
+		return m, cmd
+
+	case refRenameRejectedMsg:
+		m.status = msg.reason
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case refNameValidatedMsg:
+		m.refNameInput.validating = false
+		if msg.err != nil {
+			m.refNameInput.inlineErr = firstLine(msg.err.Error())
+			return m, nil
+		}
+		name := strings.TrimSpace(msg.name)
+		switch m.refNameInput.mode {
+		case refNameInputCreate:
+			var cmd tea.Cmd
+			m, cmd = m.dispatchRefCreate(name)
+			return m, cmd
+		case refNameInputRename:
+			var cmd tea.Cmd
+			m, cmd = m.dispatchRefRename(name)
+			return m, cmd
+		}
+		return m, nil
+
+	case branchCreateSucceededMsg:
+		m.refActionInFlight = false
+		m.mode = viewModeNormal
+		m.refNameInput = refNameInputState{}
+		m.applyPaneSizes()
+		base := msg.baseLabel
+		if base == "" {
+			base = "HEAD"
+		}
+		m.status = "created '" + msg.name + "' (from " + base + ")"
+		m.statusStyle = statusOkS
+		m.pendingRefCursorName = msg.name
+		return m, m.reloadCmd()
+
+	case branchCreateFailedMsg:
+		m.refActionInFlight = false
+		// Keep the modal open so the user can fix the typed name and retry.
+		if errors.Is(msg.err, git.ErrBranchAlreadyExists) ||
+			errors.Is(msg.err, git.ErrInvalidRefName) {
+			m.refNameInput.inlineErr = firstLine(msg.err.Error())
+			return m, nil
+		}
+		m.mode = viewModeNormal
+		m.refNameInput = refNameInputState{}
+		m.applyPaneSizes()
+		m.status = "create failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case branchRenameSucceededMsg:
+		m.refActionInFlight = false
+		m.mode = viewModeNormal
+		m.refNameInput = refNameInputState{}
+		m.applyPaneSizes()
+		m.status = "renamed '" + msg.oldName + "' → '" + msg.newName + "'"
+		m.statusStyle = statusOkS
+		m.pendingRefCursorName = msg.newName
+		if msg.headWasOld {
+			// HEAD now points at newName; sentinel survives reload and is
+			// resolved to the post-rename HEAD hash by refsLoadedMsg.
+			m.pendingHEADHash = pendingHEADSentinel
+		}
+		return m, m.reloadCmd()
+
+	case branchRenameFailedMsg:
+		m.refActionInFlight = false
+		if errors.Is(msg.err, git.ErrBranchAlreadyExists) ||
+			errors.Is(msg.err, git.ErrInvalidRefName) {
+			m.refNameInput.inlineErr = firstLine(msg.err.Error())
+			return m, nil
+		}
+		m.mode = viewModeNormal
+		m.refNameInput = refNameInputState{}
+		m.applyPaneSizes()
+		m.status = "rename failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case branchDeleteSucceededMsg:
+		m.refActionInFlight = false
+		m.mode = viewModeNormal
+		m.pendingRefDelete = refDeleteState{}
+		m.applyPaneSizes()
+		m.status = formatDeleteSuccess(msg.target, msg.scope, msg.localDeleted, msg.remoteDeleted)
+		m.statusStyle = statusOkS
+		// Cursor follow-up: prefer the local name when local was deleted,
+		// else the remote shortname so the cursor lands somewhere sensible
+		// in the remote section.
+		if msg.localDeleted {
+			m.pendingRefCursorAfterDelete = msg.target.localName
+		} else if msg.remoteDeleted {
+			m.pendingRefCursorAfterDelete = msg.target.remote + "/" + msg.target.remoteBranch
+		}
+		return m, m.reloadCmd()
+
+	case branchDeletePartialMsg:
+		m.refActionInFlight = false
+		m.mode = viewModeNormal
+		m.pendingRefDelete = refDeleteState{}
+		m.applyPaneSizes()
+		m.status = "deleted '" + msg.target.localName + "'; remote push failed: " +
+			firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		// Local was deleted — move the cursor off it. Remote is still there.
+		if msg.localDeleted {
+			m.pendingRefCursorAfterDelete = msg.target.localName
+		}
+		return m, m.reloadCmd()
+
+	case branchDeleteFailedMsg:
+		m.refActionInFlight = false
+		m.mode = viewModeNormal
+		m.pendingRefDelete = refDeleteState{}
+		m.applyPaneSizes()
+		m.status = "delete failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case branchDeleteNotMergedMsg:
+		m.refActionInFlight = false
+		m.mode = viewModeNormal
+		m.pendingRefDelete = refDeleteState{}
+		m.applyPaneSizes()
+		m.status = "delete: '" + msg.target.localName +
+			"' not fully merged — press [f] or [F] to force"
+		m.statusStyle = statusErrS
+		return m, nil
+
 	case tea.KeyMsg:
 		// The viewMode guard runs before the global ctrl+c/q quit branch so
 		// `q` inside the overlay closes the overlay instead of killing the app.
@@ -729,6 +872,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+c":
 				m.cancelStream()
 				return m, tea.Quit
+			}
+			return m, nil
+		}
+		if m.mode == viewModeRefNameInput {
+			switch msg.String() {
+			case "esc":
+				m.mode = viewModeNormal
+				m.refNameInput = refNameInputState{}
+				m.status = "ref input cancelled"
+				m.statusStyle = statusOkS
+				m.applyPaneSizes()
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			case "enter":
+				if m.refNameInput.validating {
+					return m, nil
+				}
+				name := strings.TrimSpace(m.refNameInput.input.Value())
+				if name == "" {
+					m.refNameInput.inlineErr = "name required"
+					return m, nil
+				}
+				m.refNameInput.inlineErr = ""
+				m.refNameInput.validating = true
+				return m, checkRefFormatCmd("", name)
+			}
+			var cmd tea.Cmd
+			m.refNameInput.input, cmd = m.refNameInput.input.Update(msg)
+			return m, cmd
+		}
+		if m.mode == viewModeRefDeleteConfirm {
+			switch msg.String() {
+			case "esc":
+				m.mode = viewModeNormal
+				m.pendingRefDelete = refDeleteState{}
+				m.status = "delete: cancelled"
+				m.statusStyle = statusOkS
+				m.applyPaneSizes()
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			case "y", "Y", "f", "F":
+				scope, ok := resolveDeleteScope(
+					msg.String(), m.pendingRefDelete.hasLocal, m.pendingRefDelete.hasRemote,
+				)
+				if !ok {
+					// Key swallowed — out-of-matrix for this target.
+					return m, nil
+				}
+				return m.dispatchRefDelete(scope)
 			}
 			return m, nil
 		}
@@ -853,6 +1049,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				shortHash(c.Hash), len(locals), len(remotes))
 			return m, evaluateGraphActionCmd("", c.Hash, locals, remotes)
 		case "d":
+			// Refs focus reinterprets `d` as the delete intent so the
+			// destructive ref-write key doesn't collide with the patch
+			// overlay. Graph / tab focus falls through to the patch
+			// overlay (the original behavior).
+			if m.focused == paneRefs {
+				return m.beginRefDelete()
+			}
 			c, ok := m.graph.Selected()
 			if !ok {
 				return m, nil
@@ -1030,6 +1233,164 @@ func checkoutLabel(ref string, detached bool) string {
 		return "checkout: detached at " + shortHash(ref)
 	}
 	return "checkout: " + ref
+}
+
+// beginRefCreate opens the create modal with the base hash + label resolved
+// from the focused pane. The modal's textinput is freshly initialized each
+// time so a previous typed value doesn't leak into the next session.
+func (m Model) beginRefCreate(refsCursorRef git.Ref, refsHasCursor bool) (Model, tea.Cmd) {
+	if m.refActionInFlight {
+		return m, nil
+	}
+	graphHash := ""
+	if c, ok := m.graph.Selected(); ok {
+		graphHash = c.Hash
+	}
+	base, label := resolveCreateBase(m.focused, graphHash, refsCursorRef, refsHasCursor)
+
+	ti := textinput.New()
+	ti.Placeholder = "branch name"
+	ti.Focus()
+	ti.CharLimit = 200
+	ti.Width = 40
+
+	m.refNameInput = refNameInputState{
+		mode:      refNameInputCreate,
+		base:      base,
+		baseLabel: label,
+		input:     ti,
+	}
+	m.mode = viewModeRefNameInput
+	m.status = ""
+	m.applyPaneSizes()
+	return m, textinput.Blink
+}
+
+// beginRefRename opens the rename modal with the source ref baked in. The
+// textinput is pre-populated with the current name so the user can edit
+// rather than retype, but the cursor is left at the end so a single Enter
+// without edits lands on a no-op (which the validator catches as the same-
+// name case via git itself).
+func (m Model) beginRefRename(target git.Ref) (Model, tea.Cmd) {
+	if m.refActionInFlight {
+		return m, nil
+	}
+	ti := textinput.New()
+	ti.SetValue(target.ShortName)
+	ti.CursorEnd()
+	ti.Focus()
+	ti.CharLimit = 200
+	ti.Width = 40
+
+	m.refNameInput = refNameInputState{
+		mode:   refNameInputRename,
+		target: target,
+		input:  ti,
+	}
+	m.mode = viewModeRefNameInput
+	m.status = ""
+	m.applyPaneSizes()
+	return m, textinput.Blink
+}
+
+// beginRefDelete reads the cursor ref from refs and opens the delete modal
+// with the resolved 4-axis state. HEAD branches and tags are filtered with a
+// status-bar message instead of opening the modal — destructive intent
+// against those targets is almost always a misclick.
+func (m Model) beginRefDelete() (Model, tea.Cmd) {
+	if m.refActionInFlight {
+		return m, nil
+	}
+	ref, ok := m.refs.Selected()
+	if !ok {
+		m.status = "delete: no ref selected"
+		m.statusStyle = statusErrS
+		return m, nil
+	}
+	if ref.Kind == git.RefKindLocal && ref.IsHead {
+		m.status = "cannot delete current branch"
+		m.statusStyle = statusErrS
+		return m, nil
+	}
+	if ref.Kind == git.RefKindTag {
+		m.status = "delete: branches only (tags not supported)"
+		m.statusStyle = statusErrS
+		return m, nil
+	}
+	st, ok := resolveDeleteState(ref, m.refs.LocalRefs(), m.refs.RemoteRefs())
+	if !ok {
+		m.status = "delete: nothing to delete on this ref"
+		m.statusStyle = statusErrS
+		return m, nil
+	}
+	m.pendingRefDelete = st
+	m.mode = viewModeRefDeleteConfirm
+	m.status = ""
+	m.applyPaneSizes()
+	return m, nil
+}
+
+// dispatchRefDelete fires branchDeleteCmd for the resolved scope and arms
+// the in-flight gate. The modal stays open while the cmd runs — the caller
+// closes it on the success / failed / partial msg.
+func (m Model) dispatchRefDelete(scope deleteScope) (Model, tea.Cmd) {
+	d := m.pendingRefDelete
+	target := deleteTarget{
+		localName:    d.localName,
+		remote:       d.remote,
+		remoteBranch: d.remoteBranch,
+	}
+	d.lastScope = scope
+	m.pendingRefDelete = d
+
+	m.refActionInFlight = true
+	m.mode = viewModeNormal
+	m.applyPaneSizes()
+
+	switch scope {
+	case scopeLocalSafe, scopeLocalForce:
+		m.status = "deleting '" + d.localName + "'…"
+	case scopeBothSafe, scopeBothForce:
+		m.status = "deleting '" + d.localName + "' + remote '" + d.remote + "/" + d.remoteBranch + "'…"
+	case scopeRemoteOnly:
+		m.status = "deleting remote '" + d.remote + "/" + d.remoteBranch + "'…"
+	}
+	m.statusStyle = statusBusyS
+	return m, branchDeleteCmd("", target, scope)
+}
+
+// dispatchRefCreate fires branchCreateCmd from the validated modal state
+// and arms the in-flight gate. The modal stays open while the cmd runs;
+// success / failure handlers close it.
+func (m Model) dispatchRefCreate(name string) (Model, tea.Cmd) {
+	if m.refActionInFlight {
+		return m, nil
+	}
+	m.refActionInFlight = true
+	m.refNameInput.validating = false
+	label := m.refNameInput.baseLabel
+	if label == "" {
+		label = "HEAD"
+	}
+	m.status = "creating '" + name + "'…"
+	m.statusStyle = statusBusyS
+	return m, branchCreateCmd("", name, m.refNameInput.base, label)
+}
+
+// dispatchRefRename fires branchRenameCmd from the validated modal state.
+// headWasOld is observed before the cmd fires so the post-reload graph cursor
+// jump can follow the rename when HEAD was the source.
+func (m Model) dispatchRefRename(name string) (Model, tea.Cmd) {
+	if m.refActionInFlight {
+		return m, nil
+	}
+	m.refActionInFlight = true
+	m.refNameInput.validating = false
+	src := m.refNameInput.target
+	headWasOld := src.IsHead
+	m.status = "renaming '" + src.ShortName + "' → '" + name + "'…"
+	m.statusStyle = statusBusyS
+	return m, branchRenameCmd("", src.ShortName, name, headWasOld)
 }
 
 // ffLabel renders the user-facing "fast-forward: <branch> +<N>" status

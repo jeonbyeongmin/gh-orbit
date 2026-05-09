@@ -293,6 +293,169 @@ func branchRenameCmd(dir, oldName, newName string, headWasOld bool) tea.Cmd {
 	}
 }
 
+// resolveCreateBase decides what hash the new branch should point at, plus a
+// human label for the modal header. Focus order: graph cursor → refs cursor
+// ref tip → HEAD. The label preserves the user's mental anchor (short hash
+// for graph, ref short name for refs, "HEAD" otherwise) so the modal reads
+// as "from where they were looking", not as a resolved hash.
+func resolveCreateBase(focused pane, graphCursorHash string, refsCursorRef git.Ref, refsHasCursor bool) (base, label string) {
+	switch focused {
+	case paneGraph:
+		if graphCursorHash != "" {
+			return graphCursorHash, shortHash(graphCursorHash)
+		}
+	case paneRefs:
+		if refsHasCursor {
+			return refsCursorRef.ObjectName, refsCursorRef.ShortName
+		}
+	}
+	return "", "HEAD"
+}
+
+// resolveDeleteState builds the refDeleteState from the cursor ref plus the
+// cached refs lists. The two big questions it answers:
+//   - For a local cursor: does the upstream resolve to a remote-tracking ref
+//     we still see in the cache? If yes, this is the "both sides" matrix.
+//   - For a remote cursor: is there a local that tracks this remote ref via
+//     its Upstream field? If yes, this is also the "both sides" matrix.
+//
+// Returns ok=false when the cursor isn't deletable (HEAD branch, tag, or a
+// remote ref whose only matching local is HEAD itself — we never auto-delete
+// HEAD).
+func resolveDeleteState(target git.Ref, locals, remotes []git.Ref) (refDeleteState, bool) {
+	if target.Kind == git.RefKindTag {
+		return refDeleteState{}, false
+	}
+	st := refDeleteState{target: target}
+
+	switch target.Kind {
+	case git.RefKindLocal:
+		if target.IsHead {
+			return refDeleteState{}, false
+		}
+		st.localName = target.ShortName
+		st.hasLocal = true
+		if target.Upstream != "" {
+			if remote, branch, ok := splitRemoteRef(target.Upstream); ok && hasRemoteRef(remotes, target.Upstream) {
+				st.remote = remote
+				st.remoteBranch = branch
+				st.hasRemote = true
+			}
+		}
+	case git.RefKindRemote:
+		remote, branch, ok := splitRemoteRef(target.ShortName)
+		if !ok {
+			return refDeleteState{}, false
+		}
+		st.remote = remote
+		st.remoteBranch = branch
+		st.hasRemote = true
+		// Find the local that tracks this remote (upstream-match, not name-match
+		// — the user may have renamed the local). HEAD-on-match is treated as
+		// "no local match" so the auto-cascade can't delete HEAD.
+		for _, l := range locals {
+			if l.Upstream == target.ShortName && !l.IsHead {
+				st.localName = l.ShortName
+				st.hasLocal = true
+				break
+			}
+		}
+	default:
+		return refDeleteState{}, false
+	}
+
+	if !st.hasLocal && !st.hasRemote {
+		return refDeleteState{}, false
+	}
+	return st, true
+}
+
+// splitRemoteRef splits "<remote>/<branch>" at the first slash. Names like
+// "origin/feat/foo" keep the slashes after the first one in the branch
+// portion ("feat/foo"). Returns ok=false when there's no slash (a malformed
+// remote-tracking ref name).
+func splitRemoteRef(short string) (remote, branch string, ok bool) {
+	i := strings.IndexByte(short, '/')
+	if i <= 0 || i == len(short)-1 {
+		return "", "", false
+	}
+	return short[:i], short[i+1:], true
+}
+
+// hasRemoteRef reports whether the cache contains a remote-tracking ref with
+// the given short name. Used to gate hasRemote on local-cursor deletes —
+// stale upstream pointers (remote ref already deleted on the server but the
+// local hasn't been pruned) should fall back to local-only.
+func hasRemoteRef(remotes []git.Ref, short string) bool {
+	for _, r := range remotes {
+		if r.ShortName == short {
+			return true
+		}
+	}
+	return false
+}
+
+// formatDeleteSuccess renders the status-bar message for a fully-successful
+// delete given the scope and which sides actually fired. Force is named
+// explicitly so the user sees the difference between safe and force; remote
+// names mirror the modal's "<remote>/<branch>" form for continuity.
+func formatDeleteSuccess(target deleteTarget, scope deleteScope, localDeleted, remoteDeleted bool) string {
+	switch scope {
+	case scopeLocalSafe:
+		return "deleted '" + target.localName + "'"
+	case scopeLocalForce:
+		return "deleted '" + target.localName + "' (forced)"
+	case scopeRemoteOnly:
+		return "deleted remote '" + target.remote + "/" + target.remoteBranch + "'"
+	case scopeBothSafe:
+		return "deleted '" + target.localName + "' + remote '" +
+			target.remote + "/" + target.remoteBranch + "'"
+	case scopeBothForce:
+		return "deleted '" + target.localName + "' (forced) + remote '" +
+			target.remote + "/" + target.remoteBranch + "'"
+	}
+	// Fallback uses the booleans (shouldn't fire — every scope is named above).
+	switch {
+	case localDeleted && remoteDeleted:
+		return "deleted '" + target.localName + "' + remote '" +
+			target.remote + "/" + target.remoteBranch + "'"
+	case localDeleted:
+		return "deleted '" + target.localName + "'"
+	case remoteDeleted:
+		return "deleted remote '" + target.remote + "/" + target.remoteBranch + "'"
+	}
+	return "delete: nothing happened"
+}
+
+// resolveDeleteScope translates a key press in the delete-confirm modal into
+// the scope the cmd should run, given the cursor's hasLocal / hasRemote
+// state. Returns ok=false when the key isn't valid for this matrix
+// (e.g. `Y` on a local-only target).
+func resolveDeleteScope(key string, hasLocal, hasRemote bool) (deleteScope, bool) {
+	switch key {
+	case "y":
+		switch {
+		case hasLocal:
+			return scopeLocalSafe, true
+		case hasRemote:
+			return scopeRemoteOnly, true
+		}
+	case "Y":
+		if hasLocal && hasRemote {
+			return scopeBothSafe, true
+		}
+	case "f":
+		if hasLocal {
+			return scopeLocalForce, true
+		}
+	case "F":
+		if hasLocal && hasRemote {
+			return scopeBothForce, true
+		}
+	}
+	return 0, false
+}
+
 // checkRefFormatCmd runs `git check-ref-format --branch <name>` so the modal
 // can report invalid input inline before we spend a fork on the actual
 // create / rename. Async (rather than inline in Update) because the fork

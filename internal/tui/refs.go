@@ -53,6 +53,27 @@ type refCheckoutRequestedMsg struct{ ref git.Ref }
 // variant".
 type refCheckoutWithPullRequestedMsg struct{ ref git.Ref }
 
+// refCreateRequestedMsg is emitted when the user presses `n` on the refs
+// pane. The root resolves the create base (graph cursor commit / refs
+// cursor ref tip / HEAD, depending on focus) and opens the name-input
+// modal. cursorRef carries the cursor ref for refs-focus base resolution;
+// hasCursor reflects whether there was any selectable ref under the cursor.
+type refCreateRequestedMsg struct {
+	cursorRef git.Ref
+	hasCursor bool
+}
+
+// refRenameRequestedMsg is emitted when the user presses `m` on a local
+// branch row. The root opens the name-input modal in rename mode with
+// the source ref baked in. refs.go already filters non-local refs
+// (m on a tag / remote-tracking ref emits refRenameRejectedMsg instead).
+type refRenameRequestedMsg struct{ ref git.Ref }
+
+// refRenameRejectedMsg is emitted when the user presses `m` but the cursor
+// ref isn't a local branch. The root surfaces the reason on the status bar
+// so the user understands why nothing happened.
+type refRenameRejectedMsg struct{ reason string }
+
 func loadRefsCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), refLoadTimeout)
@@ -106,6 +127,22 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 				return r, func() tea.Msg { return refCheckoutWithPullRequestedMsg{ref: ref} }
 			}
 			return r, nil
+		case "n":
+			ref, ok := r.Selected()
+			return r, func() tea.Msg { return refCreateRequestedMsg{cursorRef: ref, hasCursor: ok} }
+		case "m":
+			ref, ok := r.Selected()
+			if !ok {
+				return r, func() tea.Msg {
+					return refRenameRejectedMsg{reason: "rename: no ref selected"}
+				}
+			}
+			if ref.Kind != git.RefKindLocal {
+				return r, func() tea.Msg {
+					return refRenameRejectedMsg{reason: "rename: local branch only"}
+				}
+			}
+			return r, func() tea.Msg { return refRenameRequestedMsg{ref: ref} }
 		}
 		return r.handleKey(m), nil
 	}
@@ -201,6 +238,86 @@ func (r refModel) LocalRefs() []git.Ref { return r.byKind[0] }
 // carrying only a remote chip — those drive the "checkout local that
 // tracks this remote, then FF" cross-branch path.
 func (r refModel) RemoteRefs() []git.Ref { return r.byKind[1] }
+
+// SelectByName moves the cursor onto the first ref whose ShortName matches.
+// Search order is the visible section order (local → remote → tag) so a
+// post-create / post-rename jump lands on the local row even when a
+// same-named remote-tracking ref exists. Returns true on a hit. yOffset is
+// updated through scrollCursorIntoView so the new cursor row is visible.
+func (r *refModel) SelectByName(name string) bool {
+	if !r.loaded {
+		return false
+	}
+	idx := 0
+	for _, section := range r.byKind {
+		for _, ref := range section {
+			if ref.ShortName == name {
+				r.cursor = idx
+				*r = r.scrollCursorIntoView()
+				return true
+			}
+			idx++
+		}
+	}
+	return false
+}
+
+// SelectAfterDeleted positions the cursor as if `prevName` used to occupy a
+// row in the section identified by `kind`, picking the row that would now
+// be "next" in flat order — or the previous row if the deleted entry was
+// last in that section. Scoping to a single section is necessary so the
+// cursor doesn't bleed into a neighboring section just because that
+// section's first entry happens to sort alphabetically after `prevName`.
+func (r *refModel) SelectAfterDeleted(prevName string, kind git.RefKind) {
+	if !r.loaded {
+		return
+	}
+	sectionIdx := -1
+	for i, sec := range refSections {
+		if sec.kind == kind {
+			sectionIdx = i
+			break
+		}
+	}
+	if sectionIdx == -1 {
+		return
+	}
+	// Walk to the start of the matching section in flat-row space.
+	flatIdx := 0
+	for i := 0; i < sectionIdx; i++ {
+		flatIdx += len(r.byKind[i])
+	}
+	// Inside the section, take the alphabetical insertion point of prevName.
+	// for-each-ref already returned refs sorted, so the surviving section
+	// stays sorted.
+	section := r.byKind[sectionIdx]
+	for _, ref := range section {
+		if ref.ShortName > prevName {
+			r.cursor = flatIdx
+			*r = r.scrollCursorIntoView()
+			return
+		}
+		flatIdx++
+	}
+	// prevName was last in its section. Step back one row when possible so
+	// the cursor stays in the same section instead of jumping forward.
+	if len(section) > 0 {
+		r.cursor = flatIdx - 1
+		*r = r.scrollCursorIntoView()
+		return
+	}
+	// Section emptied entirely — clamp to the new total.
+	total := r.selectableCount()
+	if total == 0 {
+		r.cursor = 0
+		r.yOffset = 0
+		return
+	}
+	if r.cursor >= total {
+		r.cursor = total - 1
+	}
+	*r = r.scrollCursorIntoView()
+}
 
 func (r refModel) Selected() (git.Ref, bool) {
 	rows := r.flatRows()

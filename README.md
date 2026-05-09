@@ -46,8 +46,10 @@ PR review/merge is a follow-up milestone. Right now the build wires up:
   - `ctrl+d` / `ctrl+u` — scroll the Changes-tab patch viewport
   - `enter` — jump graph cursor to the focused ref tip (refs pane)
   - `a` — show every ref's commits (refs pane)
+  - `n` / `d` / `m` — new branch / delete (modal) / rename (refs pane); see
+    [CLAUDE.md § Refs Write Actions](./CLAUDE.md#refs-write-actions-n--d--m)
   - `y` — copy the focused commit's hash to the clipboard (Commit tab)
-  - `d` — open the patch overlay (`esc` / `q` to close)
+  - `d` — open the patch overlay (graph / tab focus; refs focus is delete)
   - `F` — `git fetch --all` in the background
   - `P` — `git pull` in the background; strategy from
     `~/.config/gh-orbit/config.toml` (`[pull] strategy = "ff-only" | "merge"

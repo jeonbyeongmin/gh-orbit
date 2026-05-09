@@ -69,6 +69,23 @@ var ErrStashPopConflict = errors.New("stash pop conflict")
 // "not a fast-forward" from transport / lock errors.
 var ErrFFNotPossible = errors.New("fast-forward not possible")
 
+// ErrBranchAlreadyExists marks a `git branch <name>` / `git branch -m`
+// failure whose stderr matched the "already exists" wording.
+var ErrBranchAlreadyExists = errors.New("branch already exists")
+
+// ErrBranchNotFullyMerged marks a `git branch -d` rejection because the
+// branch has commits not reachable from HEAD or its upstream. Callers can
+// branch on `errors.Is` to suggest a force delete.
+var ErrBranchNotFullyMerged = errors.New("branch not fully merged")
+
+// ErrBranchNotFound marks a `git branch -d` / `git branch -m` failure
+// whose stderr matched a missing-branch phrase.
+var ErrBranchNotFound = errors.New("branch not found")
+
+// ErrInvalidRefName marks a `git check-ref-format` failure (or the same-
+// style rejection from create / rename).
+var ErrInvalidRefName = errors.New("invalid ref name")
+
 // gitEnv returns the locale-locked, prompt-disabled env shared by every
 // wrapper that parses git's textual output. LC_ALL=C / LANG=C keep markers
 // like CONFLICT / "would be overwritten" in English so the parsers in this
@@ -339,4 +356,128 @@ func wrapGitErr(label string, runErr error, stderr string) error {
 		return fmt.Errorf("%s: %w", label, runErr)
 	}
 	return fmt.Errorf("%s: %w: %s", label, runErr, msg)
+}
+
+// branchSentinelMatch pairs a stderr-substring predicate with the sentinel
+// error to wrap with when it matches. Order matters — the first matcher
+// whose predicate returns true wins. Callers list sentinels in the order
+// they should be classified; an empty list means "no sentinels, fall
+// through to wrapGitErr".
+type branchSentinelMatch struct {
+	matches  func(string) bool
+	sentinel error
+}
+
+// runGitWrite is the shared body of the local-only branch wrappers. It
+// runs the command with locale-locked env, captures stderr, and on failure
+// classifies the error against `sentinels` before falling back to
+// wrapGitErr. Returning the same error layout (`<label>: <sentinel>: <msg>`)
+// for every wrapper keeps the TUI's stderr surface uniform.
+func runGitWrite(ctx context.Context, dir, label string, sentinels []branchSentinelMatch, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	cmd.Stdout = io.Discard
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	if runErr == nil {
+		return nil
+	}
+	msg := strings.TrimSpace(stderr.String())
+	for _, m := range sentinels {
+		if m.matches(msg) {
+			if msg == "" {
+				return fmt.Errorf("%s: %w", label, m.sentinel)
+			}
+			return fmt.Errorf("%s: %w: %s", label, m.sentinel, msg)
+		}
+	}
+	return wrapGitErr(label, runErr, msg)
+}
+
+// BranchCreate runs `git branch <name> [<base>]`. An empty base means HEAD —
+// git itself defaults to HEAD when the second arg is omitted. The TUI passes
+// either a commit hash (graph cursor) or a ref tip (refs cursor); resolving
+// the right base lives in the caller because it depends on focus state.
+func BranchCreate(ctx context.Context, dir, name, base string) error {
+	args := []string{"branch", name}
+	if base != "" {
+		args = append(args, base)
+	}
+	return runGitWrite(ctx, dir, "git branch", []branchSentinelMatch{
+		{isBranchAlreadyExists, ErrBranchAlreadyExists},
+	}, args...)
+}
+
+// BranchDelete runs `git branch -d <name>` (force=false) or `git branch -D
+// <name>` (force=true). The unmerged-rejection phrase ("not fully merged")
+// is wrapped with ErrBranchNotFullyMerged; missing-branch routes to
+// ErrBranchNotFound.
+func BranchDelete(ctx context.Context, dir, name string, force bool) error {
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	return runGitWrite(ctx, dir, "git branch -d", []branchSentinelMatch{
+		{isBranchNotFullyMerged, ErrBranchNotFullyMerged},
+		{isBranchNotFound, ErrBranchNotFound},
+	}, "branch", flag, name)
+}
+
+// BranchRename runs `git branch -m <old> <new>`. HEAD-on-old is allowed by
+// git itself (the rename moves HEAD too), so the wrapper does not pre-gate.
+func BranchRename(ctx context.Context, dir, oldName, newName string) error {
+	return runGitWrite(ctx, dir, "git branch -m", []branchSentinelMatch{
+		{isBranchAlreadyExists, ErrBranchAlreadyExists},
+		{isBranchNotFound, ErrBranchNotFound},
+	}, "branch", "-m", oldName, newName)
+}
+
+// RemoteBranchDelete runs `git push <remote> --delete <branch>`. There is
+// no force flag — the delete-ref operation is unconditional from the local
+// side, and any rejection (protected branch, auth, missing ref) is
+// meaningful as-is. stderr is surfaced verbatim because the failure space
+// is too varied to classify (network / auth / branch-protection / not-found).
+func RemoteBranchDelete(ctx context.Context, dir, remote, branch string) error {
+	return runGitWrite(ctx, dir, "git push --delete", nil,
+		"push", remote, "--delete", branch)
+}
+
+// CheckRefFormat runs `git check-ref-format --branch <name>`. A non-zero
+// exit always means an invalid name (the command has no other failure
+// modes), so we route every error to ErrInvalidRefName.
+func CheckRefFormat(ctx context.Context, dir, name string) error {
+	return runGitWrite(ctx, dir, "git check-ref-format",
+		[]branchSentinelMatch{{func(string) bool { return true }, ErrInvalidRefName}},
+		"check-ref-format", "--branch", name)
+}
+
+// isBranchAlreadyExists matches git's wording when create/rename collides
+// with an existing local branch. Two flavors land here: "A branch named '<x>'
+// already exists." (create / rename target) and "fatal: A branch named '<x>'
+// already exists." across versions.
+func isBranchAlreadyExists(stderr string) bool {
+	return strings.Contains(stderr, "already exists")
+}
+
+// isBranchNotFullyMerged matches git's safe-delete rejection. The phrase has
+// been stable since the early 2010s ("error: The branch '<x>' is not fully
+// merged.") so substring matching is robust.
+func isBranchNotFullyMerged(stderr string) bool {
+	return strings.Contains(stderr, "not fully merged")
+}
+
+// isBranchNotFound matches git's missing-branch rejection for `branch -d` /
+// `branch -m`. Wording differs by subcommand AND across versions:
+//   - `branch -d <missing>` → "error: branch '<x>' not found."
+//   - `branch -m <missing> <new>` → "fatal: No branch named '<x>'." (older)
+//     or "fatal: no branch named '<x>'" (newer; lowercase 'no').
+//
+// strings.Contains is case-sensitive, so we match both casings of the
+// rename phrase. No other branch-failure mode uses these substrings.
+func isBranchNotFound(stderr string) bool {
+	return strings.Contains(stderr, "not found") ||
+		strings.Contains(stderr, "No branch named") ||
+		strings.Contains(stderr, "no branch named")
 }

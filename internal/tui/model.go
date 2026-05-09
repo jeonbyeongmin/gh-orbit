@@ -605,7 +605,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.status = fmt.Sprintf("branch select: %d candidates", len(msg.candidates))
 			m.statusStyle = statusBusyS
-			m.applyPaneSizes()
 			return m, nil
 		case graphActionFF:
 			m.ffInFlight = true
@@ -733,7 +732,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = viewModeNormal
 		m.refNameInput = refNameInputState{}
-		m.applyPaneSizes()
 		m.status = "created '" + msg.name + "' (from " + base + ")"
 		m.statusStyle = statusOkS
 		m.pendingRefCursorName = msg.name
@@ -749,7 +747,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = viewModeNormal
 		m.refNameInput = refNameInputState{}
-		m.applyPaneSizes()
 		m.status = "create failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
@@ -758,7 +755,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refActionInFlight = false
 		m.mode = viewModeNormal
 		m.refNameInput = refNameInputState{}
-		m.applyPaneSizes()
 		m.status = "renamed '" + msg.oldName + "' → '" + msg.newName + "'"
 		m.statusStyle = statusOkS
 		m.pendingRefCursorName = msg.newName
@@ -778,7 +774,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = viewModeNormal
 		m.refNameInput = refNameInputState{}
-		m.applyPaneSizes()
 		m.status = "rename failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
@@ -787,7 +782,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refActionInFlight = false
 		m.mode = viewModeNormal
 		m.pendingRefDelete = refDeleteState{}
-		m.applyPaneSizes()
 		m.status = formatDeleteSuccess(msg.target, msg.scope, msg.localDeleted, msg.remoteDeleted)
 		m.statusStyle = statusOkS
 		// Cursor follow-up: prefer the local name when local was deleted,
@@ -810,7 +804,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refActionInFlight = false
 		m.mode = viewModeNormal
 		m.pendingRefDelete = refDeleteState{}
-		m.applyPaneSizes()
 		m.status = "deleted '" + msg.target.localName + "'; remote push failed: " +
 			firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
@@ -827,7 +820,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refActionInFlight = false
 		m.mode = viewModeNormal
 		m.pendingRefDelete = refDeleteState{}
-		m.applyPaneSizes()
 		m.status = "delete failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
@@ -836,7 +828,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refActionInFlight = false
 		m.mode = viewModeNormal
 		m.pendingRefDelete = refDeleteState{}
-		m.applyPaneSizes()
 		m.status = "delete: '" + msg.target.localName +
 			"' not fully merged — press [f] or [F] to force"
 		m.statusStyle = statusErrS
@@ -880,7 +871,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				branch := m.branchPicker.candidates[m.branchPicker.cursor]
 				m.branchPicker = branchPickerState{}
 				m.mode = viewModeNormal
-				m.applyPaneSizes()
 				var cmd tea.Cmd
 				m, cmd = m.beginCheckout(branch, false)
 				return m, cmd
@@ -889,7 +879,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.branchPicker = branchPickerState{}
 				m.status = "branch select cancelled"
 				m.statusStyle = statusOkS
-				m.applyPaneSizes()
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
@@ -904,7 +893,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refNameInput = refNameInputState{}
 				m.status = "ref input cancelled"
 				m.statusStyle = statusOkS
-				m.applyPaneSizes()
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
@@ -933,7 +921,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pendingRefDelete = refDeleteState{}
 				m.status = "delete: cancelled"
 				m.statusStyle = statusOkS
-				m.applyPaneSizes()
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
@@ -1284,7 +1271,6 @@ func (m Model) beginRefCreate(refsCursorRef git.Ref, refsHasCursor bool) (Model,
 	}
 	m.mode = viewModeRefNameInput
 	m.status = ""
-	m.applyPaneSizes()
 	return m, textinput.Blink
 }
 
@@ -1311,7 +1297,6 @@ func (m Model) beginRefRename(target git.Ref) (Model, tea.Cmd) {
 	}
 	m.mode = viewModeRefNameInput
 	m.status = ""
-	m.applyPaneSizes()
 	return m, textinput.Blink
 }
 
@@ -1348,7 +1333,6 @@ func (m Model) beginRefDelete() (Model, tea.Cmd) {
 	m.pendingRefDelete = st
 	m.mode = viewModeRefDeleteConfirm
 	m.status = ""
-	m.applyPaneSizes()
 	return m, nil
 }
 
@@ -1365,7 +1349,6 @@ func (m Model) dispatchRefDelete(scope deleteScope) (Model, tea.Cmd) {
 
 	m.refActionInFlight = true
 	m.mode = viewModeNormal
-	m.applyPaneSizes()
 
 	switch scope {
 	case scopeLocalSafe, scopeLocalForce:
@@ -1483,19 +1466,15 @@ func (m Model) paneSizes() paneSizes {
 	if m.width == 0 || m.height == 0 {
 		return s
 	}
-	// Reserve 1 row for the help line, or the full panel height when `?`
-	// is open. helpReservedRows clamps so the main area never starves
-	// below 3 rows.
+	// Reserve 1 row for the bottom help/status line, or the full panel
+	// height when `?` is open. The four centered overlay modal modes
+	// (branchPicker / refNameInput / refDeleteConfirm / checkoutConfirm)
+	// don't reserve extra rows here — composeOverlay paints them on top
+	// of the unchanged 3-pane base, so paneSizes is mode-agnostic outside
+	// viewModeHelp.
 	helpReserved := 1
-	switch m.mode {
-	case viewModeHelp:
+	if m.mode == viewModeHelp {
 		helpReserved = m.helpReservedRows()
-	case viewModeBranchPicker:
-		helpReserved = m.branchPickerReservedRows()
-	case viewModeRefNameInput:
-		helpReserved = m.refNameInputReservedRows()
-	case viewModeRefDeleteConfirm:
-		helpReserved = m.refDeleteConfirmReservedRows()
 	}
 	mainH := m.height - helpReserved
 	if mainH < 1 {
@@ -1558,42 +1537,6 @@ func (m Model) paneSizes() paneSizes {
 // the user can still see the graph. Floor: 1.
 func (m Model) helpReservedRows() int {
 	want := max(min(helpExpandedHeight, m.height/2), 3)
-	if upper := m.height - 3; upper > 0 {
-		want = min(want, upper)
-	}
-	return max(want, 1)
-}
-
-// branchPickerReservedRows returns how many bottom rows the picker panel
-// claims: one per candidate plus a header row plus a hint row. Same
-// "main area gets at least 3 rows" floor as helpReservedRows so the
-// panel shrinks before starving the graph. Floor: 1.
-func (m Model) branchPickerReservedRows() int {
-	want := len(m.branchPicker.candidates) + 2
-	if want < 3 {
-		want = 3
-	}
-	if upper := m.height - 3; upper > 0 {
-		want = min(want, upper)
-	}
-	return max(want, 1)
-}
-
-// refNameInputReservedRows returns the bottom-row budget for the create /
-// rename modal: header + textinput + (inlineErr|spacer) + hint = 4. Floor 1
-// matches the other panels.
-func (m Model) refNameInputReservedRows() int {
-	want := 4
-	if upper := m.height - 3; upper > 0 {
-		want = min(want, upper)
-	}
-	return max(want, 1)
-}
-
-// refDeleteConfirmReservedRows returns the bottom-row budget for the delete
-// confirm modal: header + sub-header + hint = 3.
-func (m Model) refDeleteConfirmReservedRows() int {
-	want := 3
 	if upper := m.height - 3; upper > 0 {
 		want = min(want, upper)
 	}

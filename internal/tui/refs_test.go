@@ -220,6 +220,111 @@ func TestRefModelLowerPEmitsCheckoutWithPullRequestedMsg(t *testing.T) {
 	}
 }
 
+func TestRefModelNEmitsCreateRequestedMsg(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 10)
+	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
+		{ShortName: "main", FullName: "refs/heads/main", Kind: git.RefKindLocal, IsHead: true, ObjectName: "deadbeef"},
+	}})
+	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if cmd == nil {
+		t.Fatal("'n' on a ref should return a non-nil cmd")
+	}
+	msg, ok := cmd().(refCreateRequestedMsg)
+	if !ok {
+		t.Fatalf("cmd produced %T, want refCreateRequestedMsg", cmd())
+	}
+	if !msg.hasCursor || msg.cursorRef.ShortName != "main" {
+		t.Errorf("create msg = %+v, want cursorRef=main hasCursor=true", msg)
+	}
+}
+
+func TestRefModelNWithEmptySelectionStillEmits(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 10)
+	r, _ = r.Update(refsLoadedMsg{refs: nil})
+	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if cmd == nil {
+		t.Fatal("'n' on an empty refs pane should still emit (root resolves base from focus)")
+	}
+	msg := cmd().(refCreateRequestedMsg)
+	if msg.hasCursor {
+		t.Errorf("hasCursor = true on empty selection, want false")
+	}
+}
+
+func TestRefModelMOnLocalEmitsRenameRequestedMsg(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 10)
+	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
+		{ShortName: "main", FullName: "refs/heads/main", Kind: git.RefKindLocal, IsHead: true},
+	}})
+	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if cmd == nil {
+		t.Fatal("'m' on a local ref should emit a cmd")
+	}
+	msg, ok := cmd().(refRenameRequestedMsg)
+	if !ok {
+		t.Fatalf("cmd produced %T, want refRenameRequestedMsg", cmd())
+	}
+	if msg.ref.ShortName != "main" {
+		t.Errorf("rename msg ref = %q, want main", msg.ref.ShortName)
+	}
+}
+
+func TestRefModelMOnTagEmitsRejectedMsg(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 10)
+	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
+		{ShortName: "v1.0", FullName: "refs/tags/v1.0", Kind: git.RefKindTag},
+	}})
+	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if cmd == nil {
+		t.Fatal("'m' on a tag should emit a rejected msg, not nil")
+	}
+	msg, ok := cmd().(refRenameRejectedMsg)
+	if !ok {
+		t.Fatalf("cmd produced %T, want refRenameRejectedMsg", cmd())
+	}
+	if !strings.Contains(msg.reason, "local branch") {
+		t.Errorf("reason = %q, want it to mention 'local branch'", msg.reason)
+	}
+}
+
+func TestRefModelSelectByName(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
+		{ShortName: "main", FullName: "refs/heads/main", Kind: git.RefKindLocal},
+		{ShortName: "feat/foo", FullName: "refs/heads/feat/foo", Kind: git.RefKindLocal},
+		{ShortName: "origin/main", FullName: "refs/remotes/origin/main", Kind: git.RefKindRemote},
+	}})
+	if !r.SelectByName("feat/foo") {
+		t.Fatal("SelectByName('feat/foo') returned false on a present local")
+	}
+	got, ok := r.Selected()
+	if !ok || got.ShortName != "feat/foo" {
+		t.Errorf("after SelectByName Selected=%+v ok=%v, want feat/foo", got, ok)
+	}
+	if r.SelectByName("nope") {
+		t.Error("SelectByName on a missing name returned true")
+	}
+}
+
+func TestRefModelSelectAfterDeleted(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
+		{ShortName: "alpha", Kind: git.RefKindLocal},
+		{ShortName: "gamma", Kind: git.RefKindLocal}, // beta was the deleted name
+	}})
+	r.SelectAfterDeleted("beta")
+	got, ok := r.Selected()
+	if !ok || got.ShortName != "gamma" {
+		t.Errorf("after SelectAfterDeleted('beta') Selected=%+v, want gamma", got)
+	}
+}
+
 func TestRefModelLowerPOnEmptyDoesNothing(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 10)

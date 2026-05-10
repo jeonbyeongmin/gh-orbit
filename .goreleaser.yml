@@ -25,7 +25,7 @@ builds:
 
 archives:
   - formats: [binary]
-    name_template: '{{ .Binary }}_{{ .Version }}_{{ .Os }}-{{ .Arch }}{{ if eq .Os "windows" }}.exe{{ end }}'
+    name_template: '{{ .Binary }}_{{ .Version }}_{{ .Os }}-{{ .Arch }}'
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"

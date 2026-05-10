@@ -1,6 +1,9 @@
 # Build output (binary name fixed for `gh extension install`)
 /gh-orbit
 
+# GoReleaser snapshot / release artifacts
+/dist/
+
 # Go workspace / vendor
 /vendor/
 *.test

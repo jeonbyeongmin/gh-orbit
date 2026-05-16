@@ -1,0 +1,167 @@
+package tui
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/jeonbyeongmin/gh-orbit/internal/git"
+)
+
+func TestClassifyStatusConflictGoesToConflicts(t *testing.T) {
+	got := classifyStatus([]git.StatusEntry{
+		{Path: "f.txt", IndexState: 'U', WorktreeState: 'U', Conflict: true},
+	})
+	if len(got) != 1 || got[0].Section != sectionConflicts || !got[0].Conflict {
+		t.Fatalf("unexpected classify: %+v", got)
+	}
+}
+
+func TestClassifyStatusUntrackedGoesToUnstaged(t *testing.T) {
+	got := classifyStatus([]git.StatusEntry{
+		{Path: "u.txt", IndexState: '?', WorktreeState: '?', Untracked: true},
+	})
+	if len(got) != 1 || got[0].Section != sectionUnstaged || !got[0].Untracked {
+		t.Fatalf("unexpected classify: %+v", got)
+	}
+}
+
+func TestClassifyStatusStagedAndModifiedYieldsTwoEntries(t *testing.T) {
+	// Tracked file: modified in both index (M.) and worktree (.M), but in the
+	// porcelain stream that arrives as one record with both bytes set. Split
+	// into one Staged + one Unstaged entry.
+	got := classifyStatus([]git.StatusEntry{
+		{Path: "f.txt", IndexState: 'M', WorktreeState: 'M'},
+	})
+	if len(got) != 2 {
+		t.Fatalf("want 2 entries, got %d: %+v", len(got), got)
+	}
+	var sawStaged, sawUnstaged bool
+	for _, e := range got {
+		if e.Section == sectionStaged {
+			sawStaged = true
+		}
+		if e.Section == sectionUnstaged {
+			sawUnstaged = true
+		}
+	}
+	if !sawStaged || !sawUnstaged {
+		t.Fatalf("missing section coverage: %+v", got)
+	}
+}
+
+func TestClassifyStatusIndexOnlyGoesToStagedOnly(t *testing.T) {
+	got := classifyStatus([]git.StatusEntry{
+		{Path: "f.txt", IndexState: 'M', WorktreeState: '.'},
+	})
+	if len(got) != 1 || got[0].Section != sectionStaged {
+		t.Fatalf("unexpected classify: %+v", got)
+	}
+}
+
+func TestClassifyStatusWorktreeOnlyGoesToUnstagedOnly(t *testing.T) {
+	got := classifyStatus([]git.StatusEntry{
+		{Path: "f.txt", IndexState: '.', WorktreeState: 'M'},
+	})
+	if len(got) != 1 || got[0].Section != sectionUnstaged {
+		t.Fatalf("unexpected classify: %+v", got)
+	}
+}
+
+func TestLocalChangesApplyStatusClampsCursor(t *testing.T) {
+	m := newLocalChangesModel()
+	m.SetSize(20, 10, 20, 10)
+	m.ApplyStatusLoaded([]git.StatusEntry{
+		{Path: "a.txt", IndexState: 'M'},
+		{Path: "b.txt", IndexState: 'M'},
+		{Path: "c.txt", IndexState: 'M'},
+	})
+	m.cursor = 2
+	// Shrink the list — cursor should clamp.
+	m.ApplyStatusLoaded([]git.StatusEntry{
+		{Path: "a.txt", IndexState: 'M'},
+	})
+	if m.cursor != 0 {
+		t.Fatalf("cursor not clamped: %d", m.cursor)
+	}
+}
+
+func TestLocalChangesApplyDiffStaleResponseDropped(t *testing.T) {
+	m := newLocalChangesModel()
+	m.SetSize(20, 10, 20, 10)
+	m.BeginDiffLoad(7, "f.txt", false)
+	m.ApplyDiffLoaded(6, "f.txt", false, "stale-text") // wrong reqID
+	if m.diffText != "" || !m.diffLoading {
+		t.Fatalf("stale reqID should not paint: %q loading=%v", m.diffText, m.diffLoading)
+	}
+	m.ApplyDiffLoaded(7, "other.txt", false, "wrong-path-text") // wrong path
+	if m.diffText != "" {
+		t.Fatalf("wrong path should not paint: %q", m.diffText)
+	}
+	m.ApplyDiffLoaded(7, "f.txt", false, "fresh") // matches
+	if m.diffText != "fresh" {
+		t.Fatalf("matching dispatch should paint: %q", m.diffText)
+	}
+}
+
+func TestLocalChangesApplyDiffFailedRecordsErr(t *testing.T) {
+	m := newLocalChangesModel()
+	m.SetSize(20, 10, 20, 10)
+	m.BeginDiffLoad(1, "f.txt", false)
+	m.ApplyDiffFailed(1, "f.txt", false, errors.New("boom"))
+	if m.diffLoading {
+		t.Fatalf("error should clear loading flag")
+	}
+	if m.diffErr == nil {
+		t.Fatalf("err not recorded")
+	}
+}
+
+func TestLocalChangesFlatRowsHideEmptyConflicts(t *testing.T) {
+	m := newLocalChangesModel()
+	m.ApplyStatusLoaded([]git.StatusEntry{
+		{Path: "u.txt", IndexState: '?', WorktreeState: '?', Untracked: true},
+	})
+	rows := m.flatRows()
+	for _, r := range rows {
+		if r.section == sectionConflicts {
+			t.Fatalf("conflicts section emitted with zero conflict entries: %+v", rows)
+		}
+	}
+}
+
+func TestLocalChangesFlatRowsShowConflictsWhenPresent(t *testing.T) {
+	m := newLocalChangesModel()
+	m.ApplyStatusLoaded([]git.StatusEntry{
+		{Path: "f.txt", IndexState: 'U', WorktreeState: 'U', Conflict: true},
+	})
+	rows := m.flatRows()
+	if rows[0].kind != lcRowHeader || rows[0].section != sectionConflicts {
+		t.Fatalf("first row should be Conflicts header: %+v", rows)
+	}
+}
+
+func TestLocalChangesSelectByPathPrefersStaged(t *testing.T) {
+	m := newLocalChangesModel()
+	m.SetSize(20, 10, 20, 10)
+	m.ApplyStatusLoaded([]git.StatusEntry{
+		{Path: "f.txt", IndexState: 'M', WorktreeState: 'M'},
+	})
+	if ok := m.SelectByPath("f.txt", true); !ok {
+		t.Fatalf("SelectByPath(staged) returned false")
+	}
+	cur, ok := m.CurrentEntry()
+	if !ok || cur.Section != sectionStaged {
+		t.Fatalf("expected staged entry selected, got %+v", cur)
+	}
+}
+
+func TestLocalChangesTreeViewEmptyHasPlaceholder(t *testing.T) {
+	m := newLocalChangesModel()
+	m.SetSize(20, 10, 20, 10)
+	m.ApplyStatusLoaded(nil)
+	out := m.TreeView()
+	if !strings.Contains(out, "(no changes)") {
+		t.Fatalf("expected placeholder, got %q", out)
+	}
+}

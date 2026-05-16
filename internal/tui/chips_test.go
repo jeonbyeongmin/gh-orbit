@@ -182,6 +182,34 @@ func TestBuildChipsTruncatedNamePreservesPairPrefix(t *testing.T) {
 	}
 }
 
+func TestBuildChipsStashUsesStashStyle(t *testing.T) {
+	// classifyRefName recognizes "stash@{N}" → RefKindStash → chipStashStyle.
+	// The rendered output must carry colorChipStash (165) as background, and
+	// the label must be preserved verbatim.
+	s, _ := buildChips([]string{"stash@{0}"}, false, false)
+	plain := ansi.Strip(s)
+	if !strings.Contains(plain, "stash@{0}") {
+		t.Errorf("plain=%q must contain stash@{0}", plain)
+	}
+	if !strings.Contains(s, "48;5;165") {
+		t.Errorf("stash chip output should carry background 165, got %q", s)
+	}
+}
+
+func TestBuildChipsStashDoesNotPairWithRemote(t *testing.T) {
+	// MergeLocalRemotePairs is the local↔remote pairing — a stash entry on
+	// the same row as a remote chip should not collapse with it; both must
+	// render as separate chips.
+	s, _ := buildChips([]string{"stash@{0}", "origin/main"}, false, false)
+	plain := ansi.Strip(s)
+	if !strings.Contains(plain, "stash@{0}") {
+		t.Errorf("plain=%q must still contain stash@{0}", plain)
+	}
+	if !strings.Contains(plain, "origin/main") {
+		t.Errorf("plain=%q must still contain origin/main", plain)
+	}
+}
+
 func TestBuildChipsSelectedOverridesBackground(t *testing.T) {
 	unselected, _ := buildChips([]string{"main"}, false, false)
 	selected, _ := buildChips([]string{"main"}, true, false)

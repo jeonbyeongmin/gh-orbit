@@ -81,13 +81,30 @@ func TestParseRefLineAnnotatedTagPeels(t *testing.T) {
 }
 
 func TestParseRefLineDropsUnknownKind(t *testing.T) {
-	line := "refs/stash\x00stash\x00commit\x00abc\x00\x00 \x00"
+	// refs/notes/commits is outside the Local/Remote/Tags/Stash universe the
+	// TUI cares about and should drop. (refs/stash now classifies as
+	// RefKindStash — see TestParseRefLineStashClassifies.)
+	line := "refs/notes/commits\x00notes/commits\x00commit\x00abc\x00\x00 \x00"
 	_, ok, err := parseRefLine(line)
 	if err != nil {
 		t.Fatalf("parseRefLine: %v", err)
 	}
 	if ok {
-		t.Error("refs/stash should be dropped (not heads/remotes/tags)")
+		t.Error("refs/notes/commits should be dropped (not heads/remotes/tags/stash)")
+	}
+}
+
+func TestParseRefLineStashClassifies(t *testing.T) {
+	line := "refs/stash\x00stash\x00commit\x00deadbeef\x00\x00 \x00"
+	ref, ok, err := parseRefLine(line)
+	if err != nil || !ok {
+		t.Fatalf("parseRefLine: ok=%v err=%v", ok, err)
+	}
+	if ref.Kind != RefKindStash {
+		t.Errorf("Kind = %v, want RefKindStash", ref.Kind)
+	}
+	if ref.ObjectName != "deadbeef" {
+		t.Errorf("ObjectName = %q, want deadbeef", ref.ObjectName)
 	}
 }
 

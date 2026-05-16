@@ -32,7 +32,12 @@ func runGraphEvaluator(t *testing.T, hash string, locals []git.Ref) graphActionM
 
 func runGraphEvaluatorWithRemotes(t *testing.T, hash string, locals, remotes []git.Ref) graphActionMsg {
 	t.Helper()
-	cmd := evaluateGraphActionCmd("", hash, locals, remotes)
+	return runGraphEvaluatorWithStashes(t, hash, locals, remotes, nil)
+}
+
+func runGraphEvaluatorWithStashes(t *testing.T, hash string, locals, remotes, stashes []git.Ref) graphActionMsg {
+	t.Helper()
+	cmd := evaluateGraphActionCmd("", hash, locals, remotes, stashes)
 	if cmd == nil {
 		t.Fatal("evaluateGraphActionCmd returned nil")
 	}

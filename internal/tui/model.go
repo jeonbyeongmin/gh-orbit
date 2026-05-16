@@ -98,13 +98,19 @@ const (
 	// `[y] drop / [esc] cancel`. Single key by design — stash drop has no
 	// force / multi-axis variants, so a 4-axis matrix would be noise.
 	viewModeStashDropConfirm
+	// viewModeLocalChanges replaces the right column (graph + tab) with a
+	// file-tree + diff layout for working-tree work. refs sidebar stays
+	// put so the branch context is unchanged across the toggle. Entered
+	// via the `,` keybind or by `enter` on the sticky `● Local Changes`
+	// row in the refs pane.
+	viewModeLocalChanges
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
 // the `?` help panel is open. Each helpData category renders as a 1-line
-// header + 1-line entries row, so 4 categories × 2 rows = 8. paneSizes
+// header + 1-line entries row, so 5 categories × 2 rows = 10. paneSizes
 // clamps this on small terminals.
-const helpExpandedHeight = 8
+const helpExpandedHeight = 10
 
 // pendingCheckout remembers what the user was trying to check out so the
 // "[s]tash & checkout" branch in the confirm modal can re-issue the same
@@ -260,6 +266,16 @@ type Model struct {
 	currentStashByHash map[string]string
 	pendingStashAction pendingStashAction
 	pendingStashDrop   pendingStashDrop
+	// localChanges hosts the file-tree + diff viewport that the right
+	// column renders when mode == viewModeLocalChanges. The graph / tab
+	// models are left untouched across the toggle so exiting the mode
+	// snaps back to the exact previous state.
+	localChanges localChangesModel
+	// localChangesReqID counts every diff dispatch inside the Local
+	// Changes mode. ApplyDiffLoaded compares against this + (path,
+	// staged) to drop stale responses when the user keeps moving the
+	// cursor mid-load.
+	localChangesReqID uint64
 }
 
 // pendingStashAction backs viewModeStashActionPicker. subject is the
@@ -285,6 +301,7 @@ func New() Model {
 		changes:      newChangesModel(),
 		commitDetail: newCommitDetailModel(),
 		tabs:         newTabsModel(),
+		localChanges: newLocalChangesModel(),
 		splitRatio:   splitRatioDefault,
 		currentRefs:  []string{refsAllSentinel},
 		streamReqID:  1,
@@ -975,6 +992,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 
+	case localChangesEnterRequestedMsg:
+		cmd := m.enterLocalChangesMode()
+		m.status = "local changes"
+		m.statusStyle = statusOkS
+		return m, cmd
+
+	case localChangesStatusLoadedMsg:
+		m.localChanges.ApplyStatusLoaded(msg.entries)
+		// After reload, dispatch a diff for whatever the cursor now points
+		// at so the right pane doesn't lag behind the tree.
+		return m.dispatchLocalChangesDiff()
+
+	case localChangesStatusFailedMsg:
+		m.localChanges.ApplyStatusFailed(msg.err)
+		m.status = "status: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case localChangesDiffLoadedMsg:
+		m.localChanges.ApplyDiffLoaded(msg.reqID, msg.text)
+		return m, nil
+
+	case localChangesDiffFailedMsg:
+		m.localChanges.ApplyDiffFailed(msg.reqID, msg.err)
+		return m, nil
+
+	case localChangesAddSucceededMsg:
+		m.status = "staged " + msg.path
+		m.statusStyle = statusOkS
+		return m, loadStatusCmd("")
+
+	case localChangesAddFailedMsg:
+		m.status = "stage " + msg.path + ": " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case localChangesRestoreSucceededMsg:
+		m.status = "unstaged " + msg.path
+		m.statusStyle = statusOkS
+		return m, loadStatusCmd("")
+
+	case localChangesRestoreFailedMsg:
+		m.status = "unstage " + msg.path + ": " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
 	case tea.KeyMsg:
 		// The viewMode guard runs before the global ctrl+c/q quit branch so
 		// `q` inside the overlay closes the overlay instead of killing the app.
@@ -1128,6 +1191,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.mode == viewModeLocalChanges {
+			switch msg.String() {
+			case "ctrl+c", "q":
+				m.cancelStream()
+				return m, tea.Quit
+			case ",", "esc":
+				m.exitLocalChangesMode()
+				m.status = "local changes: exit"
+				m.statusStyle = statusOkS
+				return m, nil
+			case "?":
+				m.mode = viewModeHelp
+				m.applyPaneSizes()
+				return m, nil
+			case "tab":
+				return m.cycleLocalChangesFocus(), nil
+			case "r":
+				return m, loadStatusCmd("")
+			}
+			// Tree sub-focus owns cursor movement + stage/unstage.
+			// Diff sub-focus owns viewport scroll. paneRefs focus inside the
+			// mode forwards to refs.Update so j/k still navigates the sidebar
+			// (sticky row + ref rows).
+			if m.focused == paneRefs {
+				var cmd tea.Cmd
+				m.refs, cmd = m.refs.Update(msg)
+				return m, cmd
+			}
+			switch m.localChanges.Focused() {
+			case paneLCTree:
+				return m.handleLocalChangesTreeKey(msg)
+			case paneLCDiff:
+				return m, m.localChanges.ScrollDiff(msg)
+			}
+			return m, nil
+		}
 		if m.mode == viewModeCheckoutConfirm {
 			switch msg.String() {
 			case "s":
@@ -1208,6 +1307,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, pullCmd("", m.pullPrefStrategy)
 		case "r":
 			return m, m.reloadCmd()
+		case ",":
+			cmd := m.enterLocalChangesMode()
+			m.status = "local changes"
+			m.statusStyle = statusOkS
+			return m, cmd
 		case "ctrl+up":
 			m.adjustSplit(-splitRatioStep)
 			return m, nil
@@ -1324,6 +1428,112 @@ func (m *Model) applyPaneSizes() {
 	}
 	m.changes.SetSize(s.tabW, tabBodyH)
 	m.commitDetail.SetSize(s.tabW, tabBodyH)
+	if m.mode == viewModeLocalChanges {
+		m.localChanges.SetSize(s.lcTreeW, s.lcTreeH, s.lcDiffW, s.lcDiffH)
+	}
+}
+
+// enterLocalChangesMode flips into the working-tree view and kicks off the
+// first status load. refs / graph / tab models are left untouched so exit
+// returns to the exact prior state. focused is parked on paneGraph (= "right
+// column has focus") and the sub-focus inside that column starts on the tree.
+func (m *Model) enterLocalChangesMode() tea.Cmd {
+	m.mode = viewModeLocalChanges
+	m.focused = paneGraph
+	m.localChanges.SetFocus(paneLCTree)
+	m.applyPaneSizes()
+	return loadStatusCmd("")
+}
+
+// exitLocalChangesMode flips back to the normal layout. Entries / cursor
+// state are kept so re-entry restores them; the diff body is released so
+// a large untracked-file diff doesn't sit resident between sessions.
+func (m *Model) exitLocalChangesMode() {
+	m.mode = viewModeNormal
+	m.localChanges.ClosePatch()
+	m.applyPaneSizes()
+}
+
+// cycleLocalChangesFocus implements the 3-way tab cycle inside the mode:
+// refs → tree → diff → refs. Sub-focus inside the right column lives on
+// m.localChanges; outer focus only distinguishes refs vs. right column.
+func (m Model) cycleLocalChangesFocus() Model {
+	switch {
+	case m.focused == paneRefs:
+		m.focused = paneGraph
+		m.localChanges.SetFocus(paneLCTree)
+	case m.localChanges.Focused() == paneLCTree:
+		m.localChanges.SetFocus(paneLCDiff)
+	default:
+		m.focused = paneRefs
+		m.localChanges.SetFocus(paneLCTree)
+	}
+	return m
+}
+
+// handleLocalChangesTreeKey routes j/k/g/G/space inside the tree pane. The
+// cursor-move keys are followed by a diff dispatch for the new entry so the
+// diff viewport keeps step. space toggles the entry between Staged and
+// Unstaged via Add / RestoreStaged.
+func (m Model) handleLocalChangesTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		if _, ok := m.localChanges.MoveCursor(1); ok {
+			return m.dispatchLocalChangesDiff()
+		}
+		return m, nil
+	case "k", "up":
+		if _, ok := m.localChanges.MoveCursor(-1); ok {
+			return m.dispatchLocalChangesDiff()
+		}
+		return m, nil
+	case "g":
+		if _, ok := m.localChanges.JumpCursor(false); ok {
+			return m.dispatchLocalChangesDiff()
+		}
+		return m, nil
+	case "G":
+		if _, ok := m.localChanges.JumpCursor(true); ok {
+			return m.dispatchLocalChangesDiff()
+		}
+		return m, nil
+	case " ", "space":
+		return m.dispatchLocalChangesStage()
+	}
+	return m, nil
+}
+
+// dispatchLocalChangesDiff issues a diff load for whatever entry the cursor
+// is currently on. Bumps the reqID so any in-flight stale response is
+// dropped by ApplyDiffLoaded's match check.
+func (m Model) dispatchLocalChangesDiff() (tea.Model, tea.Cmd) {
+	e, ok := m.localChanges.CurrentEntry()
+	if !ok {
+		return m, nil
+	}
+	m.localChangesReqID++
+	m.localChanges.BeginDiffLoad(m.localChangesReqID)
+	return m, loadDiffCmd("", e.Path, e.Staged(), e.Untracked, m.localChangesReqID)
+}
+
+// dispatchLocalChangesStage picks Add vs. RestoreStaged based on which
+// section the cursor entry sits in. The pending-select hint preserves the
+// cursor on the same path after the post-action status reload.
+func (m Model) dispatchLocalChangesStage() (tea.Model, tea.Cmd) {
+	e, ok := m.localChanges.CurrentEntry()
+	if !ok {
+		return m, nil
+	}
+	if e.Section == sectionStaged {
+		m.localChanges.ScheduleSelectAfterReload(e.Path, false)
+		m.status = "unstage " + e.Path + "…"
+		m.statusStyle = statusBusyS
+		return m, restoreStagedCmd("", e.Path)
+	}
+	m.localChanges.ScheduleSelectAfterReload(e.Path, true)
+	m.status = "stage " + e.Path + "…"
+	m.statusStyle = statusBusyS
+	return m, addCmd("", e.Path)
 }
 
 // adjustSplit nudges the graph/tab split ratio by delta percent and reflows
@@ -1685,6 +1895,11 @@ type paneSizes struct {
 	refsW, refsH   int
 	graphW, graphH int
 	tabW, tabH     int
+	// lcTreeW/H, lcDiffW/H carry the right-column split when mode ==
+	// viewModeLocalChanges. Zero in any other mode — graphW/H and tabW/H
+	// stay authoritative there.
+	lcTreeW, lcTreeH int
+	lcDiffW, lcDiffH int
 }
 
 func (m Model) paneSizes() paneSizes {
@@ -1752,6 +1967,36 @@ func (m Model) paneSizes() paneSizes {
 	}
 	if s.tabH < 1 {
 		s.tabH = 1
+	}
+
+	// Local Changes mode subdivides the right column horizontally
+	// (tree | diff) instead of vertically (graph / tab). Reuse the
+	// Changes-tab ratio (35% to the file list) for layout consistency.
+	if m.mode == viewModeLocalChanges {
+		treeOuterW := rightOuterW * changesFileListRatio / 100
+		if treeOuterW < 12 {
+			treeOuterW = 12
+		}
+		if treeOuterW > rightOuterW-12 {
+			treeOuterW = rightOuterW - 12
+		}
+		diffOuterW := rightOuterW - treeOuterW
+		s.lcTreeW = treeOuterW - 2
+		s.lcTreeH = mainH - 2
+		s.lcDiffW = diffOuterW - 2
+		s.lcDiffH = mainH - 2
+		if s.lcTreeW < 1 {
+			s.lcTreeW = 1
+		}
+		if s.lcTreeH < 1 {
+			s.lcTreeH = 1
+		}
+		if s.lcDiffW < 1 {
+			s.lcDiffW = 1
+		}
+		if s.lcDiffH < 1 {
+			s.lcDiffH = 1
+		}
 	}
 	return s
 }
@@ -1999,10 +2244,18 @@ func (m Model) View() string {
 	s := m.paneSizes()
 
 	refsBox := boxStyle(m.focused == paneRefs).Width(s.refsW).Height(s.refsH).Render(m.refs.View())
-	graphBox := boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
-	tabBox := boxStyle(m.focused == paneTab).Width(s.tabW).Height(s.tabH).Render(m.tabBody())
-
-	rightCol := lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
+	var rightCol string
+	if m.mode == viewModeLocalChanges {
+		treeFocused := m.focused != paneRefs && m.localChanges.Focused() == paneLCTree
+		diffFocused := m.focused != paneRefs && m.localChanges.Focused() == paneLCDiff
+		treeBox := boxStyle(treeFocused).Width(s.lcTreeW).Height(s.lcTreeH).Render(m.localChanges.TreeView())
+		diffBox := boxStyle(diffFocused).Width(s.lcDiffW).Height(s.lcDiffH).Render(m.localChanges.DiffView())
+		rightCol = lipgloss.JoinHorizontal(lipgloss.Top, treeBox, diffBox)
+	} else {
+		graphBox := boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
+		tabBox := boxStyle(m.focused == paneTab).Width(s.tabW).Height(s.tabH).Render(m.tabBody())
+		rightCol = lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
+	}
 	main := lipgloss.JoinHorizontal(lipgloss.Top, refsBox, rightCol)
 	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
 
@@ -2063,8 +2316,14 @@ func (m Model) renderHelpStatus() string {
 	case viewModeHelp:
 		return renderHelpPanel(m.width, m.helpReservedRows())
 	}
+	hint := paneHintTexts[m.focused]
+	hintRendered := paneHintsRendered[m.focused]
+	if m.mode == viewModeLocalChanges {
+		hint = localChangesHintText
+		hintRendered = localChangesHintRendered
+	}
 	if m.status == "" {
-		return paneHintsRendered[m.focused]
+		return hintRendered
 	}
 	statusRendered := m.statusStyle.Render(m.status)
 
@@ -2072,5 +2331,5 @@ func (m Model) renderHelpStatus() string {
 	if avail < 1 {
 		return statusRendered
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, fitHelpLine(paneHintTexts[m.focused], avail), " ", statusRendered)
+	return lipgloss.JoinHorizontal(lipgloss.Top, fitHelpLine(hint, avail), " ", statusRendered)
 }

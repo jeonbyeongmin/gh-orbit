@@ -35,6 +35,7 @@ var helpCategories = []helpCategory{
 			{"P", "pull"},
 			{"r", "reload"},
 			{"d", "patch"},
+			{",", "local changes"},
 			{"ctrl+↑/↓", "resize"},
 		},
 	},
@@ -66,6 +67,17 @@ var helpCategories = []helpCategory{
 			{"ctrl+d/u", "scroll patch"},
 		},
 	},
+	{
+		title: "Local Changes",
+		entries: []helpEntry{
+			{"space", "stage/unstage"},
+			{"j/k", "nav"},
+			{"g/G", "top/bot"},
+			{"tab", "focus tree/diff"},
+			{"r", "reload"},
+			{",", "exit"},
+		},
+	},
 }
 
 func helpData() []helpCategory { return helpCategories }
@@ -89,6 +101,14 @@ var paneHintsRendered = func() map[pane]string {
 	}
 	return m
 }()
+
+// localChangesHintText is the mode-specific bottom hint shown while
+// viewModeLocalChanges owns the right column. It overrides the focused
+// pane's hint because the keymap inside the mode is mode-scoped (space /
+// tab cycle / r reload / , exit), not pane-scoped.
+const localChangesHintText = "space stage/unstage · tab focus · r reload · , exit · ? help · q quit"
+
+var localChangesHintRendered = help.Render(localChangesHintText)
 
 func paneHints() map[pane]string { return paneHintTexts }
 

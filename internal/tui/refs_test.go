@@ -385,19 +385,19 @@ func TestRefModelLazyScrollOnJK(t *testing.T) {
 	const h = 6
 	r.SetSize(40, h)
 	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
-	// flat-row layout: header(0), local-0(1) .. local-19(20). cursor=N
-	// sits at flat-row N+1. The lazy edge bump fires when flat-row reaches
-	// yOffset+h = 6, i.e. at cursor=5. So j×4 stays at yOffset=0; the 5th
-	// j bumps to 1.
-	for i := 0; i < 4; i++ {
+	// flat-row layout: sticky(0), gap(1), header(2), local-0(3) .. local-19(22).
+	// cursor=N sits at flat-row N+3. The lazy edge bump fires when flat-row
+	// reaches yOffset+h = 6, i.e. at cursor=3. So j×2 stays at yOffset=0;
+	// j #3 bumps to 1.
+	for i := 0; i < 2; i++ {
 		r = pressKey(t, r, "j")
 	}
 	if r.yOffset != 0 {
-		t.Errorf("yOffset after j×4 = %d, want 0 (still inside window)", r.yOffset)
+		t.Errorf("yOffset after j×2 = %d, want 0 (still inside window)", r.yOffset)
 	}
 	r = pressKey(t, r, "j")
 	if r.yOffset != 1 {
-		t.Errorf("yOffset after j×5 = %d, want 1 (lazy bump on edge)", r.yOffset)
+		t.Errorf("yOffset after j×3 = %d, want 1 (lazy bump on edge)", r.yOffset)
 	}
 }
 
@@ -407,11 +407,12 @@ func TestRefModelLazyScrollOnK(t *testing.T) {
 	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
 	r = pressKey(t, r, "G")
 	startOffset := r.yOffset
-	// G lands cursor on local-19 (flat-row 20) and parks yOffset so the
-	// cursor is at the bottom of the visible window. Walking the cursor up
-	// keeps yOffset put until flat-row crosses yOffset-1 — that's cursor=N
-	// with flat-row N+1 = yOffset-1, i.e. N = yOffset-2.
-	triggerSteps := 19 - (startOffset - 2)
+	// G lands cursor on local-19 (flat-row 22 in the sticky+gap+header
+	// layout) and parks yOffset so the cursor is at the bottom of the
+	// visible window. Walking the cursor up keeps yOffset put until flat-
+	// row crosses yOffset-1 — that's cursor=N with flat-row N+3 = yOffset-1,
+	// i.e. N = yOffset-4.
+	triggerSteps := 19 - (startOffset - 4)
 	for i := 0; i < triggerSteps-1; i++ {
 		r = pressKey(t, r, "k")
 	}
@@ -587,5 +588,111 @@ func TestRefModelKBackwardAcrossBoundariesPreservesLazyAndJumps(t *testing.T) {
 	}
 	if got, ok := r.Selected(); !ok || got.ShortName != "local-0" {
 		t.Fatalf("Selected after G then k all the way = %+v ok=%v, want local-0", got, ok)
+	}
+}
+
+// --- Sticky `● Local Changes` row tests (Step 7) ---
+
+func TestRefModelStickyRowDefaultsToOff(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(2, 0, 0)})
+	if r.IsLocalChangesSelected() {
+		t.Errorf("onLocalChanges should default to false on fresh load")
+	}
+	if _, ok := r.Selected(); !ok {
+		t.Errorf("Selected should return first ref by default")
+	}
+}
+
+func TestRefModelKFromFirstRefFlipsToSticky(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 0, 0)})
+	// cursor=0 is first local. Pressing k from there should land on the sticky.
+	r = pressKey(t, r, "k")
+	if !r.IsLocalChangesSelected() {
+		t.Errorf("k from cursor=0 should flip onLocalChanges=true")
+	}
+	if _, ok := r.Selected(); ok {
+		t.Errorf("Selected should return false on sticky row")
+	}
+}
+
+func TestRefModelJFromStickyLandsOnFirstRef(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 0, 0)})
+	r = pressKey(t, r, "k") // → sticky
+	r = pressKey(t, r, "j") // → first ref
+	if r.IsLocalChangesSelected() {
+		t.Errorf("j from sticky should flip onLocalChanges=false")
+	}
+	got, ok := r.Selected()
+	if !ok || got.ShortName != "local-0" {
+		t.Errorf("j from sticky should select first ref, got %+v ok=%v", got, ok)
+	}
+}
+
+func TestRefModelGFlipsToSticky(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 6)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
+	r = pressKey(t, r, "G")
+	r = pressKey(t, r, "g")
+	if !r.IsLocalChangesSelected() {
+		t.Errorf("g should always land on sticky")
+	}
+}
+
+func TestRefModelGFromStickyLandsOnLastRef(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(5, 0, 0)})
+	r = pressKey(t, r, "k") // sticky
+	r = pressKey(t, r, "G")
+	if r.IsLocalChangesSelected() {
+		t.Errorf("G should clear onLocalChanges")
+	}
+	got, ok := r.Selected()
+	if !ok || got.ShortName != "local-4" {
+		t.Errorf("G should land on last ref, got %+v ok=%v", got, ok)
+	}
+}
+
+func TestRefModelEnterOnStickyEmitsLocalChangesEnterRequested(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 0, 0)})
+	r = pressKey(t, r, "k") // sticky
+	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("enter on sticky should emit a msg")
+	}
+	if _, ok := cmd().(localChangesEnterRequestedMsg); !ok {
+		t.Errorf("expected localChangesEnterRequestedMsg, got %T", cmd())
+	}
+}
+
+func TestRefModelOpnmSwallowedOnSticky(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 0, 0)})
+	r = pressKey(t, r, "k") // sticky
+	for _, key := range []string{"o", "p", "n", "m"} {
+		_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		if cmd != nil {
+			t.Errorf("key %q on sticky should be swallowed, got cmd %v", key, cmd())
+		}
+	}
+}
+
+func TestRefModelStickyRowVisibleInView(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 0, 0)})
+	view := ansi.Strip(r.View())
+	if !strings.Contains(view, "● Local Changes") {
+		t.Errorf("sticky row not in view: %q", view)
 	}
 }

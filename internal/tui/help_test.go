@@ -11,7 +11,7 @@ import (
 func TestHelpDataCoverage(t *testing.T) {
 	required := []string{
 		"tab", "h/l", "j/k", "ctrl+↑/↓", "enter", "o",
-		"y", "d", "F", "P", "r", "q",
+		"y", "d", "F", "P", "r", "q", ",", "space",
 	}
 
 	var have []string

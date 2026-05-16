@@ -1,8 +1,23 @@
 # CLAUDE.md
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+Behavioral contract for AI coding agents working in this repo.
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+`gh-orbit` is itself a review cockpit for AI-coding-agent work
+(see [README.md](./README.md)), and the repo is developed
+plan-driven with Claude Code as the primary author. That means two
+things for any agent reading this file:
+
+1. The end user of this product is *another developer* reviewing an
+   agent's diff. Bias every UX decision toward "can a reviewer figure
+   out what just happened in three seconds?" — terse status lines,
+   commit-row truncation order, modal hint lines, etc.
+2. Your own diff in this repo will be reviewed in `gh-orbit` itself.
+   Keep diffs surgical, commit messages legible, and don't leave
+   half-finished scaffolding — those are the things the cockpit
+   surfaces most loudly.
+
+The four guidelines below bias toward caution over speed. For trivial
+tasks, use judgment.
 
 ## 1. Think Before Coding
 
@@ -25,7 +40,8 @@ Before implementing:
 - No error handling for impossible scenarios.
 - If you write 200 lines and it could be 50, rewrite it.
 
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+Ask yourself: "Would a senior engineer say this is overcomplicated?"
+If yes, simplify.
 
 ## 3. Surgical Changes
 
@@ -43,7 +59,8 @@ When your changes create orphans:
 - Remove imports/variables/functions that YOUR changes made unused.
 - Don't remove pre-existing dead code unless asked.
 
-The test: Every changed line should trace directly to the user's request.
+The test: Every changed line should trace directly to the user's
+request.
 
 ## 4. Goal-Driven Execution
 
@@ -63,12 +80,37 @@ For multi-step tasks, state a brief plan:
 3. [Step] → verify: [check]
 ```
 
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+Strong success criteria let you loop independently. Weak criteria
+("make it work") require constant clarification.
 
 ---
 
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+**These guidelines are working if:** fewer unnecessary changes in
+diffs, fewer rewrites due to overcomplication, and clarifying
+questions come before implementation rather than after mistakes.
+
+## Workflow conventions
+
+This repo is plan-driven. The project-local skills handle the
+mechanics — agents should invoke them rather than reinventing each
+step:
+
+- `/brainstorming` or `/backlog` to drop ideas into `backlogs/`.
+- `/interview` to refine one backlog item into a plan in `plans/`.
+- `/execute-plan` to walk a plan from `plans/` → code change → PR.
+- `/pr` to open a PR (runs `/simplify` → format/lint → typecheck →
+  build → test before push; failures are bugs to fix, not bypass
+  targets).
+- `/release` for tagged releases (`v<x.y.z>` push → GoReleaser).
+
+Default base branch is `develop`. Don't `--force` or `--no-verify`
+unless the human explicitly asks.
 
 ## Docs
 
-Feature-level reference lives under [`docs/`](docs/). Start at [`docs/index.md`](docs/index.md) for the map.
+Feature-level reference lives under [`docs/`](docs/). Start at
+[`docs/index.md`](docs/index.md) for the map. When a task touches a
+documented surface (refs pane, checkout flow, stash, branches modal,
+git wrappers, config), read the relevant doc before editing — the
+invariants there are the result of prior interviews and shouldn't be
+silently overridden.

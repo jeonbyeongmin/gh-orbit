@@ -43,6 +43,12 @@ const (
 	// either HEAD detached + no cross-branch candidate, or HEAD not an
 	// ancestor of cursor. Drives CheckoutDetached on the cursor hash.
 	graphActionDetach
+	// graphActionStashAction fires when the cursor commit matches a stash
+	// entry's ObjectName. The model opens viewModeStashActionPicker with
+	// the matched label so the user can pick pop / apply / cancel. This
+	// branch precedes every chip-driven and FF / detach branch — a stash
+	// row should never be checked-out or FF'd as if it were a normal commit.
+	graphActionStashAction
 )
 
 // graphActionMsg is the evaluator's reply. Fields are populated by kind:
@@ -51,6 +57,7 @@ const (
 //   - Picker: candidates is the sorted list of local-branch ShortNames at
 //     the cursor row.
 //   - Detach: only hash is consulted by the handler.
+//   - StashAction: stashLabel carries the matched stash@{N} slot.
 //
 // hash echoes the cursor commit the evaluation ran against. The model's
 // dispatch checks msg.hash against the current cursor before acting so a
@@ -62,6 +69,7 @@ type graphActionMsg struct {
 	branch     string
 	advance    int
 	candidates []string
+	stashLabel string
 }
 
 // branchPickerState backs viewModeBranchPicker. Reset to the zero value
@@ -146,8 +154,15 @@ func branchPickerVisibleRows(screenH, candidates int) int {
 // an ancestor but neither is reachable from the other) dispatches as FF
 // and surfaces as ffFailedMsg with ErrFFNotPossible — by design, so the
 // user sees the rejection reason instead of a silent detach.
-func evaluateGraphActionCmd(dir, hash string, locals, remotes []git.Ref) tea.Cmd {
+func evaluateGraphActionCmd(dir, hash string, locals, remotes, stashes []git.Ref) tea.Cmd {
 	return func() tea.Msg {
+		// Stash-first: a row matching a stash entry never falls into the
+		// branch / FF / detach branches below — the stash modal owns it.
+		for _, s := range stashes {
+			if s.ObjectName == hash {
+				return graphActionMsg{hash: hash, kind: graphActionStashAction, stashLabel: s.ShortName}
+			}
+		}
 		var headBranch, headHash string
 		var chips []string
 		for _, r := range locals {

@@ -1069,12 +1069,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			remotes := m.refs.RemoteRefs()
+			stashes := m.refs.StashRefs()
 			m.actionInFlight = true
 			m.status = "→ resolving…"
 			m.statusStyle = statusBusyS
-			log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d, remotes=%d)",
-				shortHash(c.Hash), len(locals), len(remotes))
-			return m, evaluateGraphActionCmd("", c.Hash, locals, remotes)
+			log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d, remotes=%d, stashes=%d)",
+				shortHash(c.Hash), len(locals), len(remotes), len(stashes))
+			return m, evaluateGraphActionCmd("", c.Hash, locals, remotes, stashes)
 		case "d":
 			// Refs focus reinterprets `d` as the delete intent so the
 			// destructive ref-write key doesn't collide with the patch

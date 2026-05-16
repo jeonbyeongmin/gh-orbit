@@ -1823,7 +1823,7 @@ func TestModelCheckoutConfirmStashKeyDispatchesChainWhenWithPull(t *testing.T) {
 			seq = append(seq, "stash")
 			return nil
 		},
-		stashPop: func(context.Context, string) error {
+		stashPop: func(context.Context, string, string) error {
 			seq = append(seq, "pop")
 			return nil
 		},
@@ -1875,7 +1875,7 @@ func TestModelCheckoutConfirmStashKeyFallsBackToLegacyWithoutPull(t *testing.T) 
 			seq = append(seq, "stash")
 			return nil
 		},
-		stashPop: func(context.Context, string) error {
+		stashPop: func(context.Context, string, string) error {
 			seq = append(seq, "pop")
 			return nil
 		},

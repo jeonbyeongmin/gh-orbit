@@ -38,7 +38,7 @@ type chainStubs struct {
 	checkout         func(context.Context, string, string) error
 	checkoutDetached func(context.Context, string, string) error
 	stash            func(context.Context, string, string) error
-	stashPop         func(context.Context, string) error
+	stashPop         func(context.Context, string, string) error
 	pullResolve      func(context.Context, string, string) (git.PullStrategy, error)
 	pull             func(context.Context, string, git.PullStrategy) error
 	mergeFFOnly      func(context.Context, string, string) error
@@ -409,7 +409,7 @@ func TestStashThenCheckoutThenPullThenPopCmdHappyPath(t *testing.T) {
 			seq = append(seq, "stash")
 			return nil
 		},
-		stashPop: func(context.Context, string) error {
+		stashPop: func(context.Context, string, string) error {
 			seq = append(seq, "pop")
 			return nil
 		},
@@ -448,7 +448,7 @@ func TestStashThenCheckoutThenPullThenPopCmdSkipsPullChain(t *testing.T) {
 			seq = append(seq, "stash")
 			return nil
 		},
-		stashPop: func(context.Context, string) error {
+		stashPop: func(context.Context, string, string) error {
 			seq = append(seq, "pop")
 			return nil
 		},
@@ -480,7 +480,7 @@ func TestStashThenCheckoutThenPullThenPopCmdPullConflictStillPops(t *testing.T) 
 		stash:       func(context.Context, string, string) error { return nil },
 		pullResolve: noopPullResolveFFOnly,
 		pull:        func(context.Context, string, git.PullStrategy) error { return conflictErr },
-		stashPop: func(context.Context, string) error {
+		stashPop: func(context.Context, string, string) error {
 			popRan = true
 			return nil
 		},
@@ -510,7 +510,7 @@ func TestStashThenCheckoutThenPullThenPopCmdPullGenericFailureKeepsStash(t *test
 		stash:       func(context.Context, string, string) error { return nil },
 		pullResolve: noopPullResolveFFOnly,
 		pull:        func(context.Context, string, git.PullStrategy) error { return boom },
-		stashPop: func(context.Context, string) error {
+		stashPop: func(context.Context, string, string) error {
 			popRan = true
 			return nil
 		},
@@ -539,7 +539,7 @@ func TestStashThenCheckoutThenPullThenPopCmdPopConflictPreservesStash(t *testing
 		stash:       func(context.Context, string, string) error { return nil },
 		pullResolve: noopPullResolveFFOnly,
 		pull:        func(context.Context, string, git.PullStrategy) error { return nil },
-		stashPop:    func(context.Context, string) error { return popConflictErr },
+		stashPop:    func(context.Context, string, string) error { return popConflictErr },
 	})
 
 	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", "")()
@@ -566,7 +566,7 @@ func TestStashThenCheckoutThenPullThenPopCmdStashFailsBlocksChain(t *testing.T) 
 		checkout:    func(context.Context, string, string) error { coRan = true; return nil },
 		pullResolve: noopPullResolveFFOnly,
 		pull:        func(context.Context, string, git.PullStrategy) error { puRan = true; return nil },
-		stashPop:    func(context.Context, string) error { popRan = true; return nil },
+		stashPop:    func(context.Context, string, string) error { popRan = true; return nil },
 	})
 
 	msg := stashThenCheckoutThenPullThenPopCmd("", "feat", false, "", "")()

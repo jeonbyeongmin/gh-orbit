@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // PullStrategy selects which `git pull` mode the wrapper invokes. The zero
@@ -225,28 +224,19 @@ func Stash(ctx context.Context, dir, message string) error {
 	return nil
 }
 
-// StashPop runs `git stash pop` (no args — pops stash@{0}). On a clean
-// pop returns nil. On conflict the error chain includes ErrStashPopConflict
-// so the TUI can surface "marker(s) in tree, stash preserved" guidance
-// (git keeps the entry on conflict). Other failures (no stash, transport
-// errors, ...) are wrapped with stderr.
-func StashPop(ctx context.Context, dir string) error {
-	cmd := exec.CommandContext(ctx, "git", "stash", "pop")
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	return wrapMergeLikeErr("git stash pop", cmd.Run(), stdout.String(), stderr.String(), ErrStashPopConflict)
-}
-
-// StashPopAt runs `git stash pop <label>` for a user-explicit pop of a
-// specific entry (e.g. stash@{2}). Behaviorally identical to StashPop but
-// targets the named slot instead of the implicit stash@{0}. Kept as a
-// separate function so the no-arg dirty-tree-checkout chain caller is not
-// disturbed by a signature change.
-func StashPopAt(ctx context.Context, dir, label string) error {
-	cmd := exec.CommandContext(ctx, "git", "stash", "pop", label)
+// StashPop runs `git stash pop [label]`. Empty label pops the implicit
+// stash@{0} (the dirty-tree checkout chain's auto-stash); a non-empty
+// label targets a specific slot for user-explicit pops. On conflict the
+// error chain includes ErrStashPopConflict so the TUI can surface
+// "marker(s) in tree, stash preserved" guidance (git keeps the entry on
+// conflict). Other failures (no stash, transport errors, …) are wrapped
+// with stderr.
+func StashPop(ctx context.Context, dir, label string) error {
+	args := []string{"stash", "pop"}
+	if label != "" {
+		args = append(args, label)
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Env = gitEnv()
 	var stdout, stderr bytes.Buffer
@@ -282,17 +272,16 @@ func StashDrop(ctx context.Context, dir, label string) error {
 // "WIP on <branch>: <hash> <message>" for an auto-stash, or
 // "On <branch>: <user message>" when `git stash push -m` was used.
 type StashEntry struct {
-	Label      string
-	Hash       string
-	Subject    string
-	AuthorTime time.Time
+	Label   string
+	Hash    string
+	Subject string
 }
 
 // stashListFormat: %gd = reflog selector ("stash@{N}"), %H = full commit
-// hash, %gs = reflog subject, %aI = author time in ISO 8601 strict.
-// NUL separators keep the parser stable against subjects that contain
-// spaces, colons, commas, or any printable byte except NUL itself.
-const stashListFormat = "%gd%x00%H%x00%gs%x00%aI"
+// hash, %gs = reflog subject. NUL separators keep the parser stable
+// against subjects that contain spaces, colons, commas, or any printable
+// byte except NUL itself.
+const stashListFormat = "%gd%x00%H%x00%gs"
 
 // StashList runs `git stash list --format=...` and returns one StashEntry
 // per slot, newest first (git's natural order: stash@{0} ahead of
@@ -340,18 +329,13 @@ func parseStashList(r io.Reader) ([]StashEntry, error) {
 			continue
 		}
 		fields := strings.Split(line, "\x00")
-		if len(fields) != 4 {
+		if len(fields) != 3 {
 			return nil, fmt.Errorf("unexpected field count %d in %q", len(fields), line)
 		}
-		t, err := time.Parse(time.RFC3339, fields[3])
-		if err != nil {
-			return nil, fmt.Errorf("parse author time %q: %w", fields[3], err)
-		}
 		out = append(out, StashEntry{
-			Label:      fields[0],
-			Hash:       fields[1],
-			Subject:    fields[2],
-			AuthorTime: t,
+			Label:   fields[0],
+			Hash:    fields[1],
+			Subject: fields[2],
 		})
 	}
 	if err := scanner.Err(); err != nil {

@@ -435,7 +435,7 @@ func stashThenCheckoutThenPullThenPopCmd(dir, ref string, detached bool, prefs, 
 		}
 
 		popCtx, popCancel := context.WithTimeout(context.Background(), checkoutTimeout)
-		popErr := stashPopExec(popCtx, dir)
+		popErr := stashPopExec(popCtx, dir, "")
 		popCancel()
 
 		if popErr != nil {

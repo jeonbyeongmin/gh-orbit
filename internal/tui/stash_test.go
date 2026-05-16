@@ -13,20 +13,22 @@ import (
 )
 
 // stashStubs swaps in stubs for the stash write seams. Same pattern as
-// refsActionStubs in refsaction_test.go.
+// refsActionStubs in refsaction_test.go. pop shares stashPopExec with the
+// dirty-tree checkout chain in checkout_test.go — tests that exercise both
+// must coordinate the stub.
 type stashStubs struct {
 	apply func(ctx context.Context, dir, label string) error
 	drop  func(ctx context.Context, dir, label string) error
-	popAt func(ctx context.Context, dir, label string) error
+	pop   func(ctx context.Context, dir, label string) error
 }
 
 func withStashStubs(t *testing.T, s stashStubs) {
 	t.Helper()
-	prevApply, prevDrop, prevPop := stashApplyExec, stashDropExec, stashPopAtExec
+	prevApply, prevDrop, prevPop := stashApplyExec, stashDropExec, stashPopExec
 	t.Cleanup(func() {
 		stashApplyExec = prevApply
 		stashDropExec = prevDrop
-		stashPopAtExec = prevPop
+		stashPopExec = prevPop
 	})
 	if s.apply != nil {
 		stashApplyExec = s.apply
@@ -34,8 +36,8 @@ func withStashStubs(t *testing.T, s stashStubs) {
 	if s.drop != nil {
 		stashDropExec = s.drop
 	}
-	if s.popAt != nil {
-		stashPopAtExec = s.popAt
+	if s.pop != nil {
+		stashPopExec = s.pop
 	}
 }
 
@@ -157,7 +159,7 @@ func TestStashPickerPDispatchesPop(t *testing.T) {
 	m.pendingStashAction = pendingStashAction{label: "stash@{0}", hash: "h"}
 	var seenLabel string
 	withStashStubs(t, stashStubs{
-		popAt: func(_ context.Context, _, label string) error {
+		pop: func(_ context.Context, _, label string) error {
 			seenLabel = label
 			return nil
 		},

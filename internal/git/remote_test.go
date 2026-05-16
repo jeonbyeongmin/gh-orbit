@@ -311,12 +311,12 @@ func TestStashIntegration(t *testing.T) {
 }
 
 func TestParseStashList(t *testing.T) {
-	// Two records, newest first. NUL-separated fields: %gd, %H, %gs, %aI.
+	// Two records, newest first. NUL-separated fields: %gd, %H, %gs.
 	// Second record's subject contains a colon and quotes to exercise the
 	// "no special chars beyond NUL" parsing claim.
 	input := strings.NewReader("" +
-		"stash@{0}\x00abc123\x00On main: WIP\x002026-05-15T12:34:56+09:00\n" +
-		"stash@{1}\x00def456\x00WIP on feat: 'tricky: stuff'\x002026-05-14T08:00:00Z\n")
+		"stash@{0}\x00abc123\x00On main: WIP\n" +
+		"stash@{1}\x00def456\x00WIP on feat: 'tricky: stuff'\n")
 	got, err := parseStashList(input)
 	if err != nil {
 		t.Fatalf("parseStashList: %v", err)
@@ -343,7 +343,7 @@ func TestParseStashListEmpty(t *testing.T) {
 }
 
 func TestParseStashListRejectsMalformed(t *testing.T) {
-	input := strings.NewReader("stash@{0}\x00only-two-fields\n")
+	input := strings.NewReader("stash@{0}\x00only-one-extra\n")
 	if _, err := parseStashList(input); err == nil {
 		t.Error("expected error on wrong field count")
 	}
@@ -496,7 +496,7 @@ func TestStashDropIntegration(t *testing.T) {
 	}
 }
 
-func TestStashPopAtIntegration(t *testing.T) {
+func TestStashPopWithLabelIntegration(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -510,7 +510,7 @@ func TestStashPopAtIntegration(t *testing.T) {
 	gitRun(t, work, "add", "f.txt")
 	gitRun(t, work, "commit", "-m", "base")
 	// Create two stashes; pop stash@{1} (the older one) and verify only the
-	// other survives.
+	// other survives — exercises the non-empty label branch.
 	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("older\n"), 0o644); err != nil {
 		t.Fatalf("write older: %v", err)
 	}
@@ -525,8 +525,8 @@ func TestStashPopAtIntegration(t *testing.T) {
 		t.Fatalf("Stash newer: %v", err)
 	}
 
-	if err := StashPopAt(context.Background(), work, "stash@{1}"); err != nil {
-		t.Fatalf("StashPopAt happy: %v", err)
+	if err := StashPop(context.Background(), work, "stash@{1}"); err != nil {
+		t.Fatalf("StashPop(label): %v", err)
 	}
 	out := gitOutput(t, work, "stash", "list")
 	if !strings.Contains(out, "newer") {
@@ -542,7 +542,7 @@ func TestStashPopReturnsErrorWithStderr(t *testing.T) {
 		t.Skip("git not available")
 	}
 	dir := t.TempDir()
-	err := StashPop(context.Background(), dir)
+	err := StashPop(context.Background(), dir, "")
 	if err == nil {
 		t.Fatal("expected error running git stash pop outside a repo")
 	}
@@ -582,7 +582,7 @@ func TestStashPopReturnsConflictSentinel(t *testing.T) {
 	gitRun(t, work, "add", "f.txt")
 	gitRun(t, work, "commit", "-m", "tree-side change")
 
-	err := StashPop(context.Background(), work)
+	err := StashPop(context.Background(), work, "")
 	if err == nil {
 		t.Fatal("expected stash pop conflict")
 	}

@@ -245,35 +245,25 @@ type Model struct {
 	// is running. Distinct from checkoutInFlight so a stuck refs write
 	// can't deadlock checkout / pull / FF chains.
 	refActionInFlight bool
-	// currentStashHashes / currentStashByHash mirror the stash entries that
-	// the most recent loadCommitsCmd was dispatched with. refsLoadedMsg
-	// recomputes from m.refs.StashRefs(); when the set differs, the model
-	// triggers reloadCmd so the graph picks up the new stash tips. Since
-	// reloadCmd also re-issues loadRefsCmd, the follow-up refsLoadedMsg
-	// returns the same stash set → diff is empty → no infinite loop.
+	// currentStashHashes / currentStashByHash snapshot the stash set the
+	// running stream was started with. refsLoadedMsg diffs against these
+	// and triggers reloadCmd only when the set differs — the reloadCmd's
+	// own refsLoadedMsg sees the same set, diff is empty, no loop.
 	currentStashHashes []string
 	currentStashByHash map[string]string
-	// pendingStashAction backs viewModeStashActionPicker (graph-Enter on
-	// stash row). label is the matched stash@{N}; subject mirrors the
-	// commit subject so the modal body can show it without a second
-	// graph.Selected() lookup.
 	pendingStashAction pendingStashAction
-	// pendingStashDrop backs viewModeStashDropConfirm (refs-pane `d`).
-	// subject mirrors the same intent — drop confirm needs to show the
-	// stash subject so the user can recognize which slot is at risk.
-	pendingStashDrop pendingStashDrop
+	pendingStashDrop   pendingStashDrop
 }
 
-// pendingStashAction holds the graph-Enter stash modal's bound state.
-// subject is the stash commit's git log subject ("WIP on main: …" /
-// "On feat: <user msg>") so the picker can describe the slot.
+// pendingStashAction backs viewModeStashActionPicker. subject is the
+// stash commit's git log subject, best-effort from the graph window —
+// empty when the stash hash isn't yet streamed in.
 type pendingStashAction struct {
 	label   string
 	hash    string
 	subject string
 }
 
-// pendingStashDrop holds the refs-pane `d` stash modal's bound state.
 type pendingStashDrop struct {
 	label   string
 	subject string
@@ -1866,39 +1856,36 @@ func (m Model) renderRefDeleteConfirmInner() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderStashActionPickerInner returns the 3-row content for the graph-
-// Enter stash modal: bold header naming the stash slot, a body line
-// echoing the stash subject so the user can confirm the slot, and the
-// hint matrix `[p] pop · [a] apply · [esc] cancel`.
-func (m Model) renderStashActionPickerInner() string {
-	p := m.pendingStashAction
-	header := "[Stash " + p.label + "]"
-	body := p.subject
+// renderStashModalInner is the shared 3-row skeleton for the stash modals:
+// styled header, subject body (or fallback), and the hint matrix. Caller
+// picks the header style (modalHeaderS for the picker, confirmPromptS for
+// the drop confirm — same convention as the create/rename vs delete-confirm
+// pair).
+func renderStashModalInner(headerStyle lipgloss.Style, header, body, hint string) string {
 	if body == "" {
 		body = "(no subject)"
 	}
-	hint := "[p] pop · [a] apply · [esc] cancel"
 	return strings.Join([]string{
-		modalHeaderS.Render(header),
+		headerStyle.Render(header),
 		statusOkS.Render(body),
 		help.Render(hint),
 	}, "\n")
 }
 
-// renderStashDropConfirmInner returns the 3-row content for the refs-pane
-// `d` stash modal: confirm-prompt header, body echoing the stash subject,
-// and the single-key hint `[y] drop · [esc] cancel`.
+func (m Model) renderStashActionPickerInner() string {
+	p := m.pendingStashAction
+	return renderStashModalInner(modalHeaderS, "[Stash "+p.label+"]", p.subject,
+		"[p] pop · [a] apply · [esc] cancel")
+}
+
 func (m Model) renderStashDropConfirmInner() string {
 	p := m.pendingStashDrop
 	body := p.label
 	if p.subject != "" {
 		body = p.label + ": " + p.subject
 	}
-	return strings.Join([]string{
-		confirmPromptS.Render("Drop stash?"),
-		statusOkS.Render(body),
-		help.Render("[y] drop · [esc] cancel"),
-	}, "\n")
+	return renderStashModalInner(confirmPromptS, "Drop stash?", body,
+		"[y] drop · [esc] cancel")
 }
 
 // renderCheckoutConfirmInner returns the 3-row content for the dirty-tree

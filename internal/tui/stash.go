@@ -1,8 +1,6 @@
 // Stash write actions: package-level seams + cmds + msg shapes that drive
 // the refs-pane `d` (drop) and graph-Enter (pop / apply) modals. The
-// dirty-tree checkout chain keeps using git.Stash / git.StashPop in
-// checkout.go; this file exists for user-explicit stash actions where the
-// caller picks a specific stash@{N} label.
+// dirty-tree checkout chain shares stashPopExec with this file (label="").
 package tui
 
 import (
@@ -21,12 +19,12 @@ import (
 // `…ing` status bar.
 const stashActionTimeout = 30 * time.Second
 
-// Package-level seams so tests can swap in stubs. Production defaults wire
-// straight through to the git wrappers.
+// Package-level seams so tests can swap in stubs. stashPopExec is shared
+// with checkout.go's dirty-tree chain (the chain passes label="" to pop
+// stash@{0}; user-explicit actions pass the chosen slot).
 var (
 	stashApplyExec = git.StashApply
 	stashDropExec  = git.StashDrop
-	stashPopAtExec = git.StashPopAt
 )
 
 // stashPopSucceededMsg / ConflictMsg / FailedMsg classify the outcome of a
@@ -67,56 +65,72 @@ type stashDropFailedMsg struct {
 	err   error
 }
 
-// stashPopCmd dispatches the named-label pop. Errors are partitioned at
-// the boundary so the Update handler can stay branch-light: conflict →
-// ConflictMsg, anything else → FailedMsg.
-func stashPopCmd(dir, label string) tea.Cmd {
+// stashWriteExec is the signature shared by pop / apply / drop wrappers
+// once `dir` is fixed — the closure used by stashWriteCmd just needs
+// `(ctx, label)`.
+type stashWriteExec func(ctx context.Context, label string) error
+
+// stashWriteCmd is the shared dispatch shape for the three user-explicit
+// stash actions. exec runs the git call; conflictSentinel routes a
+// post-failure `errors.Is` check to the conflict msg; ok / conflict / fail
+// build the typed msg variants. nil conflictSentinel disables the
+// conflict branch (drop has no conflict mode).
+func stashWriteCmd(label string, exec stashWriteExec, conflictSentinel error, ok, conflict, fail func(string, error) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), stashActionTimeout)
 		defer cancel()
-		err := stashPopAtExec(ctx, dir, label)
+		err := exec(ctx, label)
 		if err == nil {
-			return stashPopSucceededMsg{label: label}
+			return ok(label, nil)
 		}
-		if errors.Is(err, git.ErrStashPopConflict) {
-			return stashPopConflictMsg{label: label, err: err}
+		if conflictSentinel != nil && errors.Is(err, conflictSentinel) {
+			return conflict(label, err)
 		}
-		return stashPopFailedMsg{label: label, err: err}
+		return fail(label, err)
 	}
+}
+
+func stashPopCmd(dir, label string) tea.Cmd {
+	return stashWriteCmd(label,
+		func(ctx context.Context, l string) error { return stashPopExec(ctx, dir, l) },
+		git.ErrStashPopConflict,
+		func(l string, _ error) tea.Msg { return stashPopSucceededMsg{label: l} },
+		func(l string, e error) tea.Msg { return stashPopConflictMsg{label: l, err: e} },
+		func(l string, e error) tea.Msg { return stashPopFailedMsg{label: l, err: e} },
+	)
 }
 
 func stashApplyCmd(dir, label string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), stashActionTimeout)
-		defer cancel()
-		err := stashApplyExec(ctx, dir, label)
-		if err == nil {
-			return stashApplySucceededMsg{label: label}
-		}
-		if errors.Is(err, git.ErrStashApplyConflict) {
-			return stashApplyConflictMsg{label: label, err: err}
-		}
-		return stashApplyFailedMsg{label: label, err: err}
-	}
+	return stashWriteCmd(label,
+		func(ctx context.Context, l string) error { return stashApplyExec(ctx, dir, l) },
+		git.ErrStashApplyConflict,
+		func(l string, _ error) tea.Msg { return stashApplySucceededMsg{label: l} },
+		func(l string, e error) tea.Msg { return stashApplyConflictMsg{label: l, err: e} },
+		func(l string, e error) tea.Msg { return stashApplyFailedMsg{label: l, err: e} },
+	)
 }
 
 func stashDropCmd(dir, label string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), stashActionTimeout)
-		defer cancel()
-		err := stashDropExec(ctx, dir, label)
-		if err != nil {
-			return stashDropFailedMsg{label: label, err: err}
-		}
-		return stashDropSucceededMsg{label: label}
-	}
+	return stashWriteCmd(label,
+		func(ctx context.Context, l string) error { return stashDropExec(ctx, dir, l) },
+		nil,
+		func(l string, _ error) tea.Msg { return stashDropSucceededMsg{label: l} },
+		nil,
+		func(l string, e error) tea.Msg { return stashDropFailedMsg{label: l, err: e} },
+	)
 }
 
-// diffStashRefs derives the stash hash slice + (hash→label) map from the
-// refs panel's stash section, and reports whether it differs from prev.
-// Diffs trigger a reloadCmd so the graph picks up new stash tips; an
-// unchanged set is a no-op so refsLoadedMsg doesn't spin in a reload loop.
-func diffStashRefs(stashes []git.Ref, prev []string) (hashes []string, byHash map[string]string, changed bool) {
+// stashTipsFromRefs builds the (hash → label, hash → subject) maps the
+// graph needs from the refs panel's stash section. Subjects come from the
+// model's stored subject map keyed by hash, falling back to the label when
+// missing (which happens before the first graph stream catches up).
+//
+// hashes preserves the StashList newest-first order so slices.Equal is a
+// valid diff against the previously-dispatched set.
+func stashTipsFromRefs(stashes []git.Ref) (hashes []string, byHash map[string]string) {
+	if len(stashes) == 0 {
+		return nil, nil
+	}
 	hashes = make([]string, 0, len(stashes))
 	byHash = make(map[string]string, len(stashes))
 	for _, s := range stashes {
@@ -127,8 +141,18 @@ func diffStashRefs(stashes []git.Ref, prev []string) (hashes []string, byHash ma
 		byHash[s.ObjectName] = s.ShortName
 	}
 	if len(hashes) == 0 {
-		hashes = nil
+		return nil, nil
 	}
-	changed = !slices.Equal(hashes, prev)
-	return hashes, byHash, changed
+	return hashes, byHash
+}
+
+// diffStashRefs reports whether a fresh hash slice differs from the
+// snapshot the running stream was started with. Empty + nil short-circuits
+// before any allocation — the common case for repos without stashes.
+func diffStashRefs(stashes []git.Ref, prev []string) (hashes []string, byHash map[string]string, changed bool) {
+	if len(stashes) == 0 && len(prev) == 0 {
+		return nil, nil, false
+	}
+	hashes, byHash = stashTipsFromRefs(stashes)
+	return hashes, byHash, !slices.Equal(hashes, prev)
 }

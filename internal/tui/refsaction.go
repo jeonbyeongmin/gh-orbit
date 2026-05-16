@@ -109,6 +109,18 @@ type deletedRefHandle struct {
 	kind git.RefKind
 }
 
+// persistedRefHandle snapshots the refs cursor at reloadCmd time so the
+// post-reload refsLoadedMsg handler can restore the same ref across the
+// reload's cursor=0 reset. For non-stash refs name+kind is enough; for
+// stash entries we capture the commit hash too because reloads can
+// renumber stash@{N} after pop/drop and ShortName alone would land on
+// a different entry. Zero value (all fields empty) means "no persist".
+type persistedRefHandle struct {
+	name      string
+	kind      git.RefKind
+	stashHash string
+}
+
 // branchCreateSucceededMsg fires when `git branch <name> [<base>]` returned
 // without error. The status-bar handler reads the modal's preserved
 // baseLabel to render "from <label>" — round-tripping it through the cmd

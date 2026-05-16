@@ -441,6 +441,12 @@ func TestRefModelGGoesToTopAndResetsOffset(t *testing.T) {
 	}
 }
 
+// TestRefModelYOffsetResetsAfterReload covers the refModel-only baseline:
+// refsLoadedMsg parks cursor=0 / yOffset=0. In the full Model loop the
+// Model layer's refsLoadedMsg handler then restores cursor (and yOffset
+// via scrollCursorIntoView) from pendingRefCursorPersist — that path is
+// exercised in refs_persist_test.go. This test must not include the Model
+// layer because the baseline reset is what the persist restore overrides.
 func TestRefModelYOffsetResetsAfterReload(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 6)

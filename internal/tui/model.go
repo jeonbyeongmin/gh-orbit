@@ -241,6 +241,13 @@ type Model struct {
 	// next (or previous, if last) ref in the same section. Zero name means
 	// no adjustment.
 	pendingRefCursorAfterDelete deletedRefHandle
+	// pendingRefCursorPersist is the "previous cursor position snapshot"
+	// reloadCmd writes just before every reload, so the post-reload
+	// refsLoadedMsg can restore the cursor onto the same ref after the
+	// refModel's cursor=0 reset. Only consumed when the higher-priority
+	// pendingRefCursorName / pendingRefCursorAfterDelete are absent. Zero
+	// value = no persist (detached HEAD / empty ref set).
+	pendingRefCursorPersist persistedRefHandle
 	// refActionInFlight gates the n / d / m keys while a branch-write cmd
 	// is running. Distinct from checkoutInFlight so a stuck refs write
 	// can't deadlock checkout / pull / FF chains.
@@ -379,15 +386,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.refs, cmd = m.refs.Update(msg)
 		// Apply pending refs cursor jumps after the model has the new ref
-		// list. SelectByName / SelectAfterDeleted are no-ops on a load
-		// failure (refs.loaded stays false), so the order is safe.
-		if name := m.pendingRefCursorName; name != "" {
-			m.refs.SelectByName(name)
+		// list. Priority: name (create / rename) > delete > persist
+		// (reload-cursor snapshot). The switch fires at most one branch and
+		// drops the persist handle whenever a higher-priority branch wins,
+		// so a name/delete-armed reload doesn't leak persist state to the
+		// next cycle. SelectByName / SelectAfterDeleted / SelectByNameKind
+		// are all no-ops on a load failure (refs.loaded stays false).
+		switch {
+		case m.pendingRefCursorName != "":
+			m.refs.SelectByName(m.pendingRefCursorName)
 			m.pendingRefCursorName = ""
-		}
-		if h := m.pendingRefCursorAfterDelete; h.name != "" {
-			m.refs.SelectAfterDeleted(h.name, h.kind)
+			m.pendingRefCursorPersist = persistedRefHandle{}
+		case m.pendingRefCursorAfterDelete.name != "":
+			m.refs.SelectAfterDeleted(m.pendingRefCursorAfterDelete.name, m.pendingRefCursorAfterDelete.kind)
 			m.pendingRefCursorAfterDelete = deletedRefHandle{}
+			m.pendingRefCursorPersist = persistedRefHandle{}
+		case m.pendingRefCursorPersist.name != "" || m.pendingRefCursorPersist.stashHash != "":
+			h := m.pendingRefCursorPersist
+			if h.kind == git.RefKindStash && h.stashHash != "" {
+				if !m.refs.SelectStashByHash(h.stashHash) {
+					m.refs.SelectAfterDeleted(h.name, git.RefKindStash)
+				}
+			} else {
+				m.refs.SelectByNameKindOrNeighbor(h.name, h.kind)
+			}
+			m.pendingRefCursorPersist = persistedRefHandle{}
 		}
 		// Sync stash tips into the commit stream when the set has changed.
 		// reloadCmd is idempotent against an unchanged stash set — the next
@@ -1631,6 +1654,19 @@ func (m *Model) cancelStream() {
 func (m *Model) reloadCmd() tea.Cmd {
 	m.cancelStream()
 	m.streamReqID++
+	// Snapshot the currently focused ref so refsLoadedMsg can restore the
+	// cursor across the upcoming cursor=0 reset. Selected() returns false on
+	// detached HEAD / empty ref set / pre-load, which falls through to a
+	// zero handle and a no-op restore.
+	if ref, ok := m.refs.Selected(); ok {
+		h := persistedRefHandle{name: ref.ShortName, kind: ref.Kind}
+		if ref.Kind == git.RefKindStash {
+			h.stashHash = ref.ObjectName
+		}
+		m.pendingRefCursorPersist = h
+	} else {
+		m.pendingRefCursorPersist = persistedRefHandle{}
+	}
 	resetCmd := m.graph.ResetForReload()
 	m.refs.ResetForReload()
 	return tea.Batch(

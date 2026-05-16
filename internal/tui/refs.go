@@ -106,8 +106,10 @@ func (r refModel) Init() tea.Cmd { return nil }
 
 // ResetForReload clears loaded/err so View renders the "loading…" placeholder
 // while a fresh loadRefsCmd is in flight. cursor is intentionally left alone
-// here — refsLoadedMsg already resets it to 0 on arrival, which doubles as a
-// safe fallback when the previously selected ref was deleted by another tool.
+// here — refsLoadedMsg resets it to 0 on arrival, and the Model layer's
+// refsLoadedMsg handler then restores it from pendingRefCursorPersist (or
+// SelectAfterDeleted in the same section when the previously focused ref
+// was deleted between snapshot and reload).
 func (r *refModel) ResetForReload() {
 	r.loaded = false
 	r.err = nil
@@ -116,6 +118,9 @@ func (r *refModel) ResetForReload() {
 func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	switch m := msg.(type) {
 	case refsLoadedMsg:
+		// cursor=0 / yOffset=0 stays as the baseline; the Model layer's
+		// refsLoadedMsg handler runs after this and overwrites the cursor
+		// from pendingRefCursorName / AfterDelete / Persist as appropriate.
 		r.byKind = partitionByKind(m.refs)
 		r.cursor = 0
 		r.yOffset = 0
@@ -281,6 +286,72 @@ func (r *refModel) SelectByName(name string) bool {
 		}
 	}
 	return false
+}
+
+// SelectByNameKind is like SelectByName but constrained to the section
+// whose kind matches. Used by the reload-cursor-persist restore path so a
+// remote ref with the same ShortName as a local branch can't pull the
+// cursor across sections after a reload.
+func (r *refModel) SelectByNameKind(name string, kind git.RefKind) bool {
+	if !r.loaded {
+		return false
+	}
+	idx := 0
+	for i, sec := range refSections {
+		if sec.kind != kind {
+			idx += len(r.byKind[i])
+			continue
+		}
+		for _, ref := range r.byKind[i] {
+			if ref.ShortName == name {
+				r.cursor = idx
+				*r = r.scrollCursorIntoView()
+				return true
+			}
+			idx++
+		}
+		return false
+	}
+	return false
+}
+
+// SelectStashByHash moves the cursor onto the stash entry whose ObjectName
+// (commit hash) matches. Reloads can renumber stash@{N} after pop/drop, so
+// matching by ShortName would land on a different entry — hashes are stable
+// across the rename. Returns true on a hit.
+func (r *refModel) SelectStashByHash(hash string) bool {
+	if !r.loaded || hash == "" {
+		return false
+	}
+	idx := 0
+	for i, sec := range refSections {
+		if sec.kind != git.RefKindStash {
+			idx += len(r.byKind[i])
+			continue
+		}
+		for _, ref := range r.byKind[i] {
+			if ref.ObjectName == hash {
+				r.cursor = idx
+				*r = r.scrollCursorIntoView()
+				return true
+			}
+			idx++
+		}
+		return false
+	}
+	return false
+}
+
+// SelectByNameKindOrNeighbor tries SelectByNameKind first; on a miss it
+// falls back to SelectAfterDeleted in the same section so the cursor lands
+// on the alphabetical neighbor (or previous row when the missing entry
+// was last). Used by the persist-restore path when the previously-focused
+// ref was removed between snapshot and reload.
+func (r *refModel) SelectByNameKindOrNeighbor(name string, kind git.RefKind) {
+	if r.SelectByNameKind(name, kind) {
+		return
+	}
+	r.SelectAfterDeleted(name, kind)
 }
 
 // SelectAfterDeleted positions the cursor as if `prevName` used to occupy a

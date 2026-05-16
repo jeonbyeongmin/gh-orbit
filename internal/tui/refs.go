@@ -26,6 +26,11 @@ type refModel struct {
 	yOffset int
 	loaded  bool
 	err     error
+	// onLocalChanges flags that the sticky "● Local Changes" row at the
+	// top of the pane is the current focus instead of a ref. Kept as a
+	// separate flag so cursor semantics ("n-th selectable ref") stay the
+	// same — every SelectBy* helper / persist path is unchanged.
+	onLocalChanges bool
 }
 
 func newRefsModel() refModel { return refModel{} }
@@ -134,24 +139,39 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch m.String() {
 		case "enter":
+			if r.onLocalChanges {
+				return r, func() tea.Msg { return localChangesEnterRequestedMsg{} }
+			}
 			if ref, ok := r.Selected(); ok {
 				return r, func() tea.Msg { return refCheckoutRequestedMsg{ref: ref} }
 			}
 			return r, nil
 		case "o":
+			if r.onLocalChanges {
+				return r, nil
+			}
 			if ref, ok := r.Selected(); ok {
 				return r, func() tea.Msg { return refSelectedMsg{ref: ref} }
 			}
 			return r, nil
 		case "p":
+			if r.onLocalChanges {
+				return r, nil
+			}
 			if ref, ok := r.Selected(); ok {
 				return r, func() tea.Msg { return refCheckoutWithPullRequestedMsg{ref: ref} }
 			}
 			return r, nil
 		case "n":
+			if r.onLocalChanges {
+				return r, nil
+			}
 			ref, ok := r.Selected()
 			return r, func() tea.Msg { return refCreateRequestedMsg{cursorRef: ref, hasCursor: ok} }
 		case "m":
+			if r.onLocalChanges {
+				return r, nil
+			}
 			ref, ok := r.Selected()
 			if !ok {
 				return r, func() tea.Msg {
@@ -174,20 +194,37 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 	total := r.selectableCount()
 	switch msg.String() {
 	case "j", "down":
+		if r.onLocalChanges {
+			// Leaving the sticky row downward → land on the first
+			// selectable ref. yOffset=0 keeps the sticky in view as the
+			// user begins scrolling.
+			r.onLocalChanges = false
+			r.cursor = 0
+			r.yOffset = 0
+			return r
+		}
 		if r.cursor < total-1 {
 			r.cursor++
 			r = r.scrollCursorIntoView()
 		}
 	case "k", "up":
-		if r.cursor > 0 {
-			r.cursor--
-			r = r.scrollCursorIntoView()
+		if r.onLocalChanges {
+			return r
 		}
+		if r.cursor == 0 {
+			r.onLocalChanges = true
+			r.yOffset = 0
+			return r
+		}
+		r.cursor--
+		r = r.scrollCursorIntoView()
 	case "g":
+		r.onLocalChanges = true
 		r.cursor = 0
 		r.yOffset = 0
 	case "G":
 		if total > 0 {
+			r.onLocalChanges = false
 			r.cursor = total - 1
 			r = r.scrollCursorIntoView()
 		}
@@ -412,6 +449,9 @@ func (r *refModel) SelectAfterDeleted(prevName string, kind git.RefKind) {
 }
 
 func (r refModel) Selected() (git.Ref, bool) {
+	if r.onLocalChanges {
+		return git.Ref{}, false
+	}
 	rows := r.flatRows()
 	i, ok := r.cursorFlatRow(rows)
 	if !ok {
@@ -420,6 +460,11 @@ func (r refModel) Selected() (git.Ref, bool) {
 	row := rows[i]
 	return r.byKind[row.sectionIdx][row.refIdx], true
 }
+
+// IsLocalChangesSelected reports whether the sticky `● Local Changes` row at
+// the top of the pane is the current focus. The Model layer uses this to
+// route enter on the refs pane into the mode-toggle path.
+func (r refModel) IsLocalChangesSelected() bool { return r.onLocalChanges }
 
 func (r refModel) selectableCount() int {
 	total := 0
@@ -463,6 +508,11 @@ const (
 	refRowHeader
 	refRowEmpty
 	refRowRef
+	// refRowLocalChanges is the sticky `● Local Changes` row that lives
+	// above every section. Selected state is driven by onLocalChanges
+	// (not r.cursor), so the normal cursorFlatRow lookup keeps its
+	// "n-th ref" semantics.
+	refRowLocalChanges
 )
 
 type refRow struct {
@@ -471,15 +521,13 @@ type refRow struct {
 	refIdx     int // valid only for refRowRef
 }
 
-// flatRows expands the three sections into a flat row list in render order:
-// gap (between sections), header, then either empty placeholder or the ref
-// list. This is the index space visible-window slicing and scroll math share.
+// flatRows expands the sections into a flat row list in render order:
+// sticky Local Changes (always first) → gap → section header → empty/refs.
+// This is the index space visible-window slicing and scroll math share.
 func (r refModel) flatRows() []refRow {
-	var rows []refRow
+	rows := []refRow{{kind: refRowLocalChanges}}
 	for i := range refSections {
-		if i > 0 {
-			rows = append(rows, refRow{kind: refRowGap, sectionIdx: i})
-		}
+		rows = append(rows, refRow{kind: refRowGap, sectionIdx: i})
 		rows = append(rows, refRow{kind: refRowHeader, sectionIdx: i})
 		items := r.byKind[i]
 		if len(items) == 0 {
@@ -511,6 +559,12 @@ func (r refModel) cursorFlatRow(rows []refRow) (int, bool) {
 
 func (r refModel) renderRow(row refRow, width int, selected bool) string {
 	switch row.kind {
+	case refRowLocalChanges:
+		text := runewidth.Truncate("● Local Changes", width, "…")
+		if selected {
+			return selectedStyle.Render(text)
+		}
+		return text
 	case refRowGap:
 		return ""
 	case refRowHeader:
@@ -538,6 +592,11 @@ func (r refModel) View() string {
 
 	rows := r.flatRows()
 	cursorRow, _ := r.cursorFlatRow(rows)
+	if r.onLocalChanges {
+		// Highlight the sticky row instead of any ref. flatRows always
+		// emits it at index 0, so the lookup is constant — no scan.
+		cursorRow = 0
+	}
 
 	start, end := 0, len(rows)
 	if r.height > 0 {

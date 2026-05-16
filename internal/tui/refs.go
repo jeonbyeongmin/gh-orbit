@@ -283,6 +283,72 @@ func (r *refModel) SelectByName(name string) bool {
 	return false
 }
 
+// SelectByNameKind is like SelectByName but constrained to the section
+// whose kind matches. Used by the reload-cursor-persist restore path so a
+// remote ref with the same ShortName as a local branch can't pull the
+// cursor across sections after a reload.
+func (r *refModel) SelectByNameKind(name string, kind git.RefKind) bool {
+	if !r.loaded {
+		return false
+	}
+	idx := 0
+	for i, sec := range refSections {
+		if sec.kind != kind {
+			idx += len(r.byKind[i])
+			continue
+		}
+		for _, ref := range r.byKind[i] {
+			if ref.ShortName == name {
+				r.cursor = idx
+				*r = r.scrollCursorIntoView()
+				return true
+			}
+			idx++
+		}
+		return false
+	}
+	return false
+}
+
+// SelectStashByHash moves the cursor onto the stash entry whose ObjectName
+// (commit hash) matches. Reloads can renumber stash@{N} after pop/drop, so
+// matching by ShortName would land on a different entry — hashes are stable
+// across the rename. Returns true on a hit.
+func (r *refModel) SelectStashByHash(hash string) bool {
+	if !r.loaded || hash == "" {
+		return false
+	}
+	idx := 0
+	for i, sec := range refSections {
+		if sec.kind != git.RefKindStash {
+			idx += len(r.byKind[i])
+			continue
+		}
+		for _, ref := range r.byKind[i] {
+			if ref.ObjectName == hash {
+				r.cursor = idx
+				*r = r.scrollCursorIntoView()
+				return true
+			}
+			idx++
+		}
+		return false
+	}
+	return false
+}
+
+// SelectByNameKindOrNeighbor tries SelectByNameKind first; on a miss it
+// falls back to SelectAfterDeleted in the same section so the cursor lands
+// on the alphabetical neighbor (or previous row when the missing entry
+// was last). Used by the persist-restore path when the previously-focused
+// ref was removed between snapshot and reload.
+func (r *refModel) SelectByNameKindOrNeighbor(name string, kind git.RefKind) {
+	if r.SelectByNameKind(name, kind) {
+		return
+	}
+	r.SelectAfterDeleted(name, kind)
+}
+
 // SelectAfterDeleted positions the cursor as if `prevName` used to occupy a
 // row in the section identified by `kind`, picking the row that would now
 // be "next" in flat order — or the previous row if the deleted entry was

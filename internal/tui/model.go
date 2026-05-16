@@ -98,6 +98,12 @@ const (
 	// `[y] drop / [esc] cancel`. Single key by design — stash drop has no
 	// force / multi-axis variants, so a 4-axis matrix would be noise.
 	viewModeStashDropConfirm
+	// viewModeLocalChanges replaces the right column (graph + tab) with a
+	// file-tree + diff layout for working-tree work. refs sidebar stays
+	// put so the branch context is unchanged across the toggle. Entered
+	// via the `,` keybind or by `enter` on the sticky `● Local Changes`
+	// row in the refs pane.
+	viewModeLocalChanges
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
@@ -260,6 +266,16 @@ type Model struct {
 	currentStashByHash map[string]string
 	pendingStashAction pendingStashAction
 	pendingStashDrop   pendingStashDrop
+	// localChanges hosts the file-tree + diff viewport that the right
+	// column renders when mode == viewModeLocalChanges. The graph / tab
+	// models are left untouched across the toggle so exiting the mode
+	// snaps back to the exact previous state.
+	localChanges localChangesModel
+	// localChangesReqID counts every diff dispatch inside the Local
+	// Changes mode. ApplyDiffLoaded compares against this + (path,
+	// staged) to drop stale responses when the user keeps moving the
+	// cursor mid-load.
+	localChangesReqID uint64
 }
 
 // pendingStashAction backs viewModeStashActionPicker. subject is the
@@ -285,6 +301,7 @@ func New() Model {
 		changes:      newChangesModel(),
 		commitDetail: newCommitDetailModel(),
 		tabs:         newTabsModel(),
+		localChanges: newLocalChangesModel(),
 		splitRatio:   splitRatioDefault,
 		currentRefs:  []string{refsAllSentinel},
 		streamReqID:  1,
@@ -1324,6 +1341,29 @@ func (m *Model) applyPaneSizes() {
 	}
 	m.changes.SetSize(s.tabW, tabBodyH)
 	m.commitDetail.SetSize(s.tabW, tabBodyH)
+	if m.mode == viewModeLocalChanges {
+		m.localChanges.SetSize(s.lcTreeW, s.lcTreeH, s.lcDiffW, s.lcDiffH)
+	}
+}
+
+// enterLocalChangesMode flips into the working-tree view and kicks off the
+// first status load. refs / graph / tab models are left untouched so exit
+// returns to the exact prior state. focused is parked on paneGraph (= "right
+// column has focus") and the sub-focus inside that column starts on the tree.
+func (m *Model) enterLocalChangesMode() tea.Cmd {
+	m.mode = viewModeLocalChanges
+	m.focused = paneGraph
+	m.localChanges.SetFocus(paneLCTree)
+	m.applyPaneSizes()
+	return loadStatusCmd("")
+}
+
+// exitLocalChangesMode flips back to the normal layout. The localChanges
+// model is intentionally not zeroed — its entries / cursor / diff cache are
+// kept so re-entry doesn't refetch unless the user pressed `r` first.
+func (m *Model) exitLocalChangesMode() {
+	m.mode = viewModeNormal
+	m.applyPaneSizes()
 }
 
 // adjustSplit nudges the graph/tab split ratio by delta percent and reflows
@@ -1685,6 +1725,11 @@ type paneSizes struct {
 	refsW, refsH   int
 	graphW, graphH int
 	tabW, tabH     int
+	// lcTreeW/H, lcDiffW/H carry the right-column split when mode ==
+	// viewModeLocalChanges. Zero in any other mode — graphW/H and tabW/H
+	// stay authoritative there.
+	lcTreeW, lcTreeH int
+	lcDiffW, lcDiffH int
 }
 
 func (m Model) paneSizes() paneSizes {
@@ -1752,6 +1797,36 @@ func (m Model) paneSizes() paneSizes {
 	}
 	if s.tabH < 1 {
 		s.tabH = 1
+	}
+
+	// Local Changes mode subdivides the right column horizontally
+	// (tree | diff) instead of vertically (graph / tab). Reuse the
+	// Changes-tab ratio (35% to the file list) for layout consistency.
+	if m.mode == viewModeLocalChanges {
+		treeOuterW := rightOuterW * changesFileListRatio / 100
+		if treeOuterW < 12 {
+			treeOuterW = 12
+		}
+		if treeOuterW > rightOuterW-12 {
+			treeOuterW = rightOuterW - 12
+		}
+		diffOuterW := rightOuterW - treeOuterW
+		s.lcTreeW = treeOuterW - 2
+		s.lcTreeH = mainH - 2
+		s.lcDiffW = diffOuterW - 2
+		s.lcDiffH = mainH - 2
+		if s.lcTreeW < 1 {
+			s.lcTreeW = 1
+		}
+		if s.lcTreeH < 1 {
+			s.lcTreeH = 1
+		}
+		if s.lcDiffW < 1 {
+			s.lcDiffW = 1
+		}
+		if s.lcDiffH < 1 {
+			s.lcDiffH = 1
+		}
 	}
 	return s
 }

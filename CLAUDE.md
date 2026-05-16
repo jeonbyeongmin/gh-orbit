@@ -87,9 +87,9 @@ right). `File Tree` is reserved for a follow-up backlog.
 | `o`             | refs          | jump graph cursor to ref tip                   |
 | `a`             | refs          | show every ref's commits (unified `--all`)     |
 | `n`             | refs          | new branch — base from focus (graph cursor / refs tip / HEAD); modal name input (see "Refs Write Actions") |
-| `d`             | refs          | delete branch (modal `[y]/[Y]/[f]/[F]`; remote-tracking cursors auto-include the matching local) |
+| `d`             | refs          | delete branch (modal `[y]/[Y]/[f]/[F]`) or drop stash (modal `[y]`); stash cursors auto-route to the drop confirm |
 | `m`             | refs          | rename local branch (modal name input; HEAD branch allowed) |
-| `enter`         | graph         | checkout / fast-forward / detach — chosen automatically (see "Graph Enter Behavior") |
+| `enter`         | graph         | checkout / fast-forward / detach — chosen automatically (see "Graph Enter Behavior"). Stash row → `[p] pop / [a] apply / [esc]` modal. |
 | `y`             | Commit tab    | copy full hash to clipboard                    |
 | `d`             | graph / tab   | open the focused commit's full patch overlay   |
 | `F`             | global        | `git fetch --all` in the background            |
@@ -198,6 +198,7 @@ Dirty working tree handling differs from `enter` / `s`. With `p`, the modal text
 
 | cursor state                                                       | HEAD                                            | action                                                       |
 | ------------------------------------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------ |
+| cursor commit matches a stash entry (stash@{N})                    | —                                               | open `viewModeStashActionPicker` → `[p] pop / [a] apply / [esc]`. Wins over every branch / FF / detach branch below. |
 | local branch chip 1 (`B`), HEAD on `B`                             | —                                               | no-op (`already on B`)                                       |
 | local branch chip 1 (`B`), HEAD elsewhere                          | —                                               | `checkout B`                                                 |
 | local branch chips ≥ 2, HEAD on one of them                        | —                                               | no-op                                                        |
@@ -221,6 +222,36 @@ Notes:
   - `withCheckoutFF=true` → `[s] stash & checkout & fast-forward` (cross-branch chain).
   All chains follow the no-auto-pop policy of `stashThenCheckoutCmd`.
 - Status surfaces are one-line: `fast-forward: main +3`, `fast-forward: develop +2 (after checkout)`, `fast-forward failed: <reason>`, `already on main`, `branch select cancelled`.
+
+## Refs Stash Section
+
+A fourth refs-pane section, `Stashes`, lists `git stash list` entries (Local branches → Remote branches → Tags → Stashes). The list is populated by `git.StashList` (`git stash list --format=%gd%x00%H%x00%gs%x00%aI`), not by `for-each-ref refs/stash` — the latter returns only the top entry. `defaultRefPatterns` deliberately excludes `refs/stash` so the two paths don't dedup-collide.
+
+Each stash entry also appears in the graph: `loadCommitsCmd` appends `m.currentStashHashes` to `git log`'s refspec so the stash commits walk into the stream as additional tips. Stash chips are rendered in a dedicated magenta-leaning slot (`colorChipStash = "165"`) and the label `stash@{N}` is injected into `Commit.RefNames` at stream time because `%D` doesn't surface `refs/stash` tokens.
+
+Race handling: `loadRefsCmd` discovers stash entries; `refsLoadedMsg` calls `diffStashRefs` against `m.currentStashHashes` and, on diff, dispatches `reloadCmd`. Since `reloadCmd` re-issues `loadRefsCmd` itself, the follow-up `refsLoadedMsg` sees the same set → no diff → no infinite loop. First-paint cost: one extra reload after stash hashes arrive.
+
+### Write actions
+
+Three user-explicit stash actions complement the dirty-tree checkout chain's internal stash use:
+
+| Key | Where | Action |
+| --- | ----- | ------ |
+| `enter` | graph (cursor on stash row) | open `viewModeStashActionPicker` modal `[p] pop · [a] apply · [esc]` |
+| `d`     | refs (cursor on stash entry) | open `viewModeStashDropConfirm` modal `[y] drop · [esc]` |
+
+Drop is intentionally exclusive to the refs-pane modal — destructive remove always goes through a "drop?" prompt, never the graph-Enter picker. Push (`git stash push -m <msg>`) is deferred to the changes-view backlog.
+
+The wrappers live in `internal/git/remote.go`:
+
+- `StashList(ctx, dir)` → `[]StashEntry`.
+- `StashApply(ctx, dir, label)` — wraps CONFLICT into `ErrStashApplyConflict`.
+- `StashDrop(ctx, dir, label)` — no sentinel mapping; stderr surfaces as-is.
+- `StashPopAt(ctx, dir, label)` — companion to the existing no-arg `StashPop` (the checkout chain keeps using the no-arg variant; `StashPopAt` exists so the new label-bound caller doesn't perturb that callsite).
+
+Conflict policy mirrors `git stash pop`/`apply`: the entry is preserved in both pop-conflict and apply-conflict outcomes; the status bar advertises `stash <label>: CONFLICT — resolve markers; stash preserved`. Reload still fires so the refs panel + graph reflect any partial state.
+
+Stash slot re-indexing on pop/drop (stash@{1} → stash@{0}) is handled by `reloadCmd`'s full refs/log refresh. Drop success arms `pendingRefCursorAfterDelete{kind: RefKindStash}` so the cursor lands on the next entry in the Stash section (or the previous when the deleted slot was last).
 
 ## Refs Write Actions (`n` / `d` / `m`)
 

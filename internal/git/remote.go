@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // PullStrategy selects which `git pull` mode the wrapper invokes. The zero
@@ -61,6 +63,12 @@ var ErrCheckoutNeedsCleanTree = errors.New("checkout needs clean working tree")
 // this so the user knows conflict markers are present and the stash entry
 // is preserved (git keeps stash@{0} on conflict).
 var ErrStashPopConflict = errors.New("stash pop conflict")
+
+// ErrStashApplyConflict marks a `git stash apply` failure where the applied
+// changes collided with the working tree. Symmetric to ErrStashPopConflict —
+// the entry is preserved either way, but the TUI distinguishes the two so
+// the post-action status surface can name which command was attempted.
+var ErrStashApplyConflict = errors.New("stash apply conflict")
 
 // ErrFFNotPossible marks a `git merge --ff-only` rejection where the target
 // hash isn't a descendant of HEAD (divergence). The TUI sites that drive
@@ -230,6 +238,126 @@ func StashPop(ctx context.Context, dir string) error {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	return wrapMergeLikeErr("git stash pop", cmd.Run(), stdout.String(), stderr.String(), ErrStashPopConflict)
+}
+
+// StashPopAt runs `git stash pop <label>` for a user-explicit pop of a
+// specific entry (e.g. stash@{2}). Behaviorally identical to StashPop but
+// targets the named slot instead of the implicit stash@{0}. Kept as a
+// separate function so the no-arg dirty-tree-checkout chain caller is not
+// disturbed by a signature change.
+func StashPopAt(ctx context.Context, dir, label string) error {
+	cmd := exec.CommandContext(ctx, "git", "stash", "pop", label)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	return wrapMergeLikeErr("git stash pop", cmd.Run(), stdout.String(), stderr.String(), ErrStashPopConflict)
+}
+
+// StashApply runs `git stash apply <label>` — apply without dropping. On
+// conflict the error chain includes ErrStashApplyConflict; the entry is
+// preserved either way (apply never drops).
+func StashApply(ctx context.Context, dir, label string) error {
+	cmd := exec.CommandContext(ctx, "git", "stash", "apply", label)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	return wrapMergeLikeErr("git stash apply", cmd.Run(), stdout.String(), stderr.String(), ErrStashApplyConflict)
+}
+
+// StashDrop runs `git stash drop <label>` — destructive remove of a single
+// entry. No sentinel mapping: missing-label / index-out-of-range / lock
+// failures all surface as the wrapped stderr string. Re-indexing of later
+// slots is git's concern; callers reload refs after a successful drop.
+func StashDrop(ctx context.Context, dir, label string) error {
+	return runGitWrite(ctx, dir, "git stash drop", nil, "stash", "drop", label)
+}
+
+// StashEntry is one row from `git stash list`. Label is git's slot name
+// (e.g. "stash@{0}"); Hash is the commit object the entry points at;
+// Subject is the reflog subject (`%gs`) — typically
+// "WIP on <branch>: <hash> <message>" for an auto-stash, or
+// "On <branch>: <user message>" when `git stash push -m` was used.
+type StashEntry struct {
+	Label      string
+	Hash       string
+	Subject    string
+	AuthorTime time.Time
+}
+
+// stashListFormat: %gd = reflog selector ("stash@{N}"), %H = full commit
+// hash, %gs = reflog subject, %aI = author time in ISO 8601 strict.
+// NUL separators keep the parser stable against subjects that contain
+// spaces, colons, commas, or any printable byte except NUL itself.
+const stashListFormat = "%gd%x00%H%x00%gs%x00%aI"
+
+// StashList runs `git stash list --format=...` and returns one StashEntry
+// per slot, newest first (git's natural order: stash@{0} ahead of
+// stash@{1}, ...). An empty stash returns (nil, nil).
+//
+// `git stash list` (without --format) shells out to log; with --format the
+// output is one record per line, NUL-separated fields. We use --format
+// rather than `git for-each-ref refs/stash` because the latter returns
+// only the top entry; --format lists the full reflog history of refs/stash.
+func StashList(ctx context.Context, dir string) ([]StashEntry, error) {
+	cmd := exec.CommandContext(ctx, "git", "stash", "list", "--format="+stashListFormat)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("git stash list: start: %w", err)
+	}
+	entries, parseErr := parseStashList(stdout)
+	waitErr := cmd.Wait()
+	if waitErr != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			return nil, fmt.Errorf("git stash list: %w", waitErr)
+		}
+		return nil, fmt.Errorf("git stash list: %w: %s", waitErr, msg)
+	}
+	if parseErr != nil {
+		return nil, fmt.Errorf("git stash list: parse: %w", parseErr)
+	}
+	return entries, nil
+}
+
+func parseStashList(r io.Reader) ([]StashEntry, error) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	var out []StashEntry
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\x00")
+		if len(fields) != 4 {
+			return nil, fmt.Errorf("unexpected field count %d in %q", len(fields), line)
+		}
+		t, err := time.Parse(time.RFC3339, fields[3])
+		if err != nil {
+			return nil, fmt.Errorf("parse author time %q: %w", fields[3], err)
+		}
+		out = append(out, StashEntry{
+			Label:      fields[0],
+			Hash:       fields[1],
+			Subject:    fields[2],
+			AuthorTime: t,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // runCheckout is the shared body of Checkout and CheckoutDetached.

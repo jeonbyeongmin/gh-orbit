@@ -310,6 +310,233 @@ func TestStashIntegration(t *testing.T) {
 	}
 }
 
+func TestParseStashList(t *testing.T) {
+	// Two records, newest first. NUL-separated fields: %gd, %H, %gs, %aI.
+	// Second record's subject contains a colon and quotes to exercise the
+	// "no special chars beyond NUL" parsing claim.
+	input := strings.NewReader("" +
+		"stash@{0}\x00abc123\x00On main: WIP\x002026-05-15T12:34:56+09:00\n" +
+		"stash@{1}\x00def456\x00WIP on feat: 'tricky: stuff'\x002026-05-14T08:00:00Z\n")
+	got, err := parseStashList(input)
+	if err != nil {
+		t.Fatalf("parseStashList: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].Label != "stash@{0}" || got[0].Hash != "abc123" || got[0].Subject != "On main: WIP" {
+		t.Errorf("entry 0 mismatch: %+v", got[0])
+	}
+	if got[1].Subject != "WIP on feat: 'tricky: stuff'" {
+		t.Errorf("entry 1 subject = %q", got[1].Subject)
+	}
+}
+
+func TestParseStashListEmpty(t *testing.T) {
+	got, err := parseStashList(strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("parseStashList(empty): %v", err)
+	}
+	if got != nil {
+		t.Errorf("got %+v, want nil", got)
+	}
+}
+
+func TestParseStashListRejectsMalformed(t *testing.T) {
+	input := strings.NewReader("stash@{0}\x00only-two-fields\n")
+	if _, err := parseStashList(input); err == nil {
+		t.Error("expected error on wrong field count")
+	}
+}
+
+func TestStashListIntegration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write f.txt: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "base")
+
+	// Empty stash returns no entries.
+	if entries, err := StashList(context.Background(), work); err != nil || len(entries) != 0 {
+		t.Fatalf("empty StashList: entries=%v err=%v", entries, err)
+	}
+
+	// Create two stashes; newest is stash@{0}.
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("first\n"), 0o644); err != nil {
+		t.Fatalf("write first: %v", err)
+	}
+	if err := Stash(context.Background(), work, "first stash"); err != nil {
+		t.Fatalf("Stash 1: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("second\n"), 0o644); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+	if err := Stash(context.Background(), work, "second stash"); err != nil {
+		t.Fatalf("Stash 2: %v", err)
+	}
+
+	entries, err := StashList(context.Background(), work)
+	if err != nil {
+		t.Fatalf("StashList: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("len = %d, want 2", len(entries))
+	}
+	if entries[0].Label != "stash@{0}" || entries[1].Label != "stash@{1}" {
+		t.Errorf("labels = %q,%q want stash@{0},stash@{1}", entries[0].Label, entries[1].Label)
+	}
+	if !strings.Contains(entries[0].Subject, "second stash") {
+		t.Errorf("entry 0 subject = %q, want it to contain 'second stash'", entries[0].Subject)
+	}
+	if entries[0].Hash == "" || entries[1].Hash == "" {
+		t.Error("hashes should be non-empty")
+	}
+}
+
+func TestStashApplyIntegration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "base")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("stashed\n"), 0o644); err != nil {
+		t.Fatalf("write stashed: %v", err)
+	}
+	if err := Stash(context.Background(), work, "first"); err != nil {
+		t.Fatalf("Stash: %v", err)
+	}
+
+	if err := StashApply(context.Background(), work, "stash@{0}"); err != nil {
+		t.Fatalf("StashApply happy: %v", err)
+	}
+	// Apply does not drop; entry should still be there.
+	if out := gitOutput(t, work, "stash", "list"); !strings.Contains(out, "first") {
+		t.Errorf("stash list = %q, want it to still contain the entry after apply", out)
+	}
+}
+
+func TestStashApplyReturnsConflictSentinel(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "base")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("stash-side\n"), 0o644); err != nil {
+		t.Fatalf("write stash: %v", err)
+	}
+	if err := Stash(context.Background(), work, "conflicting"); err != nil {
+		t.Fatalf("Stash: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("tree-side\n"), 0o644); err != nil {
+		t.Fatalf("write tree: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "tree-side")
+
+	err := StashApply(context.Background(), work, "stash@{0}")
+	if err == nil {
+		t.Fatal("expected stash apply conflict")
+	}
+	if !errors.Is(err, ErrStashApplyConflict) {
+		t.Errorf("error %q should wrap ErrStashApplyConflict", err)
+	}
+}
+
+func TestStashDropIntegration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "base")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("droppable\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := Stash(context.Background(), work, "drop me"); err != nil {
+		t.Fatalf("Stash: %v", err)
+	}
+
+	if err := StashDrop(context.Background(), work, "stash@{0}"); err != nil {
+		t.Fatalf("StashDrop happy: %v", err)
+	}
+	if out := gitOutput(t, work, "stash", "list"); strings.TrimSpace(out) != "" {
+		t.Errorf("stash list after drop = %q, want empty", out)
+	}
+
+	// Drop on empty stash should error.
+	if err := StashDrop(context.Background(), work, "stash@{0}"); err == nil {
+		t.Error("expected error dropping from empty stash")
+	}
+}
+
+func TestStashPopAtIntegration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "base")
+	// Create two stashes; pop stash@{1} (the older one) and verify only the
+	// other survives.
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("older\n"), 0o644); err != nil {
+		t.Fatalf("write older: %v", err)
+	}
+	if err := Stash(context.Background(), work, "older"); err != nil {
+		t.Fatalf("Stash older: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "g.txt"), []byte("newer\n"), 0o644); err != nil {
+		t.Fatalf("write newer: %v", err)
+	}
+	gitRun(t, work, "add", "g.txt")
+	if err := Stash(context.Background(), work, "newer"); err != nil {
+		t.Fatalf("Stash newer: %v", err)
+	}
+
+	if err := StashPopAt(context.Background(), work, "stash@{1}"); err != nil {
+		t.Fatalf("StashPopAt happy: %v", err)
+	}
+	out := gitOutput(t, work, "stash", "list")
+	if !strings.Contains(out, "newer") {
+		t.Errorf("stash list = %q, want it to still contain 'newer'", out)
+	}
+	if strings.Contains(out, "older") {
+		t.Errorf("stash list = %q, want 'older' to be popped", out)
+	}
+}
+
 func TestStashPopReturnsErrorWithStderr(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

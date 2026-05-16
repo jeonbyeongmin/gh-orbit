@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -153,6 +154,63 @@ func TestLocalChangesSelectByPathPrefersStaged(t *testing.T) {
 	cur, ok := m.CurrentEntry()
 	if !ok || cur.Section != sectionStaged {
 		t.Fatalf("expected staged entry selected, got %+v", cur)
+	}
+}
+
+func TestCycleLocalChangesFocusThreeWayCycle(t *testing.T) {
+	m := New()
+	m.focused = paneRefs
+	m.localChanges.SetFocus(paneLCTree)
+
+	m = m.cycleLocalChangesFocus()
+	if m.focused != paneGraph || m.localChanges.Focused() != paneLCTree {
+		t.Fatalf("after first tab want graph/tree, got focused=%d lc=%d", m.focused, m.localChanges.Focused())
+	}
+	m = m.cycleLocalChangesFocus()
+	if m.focused != paneGraph || m.localChanges.Focused() != paneLCDiff {
+		t.Fatalf("after second tab want graph/diff, got focused=%d lc=%d", m.focused, m.localChanges.Focused())
+	}
+	m = m.cycleLocalChangesFocus()
+	if m.focused != paneRefs || m.localChanges.Focused() != paneLCTree {
+		t.Fatalf("after third tab want refs/tree, got focused=%d lc=%d", m.focused, m.localChanges.Focused())
+	}
+}
+
+func TestDispatchLocalChangesStagePicksAddVsRestore(t *testing.T) {
+	t.Cleanup(restoreLocalChangesExec(t))
+	var sawAdd, sawRestore string
+	addExec = func(ctx context.Context, dir, path string) error {
+		sawAdd = path
+		return nil
+	}
+	restoreStagedExec = func(ctx context.Context, dir, path string) error {
+		sawRestore = path
+		return nil
+	}
+
+	// Unstaged → Add
+	m := New()
+	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "u.txt", WorktreeState: 'M'}})
+	_, cmd := m.dispatchLocalChangesStage()
+	if cmd == nil {
+		t.Fatalf("dispatch returned nil cmd for unstaged")
+	}
+	cmd()
+	if sawAdd != "u.txt" {
+		t.Fatalf("Add not called for unstaged: sawAdd=%q sawRestore=%q", sawAdd, sawRestore)
+	}
+
+	sawAdd, sawRestore = "", ""
+	// Staged → Restore
+	m = New()
+	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "s.txt", IndexState: 'M'}})
+	_, cmd = m.dispatchLocalChangesStage()
+	if cmd == nil {
+		t.Fatalf("dispatch returned nil cmd for staged")
+	}
+	cmd()
+	if sawRestore != "s.txt" {
+		t.Fatalf("Restore not called for staged: sawAdd=%q sawRestore=%q", sawAdd, sawRestore)
 	}
 }
 

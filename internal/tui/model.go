@@ -992,6 +992,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 
+	case localChangesEnterRequestedMsg:
+		cmd := m.enterLocalChangesMode()
+		m.status = "local changes"
+		m.statusStyle = statusOkS
+		return m, cmd
+
+	case localChangesStatusLoadedMsg:
+		m.localChanges.ApplyStatusLoaded(msg.entries)
+		// After reload, dispatch a diff for whatever the cursor now points
+		// at so the right pane doesn't lag behind the tree.
+		return m.dispatchLocalChangesDiff()
+
+	case localChangesStatusFailedMsg:
+		m.localChanges.ApplyStatusFailed(msg.err)
+		m.status = "status: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case localChangesDiffLoadedMsg:
+		m.localChanges.ApplyDiffLoaded(msg.reqID, msg.path, msg.staged, msg.text)
+		return m, nil
+
+	case localChangesDiffFailedMsg:
+		m.localChanges.ApplyDiffFailed(msg.reqID, msg.path, msg.staged, msg.err)
+		return m, nil
+
+	case localChangesAddSucceededMsg:
+		m.status = "staged " + msg.path
+		m.statusStyle = statusOkS
+		return m, loadStatusCmd("")
+
+	case localChangesAddFailedMsg:
+		m.status = "stage " + msg.path + ": " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case localChangesRestoreSucceededMsg:
+		m.status = "unstaged " + msg.path
+		m.statusStyle = statusOkS
+		return m, loadStatusCmd("")
+
+	case localChangesRestoreFailedMsg:
+		m.status = "unstage " + msg.path + ": " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
 	case tea.KeyMsg:
 		// The viewMode guard runs before the global ctrl+c/q quit branch so
 		// `q` inside the overlay closes the overlay instead of killing the app.
@@ -1145,6 +1191,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.mode == viewModeLocalChanges {
+			switch msg.String() {
+			case "ctrl+c", "q":
+				m.cancelStream()
+				return m, tea.Quit
+			case ",", "esc":
+				m.exitLocalChangesMode()
+				m.status = "local changes: exit"
+				m.statusStyle = statusOkS
+				return m, nil
+			case "?":
+				m.mode = viewModeHelp
+				m.applyPaneSizes()
+				return m, nil
+			case "tab":
+				return m.cycleLocalChangesFocus(), nil
+			case "r":
+				return m, loadStatusCmd("")
+			}
+			// Tree sub-focus owns cursor movement + stage/unstage.
+			// Diff sub-focus owns viewport scroll. paneRefs focus inside the
+			// mode forwards to refs.Update so j/k still navigates the sidebar
+			// (sticky row + ref rows).
+			if m.focused == paneRefs {
+				var cmd tea.Cmd
+				m.refs, cmd = m.refs.Update(msg)
+				return m, cmd
+			}
+			switch m.localChanges.focused {
+			case paneLCTree:
+				return m.handleLocalChangesTreeKey(msg)
+			case paneLCDiff:
+				return m, m.localChanges.ScrollDiff(msg)
+			}
+			return m, nil
+		}
 		if m.mode == viewModeCheckoutConfirm {
 			switch msg.String() {
 			case "s":
@@ -1225,6 +1307,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, pullCmd("", m.pullPrefStrategy)
 		case "r":
 			return m, m.reloadCmd()
+		case ",":
+			cmd := m.enterLocalChangesMode()
+			m.status = "local changes"
+			m.statusStyle = statusOkS
+			return m, cmd
 		case "ctrl+up":
 			m.adjustSplit(-splitRatioStep)
 			return m, nil
@@ -1364,6 +1451,85 @@ func (m *Model) enterLocalChangesMode() tea.Cmd {
 func (m *Model) exitLocalChangesMode() {
 	m.mode = viewModeNormal
 	m.applyPaneSizes()
+}
+
+// cycleLocalChangesFocus implements the 3-way tab cycle inside the mode:
+// refs → tree → diff → refs. Sub-focus inside the right column lives on
+// m.localChanges; outer focus only distinguishes refs vs. right column.
+func (m Model) cycleLocalChangesFocus() Model {
+	switch {
+	case m.focused == paneRefs:
+		m.focused = paneGraph
+		m.localChanges.SetFocus(paneLCTree)
+	case m.localChanges.focused == paneLCTree:
+		m.localChanges.SetFocus(paneLCDiff)
+	default:
+		m.focused = paneRefs
+		m.localChanges.SetFocus(paneLCTree)
+	}
+	return m
+}
+
+// handleLocalChangesTreeKey routes j/k/g/G/space inside the tree pane. The
+// cursor-move keys are followed by a diff dispatch for the new entry so the
+// diff viewport keeps step. space toggles the entry between Staged and
+// Unstaged via Add / RestoreStaged.
+func (m Model) handleLocalChangesTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		if _, ok := m.localChanges.MoveCursor(1); ok {
+			return m.dispatchLocalChangesDiff()
+		}
+		return m, nil
+	case "k", "up":
+		if _, ok := m.localChanges.MoveCursor(-1); ok {
+			return m.dispatchLocalChangesDiff()
+		}
+		return m, nil
+	case "g":
+		if _, ok := m.localChanges.JumpCursor(false); ok {
+			return m.dispatchLocalChangesDiff()
+		}
+		return m, nil
+	case "G":
+		if _, ok := m.localChanges.JumpCursor(true); ok {
+			return m.dispatchLocalChangesDiff()
+		}
+		return m, nil
+	case " ", "space":
+		return m.dispatchLocalChangesStage()
+	}
+	return m, nil
+}
+
+// dispatchLocalChangesDiff issues a diff load for whatever entry the cursor
+// is currently on. Bumps the reqID so any in-flight stale response is
+// dropped by ApplyDiffLoaded's match check.
+func (m Model) dispatchLocalChangesDiff() (tea.Model, tea.Cmd) {
+	e, ok := m.localChanges.CurrentEntry()
+	if !ok {
+		return m, nil
+	}
+	m.localChangesReqID++
+	m.localChanges.BeginDiffLoad(m.localChangesReqID, e.Path, e.Staged())
+	return m, loadDiffCmd("", e.Path, e.Staged(), e.Untracked, m.localChangesReqID)
+}
+
+// dispatchLocalChangesStage picks Add vs. RestoreStaged based on which
+// section the cursor entry sits in.
+func (m Model) dispatchLocalChangesStage() (tea.Model, tea.Cmd) {
+	e, ok := m.localChanges.CurrentEntry()
+	if !ok {
+		return m, nil
+	}
+	if e.Section == sectionStaged {
+		m.status = "unstage " + e.Path + "…"
+		m.statusStyle = statusBusyS
+		return m, restoreStagedCmd("", e.Path)
+	}
+	m.status = "stage " + e.Path + "…"
+	m.statusStyle = statusBusyS
+	return m, addCmd("", e.Path)
 }
 
 // adjustSplit nudges the graph/tab split ratio by delta percent and reflows

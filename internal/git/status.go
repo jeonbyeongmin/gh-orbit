@@ -3,6 +3,7 @@ package git
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -207,4 +208,69 @@ func parsePorcelainUntracked(tok string) (StatusEntry, error) {
 		WorktreeState: '?',
 		Untracked:     true,
 	}, nil
+}
+
+// Add stages `path` (the equivalent of `git add -- <path>`). Untracked files,
+// modified worktree edits, and unmerged paths all use the same call — the
+// caller does not need to branch by state.
+func Add(ctx context.Context, dir, path string) error {
+	return runGitWrite(ctx, dir, "git add", nil, "add", "--", path)
+}
+
+// RestoreStaged moves `path` out of the index back to "matches HEAD" (i.e.
+// `git restore --staged -- <path>`). For a path that's both staged and
+// modified in the worktree, only the index half flips; the worktree edits
+// stay put. The TUI relies on this to make `space` a true toggle.
+func RestoreStaged(ctx context.Context, dir, path string) error {
+	return runGitWrite(ctx, dir, "git restore --staged", nil, "restore", "--staged", "--", path)
+}
+
+// DiffFile returns the unified diff for one tracked path. staged=true asks
+// for the index-vs-HEAD diff (`--cached`); staged=false asks for the
+// worktree-vs-index diff. ANSI color is preserved via `-c color.ui=always`
+// so the TUI viewport renders git's own coloring.
+//
+// `git diff` exits 0 even when there's no diff, so we treat any non-zero
+// exit as a real failure (unlike DiffUntracked).
+func DiffFile(ctx context.Context, dir, path string, staged bool) (string, error) {
+	args := []string{"-c", "color.ui=always", "diff"}
+	if staged {
+		args = append(args, "--cached")
+	}
+	args = append(args, "--", path)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", wrapGitErr("git diff", err, stderr.String())
+	}
+	return stdout.String(), nil
+}
+
+// DiffUntracked renders an untracked file as a full-addition diff via
+// `git diff --no-index /dev/null <path>`. Exit code 1 means "files differ"
+// (always the case for untracked files) and is treated as success; only
+// exit codes ≥ 2 are real errors per git's convention for diff.
+func DiffUntracked(ctx context.Context, dir, path string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git",
+		"-c", "color.ui=always",
+		"diff", "--no-index", "--", "/dev/null", path,
+	)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return stdout.String(), nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return stdout.String(), nil
+	}
+	return "", wrapGitErr("git diff --no-index", err, stderr.String())
 }

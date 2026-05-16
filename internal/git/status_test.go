@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -183,6 +184,82 @@ func initRepoWithFile(t *testing.T, name, contents string) string {
 	gitRun(t, dir, "add", name)
 	gitRun(t, dir, "commit", "-m", "initial")
 	return dir
+}
+
+func TestAddAndRestoreStagedRoundTrip(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepoWithFile(t, "f.txt", "a\n")
+	mustWrite(t, dir, "f.txt", "a\nb\n")
+	ctx := context.Background()
+
+	if err := Add(ctx, dir, "f.txt"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	got, err := Status(ctx, dir)
+	if err != nil {
+		t.Fatalf("Status post-Add: %v", err)
+	}
+	if len(got) != 1 || got[0].IndexState != 'M' || got[0].WorktreeState != '.' {
+		t.Fatalf("after Add want index=M worktree=., got %+v", got)
+	}
+
+	if err := RestoreStaged(ctx, dir, "f.txt"); err != nil {
+		t.Fatalf("RestoreStaged: %v", err)
+	}
+	got, err = Status(ctx, dir)
+	if err != nil {
+		t.Fatalf("Status post-Restore: %v", err)
+	}
+	if len(got) != 1 || got[0].IndexState != '.' || got[0].WorktreeState != 'M' {
+		t.Fatalf("after RestoreStaged want index=. worktree=M, got %+v", got)
+	}
+}
+
+func TestDiffFileUnstagedAndStaged(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepoWithFile(t, "f.txt", "a\n")
+	mustWrite(t, dir, "f.txt", "a\nb\n")
+	ctx := context.Background()
+
+	unstaged, err := DiffFile(ctx, dir, "f.txt", false)
+	if err != nil {
+		t.Fatalf("DiffFile unstaged: %v", err)
+	}
+	if !strings.Contains(unstaged, "diff --git a/f.txt b/f.txt") || !strings.Contains(unstaged, "+1,2") {
+		t.Fatalf("unstaged diff unexpected shape: %q", unstaged)
+	}
+
+	if err := Add(ctx, dir, "f.txt"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	staged, err := DiffFile(ctx, dir, "f.txt", true)
+	if err != nil {
+		t.Fatalf("DiffFile staged: %v", err)
+	}
+	if !strings.Contains(staged, "diff --git a/f.txt b/f.txt") || !strings.Contains(staged, "+1,2") {
+		t.Fatalf("staged diff unexpected shape: %q", staged)
+	}
+}
+
+func TestDiffUntrackedShowsAllAdditions(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepoWithFile(t, "f.txt", "a\n")
+	mustWrite(t, dir, "u.txt", "line1\nline2\n")
+	ctx := context.Background()
+
+	out, err := DiffUntracked(ctx, dir, "u.txt")
+	if err != nil {
+		t.Fatalf("DiffUntracked: %v", err)
+	}
+	if !strings.Contains(out, "+++ b/u.txt") || !strings.Contains(out, "line1") || !strings.Contains(out, "line2") {
+		t.Fatalf("DiffUntracked unexpected shape: %q", out)
+	}
 }
 
 func mustWrite(t *testing.T, dir, name, contents string) {

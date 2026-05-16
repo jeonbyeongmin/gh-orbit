@@ -285,6 +285,11 @@ type Model struct {
 	// staged) to drop stale responses when the user keeps moving the
 	// cursor mid-load.
 	localChangesReqID uint64
+	// currentWorktreeDirty is the latest dirty-marker bit for m.workdir,
+	// refreshed by loadCurrentWorktreeDirtyCmd on Init / refsLoadedMsg /
+	// switchWorktreeMsg. The refs sidebar header reads it through
+	// refreshWorktreeHeader; nothing else consumes it directly.
+	currentWorktreeDirty bool
 }
 
 // pendingStashAction backs viewModeStashActionPicker. subject is the
@@ -341,6 +346,7 @@ func (m Model) Init() tea.Cmd {
 		loadCommitsCmd(m.workdir, m.currentRefs, nil, nil, m.streamReqID),
 		loadRefsCmd(m.workdir),
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
+		loadCurrentWorktreeDirtyCmd(m.workdir),
 	)
 }
 
@@ -363,6 +369,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case switchWorktreeMsg:
 		next, cmd := m.switchWorktree(msg.path)
 		return next, cmd
+
+	case currentWorktreeDirtyMsg:
+		// Drop stale results from a previous worktree — m.workdir may have
+		// flipped after the cmd fired but before its goroutine returned.
+		if msg.dir != m.workdir {
+			return m, nil
+		}
+		m.currentWorktreeDirty = msg.dirty
+		m.refreshWorktreeHeader()
+		return m, nil
 
 	case commitsStreamStartedMsg:
 		if msg.reqID != m.streamReqID {
@@ -455,6 +471,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// reloadCmd is idempotent against an unchanged stash set — the next
 		// refsLoadedMsg will see the same hashes and skip this branch.
 		if _, ok := msg.(refsLoadedMsg); ok {
+			m.refreshWorktreeHeader()
 			if hashes, byHash, changed := diffStashRefs(m.refs.StashRefs(), m.currentStashHashes); changed {
 				m.currentStashHashes = hashes
 				m.currentStashByHash = byHash

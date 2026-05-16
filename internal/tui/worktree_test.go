@@ -107,6 +107,58 @@ func TestSwitchWorktreeUpdatesWorkdirAndDispatchesReload(t *testing.T) {
 	}
 }
 
+func TestFormatWorktreeHeader(t *testing.T) {
+	tt := []struct {
+		name     string
+		path     string
+		branch   string
+		detached bool
+		dirty    bool
+		want     string
+	}{
+		{"empty path → blank", "", "main", false, false, ""},
+		{"branch clean", "/tmp/main", "main", false, false, "Worktree: main · main"},
+		{"branch dirty", "/tmp/feat", "feat", false, true, "Worktree: feat · feat · ●dirty"},
+		{"detached", "/tmp/det", "", true, false, "Worktree: det · (detached)"},
+		{"no branch no detached (fresh repo)", "/tmp/new", "", false, false, "Worktree: new"},
+	}
+	for _, tc := range tt {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatWorktreeHeader(tc.path, tc.branch, tc.detached, tc.dirty)
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCurrentWorktreeDirtyMsgDropsStaleResult(t *testing.T) {
+	m := New()
+	m.workdir = "/tmp/A"
+
+	updated, _ := m.Update(currentWorktreeDirtyMsg{dir: "/tmp/B", dirty: true})
+	got := updated.(Model)
+
+	if got.currentWorktreeDirty {
+		t.Errorf("stale dirty msg should be dropped, got currentWorktreeDirty=true")
+	}
+}
+
+func TestCurrentWorktreeDirtyMsgAppliesAndRefreshesHeader(t *testing.T) {
+	m := New()
+	m.workdir = "/tmp/repo"
+
+	updated, _ := m.Update(currentWorktreeDirtyMsg{dir: "/tmp/repo", dirty: true})
+	got := updated.(Model)
+
+	if !got.currentWorktreeDirty {
+		t.Errorf("dirty msg should apply, got false")
+	}
+	if !strings.Contains(got.refs.worktreeHeader, "●dirty") {
+		t.Errorf("expected header to contain dirty marker, got %q", got.refs.worktreeHeader)
+	}
+}
+
 func TestSwitchWorktreeNoopOnSamePath(t *testing.T) {
 	root := t.TempDir()
 	main := filepath.Join(root, "main")

@@ -453,6 +453,9 @@ func loadHeadAncestorsCmd(dir string, reqID uint64) tea.Cmd {
 
 // streamState lives across a stream's lifetime. The lane allocator is created
 // once per reload so lane numbers stay continuous across batch boundaries.
+// stashByHash carries the (commit hash → stash label) map so collectBatchCmd
+// can inject a "stash@{N}" RefNames token when a row matches — git log's %D
+// payload doesn't include stash refs, so the lookup is the only path.
 type streamState struct {
 	reqID          uint64
 	ctx            context.Context
@@ -460,6 +463,7 @@ type streamState struct {
 	cancel         context.CancelFunc
 	alloc          *lanes.Allocator
 	firstBatchSent bool
+	stashByHash    map[string]string
 }
 
 // loadCommitsCmd kicks off a streaming `git log`. The first message is
@@ -472,20 +476,34 @@ type streamState struct {
 //
 // reqID lets the model drop stale messages after a reload — only the latest
 // reqID's batches should mutate the list.
-func loadCommitsCmd(dir string, refs []string, reqID uint64) tea.Cmd {
+//
+// stashHashes are appended to refs so `git log` walks the stash commits as
+// additional tips (their parents are usually already covered by --all, so the
+// added rows are the stash commits themselves plus any auto-index parents).
+// stashByHash maps those hashes to their "stash@{N}" labels so per-row chip
+// rendering can attach a stash chip even when git log's %D output is silent
+// on refs/stash.
+func loadCommitsCmd(dir string, refs []string, stashHashes []string, stashByHash map[string]string, reqID uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(context.Background())
-		ch, err := git.LogStream(ctx, git.LogOptions{Dir: dir, Refs: refs})
+		allRefs := refs
+		if len(stashHashes) > 0 {
+			allRefs = make([]string, 0, len(refs)+len(stashHashes))
+			allRefs = append(allRefs, refs...)
+			allRefs = append(allRefs, stashHashes...)
+		}
+		ch, err := git.LogStream(ctx, git.LogOptions{Dir: dir, Refs: allRefs})
 		if err != nil {
 			cancel()
 			return commitsStreamDoneMsg{reqID: reqID, err: err}
 		}
 		state := &streamState{
-			reqID:  reqID,
-			ctx:    ctx,
-			ch:     ch,
-			cancel: cancel,
-			alloc:  lanes.New(),
+			reqID:       reqID,
+			ctx:         ctx,
+			ch:          ch,
+			cancel:      cancel,
+			alloc:       lanes.New(),
+			stashByHash: stashByHash,
 		}
 		return commitsStreamStartedMsg{
 			reqID:  reqID,
@@ -527,6 +545,9 @@ func collectBatchCmd(state *streamState) tea.Cmd {
 						}
 					}
 					return commitsStreamDoneMsg{reqID: state.reqID, err: ev.Err}
+				}
+				if label, ok := state.stashByHash[ev.Commit.Hash]; ok {
+					ev.Commit.RefNames = append(ev.Commit.RefNames, label)
 				}
 				pair := state.alloc.Push(ev.Commit)
 				connectorText, connectorW := renderGraphRow(pair.Connector)

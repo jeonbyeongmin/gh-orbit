@@ -235,6 +235,14 @@ type Model struct {
 	// is running. Distinct from checkoutInFlight so a stuck refs write
 	// can't deadlock checkout / pull / FF chains.
 	refActionInFlight bool
+	// currentStashHashes / currentStashByHash mirror the stash entries that
+	// the most recent loadCommitsCmd was dispatched with. refsLoadedMsg
+	// recomputes from m.refs.StashRefs(); when the set differs, the model
+	// triggers reloadCmd so the graph picks up the new stash tips. Since
+	// reloadCmd also re-issues loadRefsCmd, the follow-up refsLoadedMsg
+	// returns the same stash set → diff is empty → no infinite loop.
+	currentStashHashes []string
+	currentStashByHash map[string]string
 }
 
 func New() Model {
@@ -264,7 +272,7 @@ func New() Model {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		loadCommitsCmd("", m.currentRefs, m.streamReqID),
+		loadCommitsCmd("", m.currentRefs, nil, nil, m.streamReqID),
 		loadRefsCmd(""),
 		loadHeadAncestorsCmd("", m.streamReqID),
 	)
@@ -356,6 +364,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h := m.pendingRefCursorAfterDelete; h.name != "" {
 			m.refs.SelectAfterDeleted(h.name, h.kind)
 			m.pendingRefCursorAfterDelete = deletedRefHandle{}
+		}
+		// Sync stash tips into the commit stream when the set has changed.
+		// reloadCmd is idempotent against an unchanged stash set — the next
+		// refsLoadedMsg will see the same hashes and skip this branch.
+		if _, ok := msg.(refsLoadedMsg); ok {
+			if hashes, byHash, changed := diffStashRefs(m.refs.StashRefs(), m.currentStashHashes); changed {
+				m.currentStashHashes = hashes
+				m.currentStashByHash = byHash
+				return m, tea.Batch(cmd, m.reloadCmd())
+			}
 		}
 		return m, cmd
 
@@ -1437,7 +1455,8 @@ func (m *Model) cancelStream() {
 
 // reloadCmd resets both panes to their loading state and dispatches fresh
 // log + refs queries. A stale ref in m.currentRefs surfaces via the new
-// stream's commitsStreamDoneMsg.err.
+// stream's commitsStreamDoneMsg.err. The stash tips are passed alongside
+// currentRefs so the graph keeps showing stash entries across reloads.
 func (m *Model) reloadCmd() tea.Cmd {
 	m.cancelStream()
 	m.streamReqID++
@@ -1445,7 +1464,7 @@ func (m *Model) reloadCmd() tea.Cmd {
 	m.refs.ResetForReload()
 	return tea.Batch(
 		resetCmd,
-		loadCommitsCmd("", m.currentRefs, m.streamReqID),
+		loadCommitsCmd("", m.currentRefs, m.currentStashHashes, m.currentStashByHash, m.streamReqID),
 		loadRefsCmd(""),
 		loadHeadAncestorsCmd("", m.streamReqID),
 	)

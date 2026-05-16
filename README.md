@@ -1,27 +1,58 @@
 # gh-orbit
 
-A `gh` CLI extension that brings the parts of [Fork](https://git-fork.com)
-(local git history) and the GitHub web UI (PR review/merge) you actually use
-into a single terminal TUI.
+A `gh` CLI extension that gives you a terminal **review cockpit for
+AI-coding-agent work** — local diff, commit graph, refs, and (soon)
+PR review in one TUI.
 
 ## Why?
 
-[`gh dash`](https://github.com/dlvhdr/gh-dash) covers remote PRs but ignores
-local git state. [`lazygit`](https://github.com/jesseduffield/lazygit) covers
-local git but its commit-graph view is secondary — Fork's strength is the
-opposite. `gh-orbit` aims at the niche between the two: a Fork-style
-commit-graph-first workflow with PR review sitting next to it.
+AI coding agents (Claude Code, Cursor agents, Codex, etc.) produce
+commits, branches, and PRs faster than the usual review chain keeps up
+with. The bottleneck stops being "write the code" and starts being
+"figure out what the agent just did, on which branch, against which
+base, and whether to keep it." Today that loop is split across:
+
+- `git status` / `git diff` in one terminal,
+- `gh dash` or the GitHub web UI for the agent's PR,
+- `lazygit` or Fork for the local commit graph,
+- a fourth window for `git log` on the agent's worktree.
+
+[`gh dash`](https://github.com/dlvhdr/gh-dash) covers remote PRs but
+ignores local git state. [`lazygit`](https://github.com/jesseduffield/lazygit)
+covers local git but its commit-graph view is secondary — Fork's
+strength is the opposite, and Fork has no terminal build. `gh-orbit`
+collapses the loop into one TUI optimized for the "an agent just did
+30 minutes of work — what changed, is it good, ship or scrap" review
+pattern.
+
+Concretely, the design assumes:
+
+- You read **diffs more often than you write them.** Local Changes
+  view and the patch overlay are first-class, not buried.
+- You **switch branches a lot** because each agent run lands on a
+  fresh branch / worktree. Refs sidebar + graph-cursor checkout are
+  built around that.
+- You want **machine-reproducible git operations**, not a wrapper
+  with its own opinions. Every git call shells out to your `git`
+  binary so `.gitconfig`, hooks, signing, and LFS keep working — the
+  same git an agent would invoke from a shell.
 
 ## Status
 
-**Early WIP.** The MVP scope is the local-git half (Fork replacement);
-PR review/merge is a follow-up milestone. Right now the build wires up:
+**Early WIP.** The MVP scope is the local-side review surface (Fork
+replacement, agent-diff review); PR review/merge is the next milestone.
+Today the build wires up:
 
-- Fork-style layout — refs sidebar on the left, commit graph filling the top
-  of the right column, and a tab area below it (`Commit` · `Changes`)
-- the graph runs against the unified `--all` revision spec by default so
-  every local/remote/tag is one walk; `enter` from the refs pane jumps the
-  graph cursor to a ref tip without changing the base
+- Fork-style layout — refs sidebar on the left, commit graph filling
+  the top of the right column, and a tab area below it
+  (`Commit` · `Changes`)
+- Local Changes view — a dedicated `● Local Changes` row at the top
+  of the refs pane; `enter` jumps into a working-tree diff view so
+  you can read what an agent (or you) hasn't committed yet without
+  leaving the TUI
+- the graph runs against the unified `--all` revision spec by default
+  so every local/remote/tag is one walk; `enter` from the refs pane
+  jumps the graph cursor to a ref tip without changing the base
 - commit row reads left-to-right as `graph | message (chips + subject) |
   author | hash | authored`; the hash and time anchor to the right edge,
   the message column absorbs truncation, and chips/author drop (in that
@@ -29,41 +60,62 @@ PR review/merge is a follow-up milestone. Right now the build wires up:
 - ref decoration (`%D`) is parsed into typed branch/tag entries and
   rendered as chips attached to the front of the subject in the message
   column
-- ref pane: lazy auto-scroll on j/k/g/G with overflow clipping (no fold or
-  sticky-header — those were tried and removed)
-- `Commit` tab: author/email, ISO 8601 dates, parent hashes, `%G?` sign-status
-  (`Signed (good)`, `Unsigned`, …), full message body
-- `Changes` tab: file-list cursor on the left (own colored `+N -M` rendering
-  parsed from `git show --numstat`) plus a follower patch viewport on the
-  right that reloads each time the file cursor moves
-- `d` opens a full-screen patch overlay for the focused commit; `esc` / `q`
-  close it without quitting the app
-- vim-style key bindings (full table in [CLAUDE.md](./CLAUDE.md#key-bindings)):
+- ref pane: lazy auto-scroll on j/k/g/G with overflow clipping (no fold
+  or sticky-header — those were tried and removed)
+- `Commit` tab: author/email, ISO 8601 dates, parent hashes, `%G?`
+  sign-status (`Signed (good)`, `Unsigned`, …), full message body —
+  the agent-attribution view, basically
+- `Changes` tab: file-list cursor on the left (own colored `+N -M`
+  rendering parsed from `git show --numstat`) plus a follower patch
+  viewport on the right that reloads each time the file cursor moves
+- `d` opens a full-screen patch overlay for the focused commit;
+  `esc` / `q` close it without quitting the app
+- vim-style key bindings (full table in [docs/architecture.md](./docs/architecture.md)):
   - `tab` — cycle pane focus (refs → graph → tab, wraps)
   - `j` / `k` / `g` / `G` — navigate within the focused pane
-  - `h` / `l` — switch between the Commit and Changes tabs (only when the tab pane is focused)
+  - `h` / `l` — switch between the Commit and Changes tabs (only when
+    the tab pane is focused)
   - `ctrl+↑` / `ctrl+↓` — resize the graph / tab split (5% per press)
   - `ctrl+d` / `ctrl+u` — scroll the Changes-tab patch viewport
-  - `enter` — jump graph cursor to the focused ref tip (refs pane)
+  - `enter` — jump graph cursor to the focused ref tip (refs pane) /
+    open Local Changes view when on the `● Local Changes` row
   - `a` — show every ref's commits (refs pane)
-  - `n` / `d` / `m` — new branch / delete (modal) / rename (refs pane); see
-    [CLAUDE.md § Refs Write Actions](./CLAUDE.md#refs-write-actions-n--d--m)
+  - `n` / `d` / `m` — new branch / delete (modal) / rename (refs pane);
+    see [docs/branches.md](./docs/branches.md)
   - `y` — copy the focused commit's hash to the clipboard (Commit tab)
-  - `d` — open the patch overlay (graph / tab focus; refs focus is delete)
+  - `d` — open the patch overlay (graph / tab focus; refs focus is
+    delete)
   - `F` — `git fetch --all` in the background
   - `P` — `git pull` in the background; strategy from
-    `~/.config/gh-orbit/config.toml` (`[pull] strategy = "ff-only" | "merge"
-    | "rebase"`), then git's `pull.rebase` / `pull.ff`, falling back to
-    `--ff-only`
+    `~/.config/gh-orbit/config.toml` (`[pull] strategy = "ff-only" |
+    "merge" | "rebase"`), then git's `pull.rebase` / `pull.ff`,
+    falling back to `--ff-only`
   - `r` — reload refs + log
   - `q` / `ctrl+c` — quit (closes the patch overlay first)
   - `R` is reserved for a future Rebase action
-- a status line next to the help row surfaces fetch progress, errors, and
-  hash-copy confirmation
+- a status line next to the help row surfaces fetch progress, errors,
+  and hash-copy confirmation
 - `internal/git` exposes typed wrappers around `git log`, `git show
   --numstat`, `git show -p` (full and per-file), `git show --no-patch`
-  metadata bundle, refs decoration, and `git fetch`, all shelling out to the
-  user's `git` binary so `.gitconfig`, hooks, signing, and LFS keep working
+  metadata bundle, refs decoration, and `git fetch`, all shelling out
+  to the user's `git` binary
+
+## Roadmap
+
+Ordered by current intent, not commitment:
+
+1. **Local Changes** — extend the existing view with stage/unstage and
+   per-hunk operations so reviewing an agent's working tree doesn't
+   require dropping to a second shell.
+2. **PR review pane** — the original Fork+`gh dash` half: pull a PR
+   into the same three-pane layout, read its diff with the Changes
+   tab, approve / request-changes / merge inline.
+3. **Worktree awareness** — agents often run in `git worktree add`'d
+   sibling directories; surface those as first-class entries in the
+   refs sidebar so you can flip between them without re-launching.
+
+None of these are wired up yet — they're listed so the project's
+trajectory is legible from the README.
 
 ## Install
 
@@ -81,5 +133,6 @@ golangci-lint run                     # lint
 tail -f ~/.local/state/gh-orbit/log   # follow runtime logs (TUI owns stdout)
 ```
 
-See [CLAUDE.md](./CLAUDE.md) for project-internal conventions — TUI rules,
-git wrapper patterns, layout.
+See [CLAUDE.md](./CLAUDE.md) for the behavioral contract this repo
+uses with its own AI coding agents (this project is built that way),
+and [`docs/`](./docs/) for feature-level reference.

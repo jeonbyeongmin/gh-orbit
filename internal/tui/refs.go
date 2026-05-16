@@ -106,8 +106,10 @@ func (r refModel) Init() tea.Cmd { return nil }
 
 // ResetForReload clears loaded/err so View renders the "loading…" placeholder
 // while a fresh loadRefsCmd is in flight. cursor is intentionally left alone
-// here — refsLoadedMsg already resets it to 0 on arrival, which doubles as a
-// safe fallback when the previously selected ref was deleted by another tool.
+// here — refsLoadedMsg resets it to 0 on arrival, and the Model layer's
+// refsLoadedMsg handler then restores it from pendingRefCursorPersist (or
+// SelectAfterDeleted in the same section when the previously focused ref
+// was deleted between snapshot and reload).
 func (r *refModel) ResetForReload() {
 	r.loaded = false
 	r.err = nil
@@ -116,6 +118,9 @@ func (r *refModel) ResetForReload() {
 func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	switch m := msg.(type) {
 	case refsLoadedMsg:
+		// cursor=0 / yOffset=0 stays as the baseline; the Model layer's
+		// refsLoadedMsg handler runs after this and overwrites the cursor
+		// from pendingRefCursorName / AfterDelete / Persist as appropriate.
 		r.byKind = partitionByKind(m.refs)
 		r.cursor = 0
 		r.yOffset = 0

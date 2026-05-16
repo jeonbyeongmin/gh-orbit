@@ -360,6 +360,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case switchWorktreeMsg:
+		next, cmd := m.switchWorktree(msg.path)
+		return next, cmd
+
 	case commitsStreamStartedMsg:
 		if msg.reqID != m.streamReqID {
 			// Stale — its reload was superseded. Cancel the orphaned

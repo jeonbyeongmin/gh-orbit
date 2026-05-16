@@ -241,6 +241,13 @@ type Model struct {
 	// next (or previous, if last) ref in the same section. Zero name means
 	// no adjustment.
 	pendingRefCursorAfterDelete deletedRefHandle
+	// pendingRefCursorPersist is the "previous cursor position snapshot"
+	// reloadCmd writes just before every reload, so the post-reload
+	// refsLoadedMsg can restore the cursor onto the same ref after the
+	// refModel's cursor=0 reset. Only consumed when the higher-priority
+	// pendingRefCursorName / pendingRefCursorAfterDelete are absent. Zero
+	// value = no persist (detached HEAD / empty ref set).
+	pendingRefCursorPersist persistedRefHandle
 	// refActionInFlight gates the n / d / m keys while a branch-write cmd
 	// is running. Distinct from checkoutInFlight so a stuck refs write
 	// can't deadlock checkout / pull / FF chains.

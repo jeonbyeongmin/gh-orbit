@@ -1011,11 +1011,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case localChangesDiffLoadedMsg:
-		m.localChanges.ApplyDiffLoaded(msg.reqID, msg.path, msg.staged, msg.text)
+		m.localChanges.ApplyDiffLoaded(msg.reqID, msg.text)
 		return m, nil
 
 	case localChangesDiffFailedMsg:
-		m.localChanges.ApplyDiffFailed(msg.reqID, msg.path, msg.staged, msg.err)
+		m.localChanges.ApplyDiffFailed(msg.reqID, msg.err)
 		return m, nil
 
 	case localChangesAddSucceededMsg:
@@ -1219,7 +1219,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refs, cmd = m.refs.Update(msg)
 				return m, cmd
 			}
-			switch m.localChanges.focused {
+			switch m.localChanges.Focused() {
 			case paneLCTree:
 				return m.handleLocalChangesTreeKey(msg)
 			case paneLCDiff:
@@ -1445,11 +1445,12 @@ func (m *Model) enterLocalChangesMode() tea.Cmd {
 	return loadStatusCmd("")
 }
 
-// exitLocalChangesMode flips back to the normal layout. The localChanges
-// model is intentionally not zeroed — its entries / cursor / diff cache are
-// kept so re-entry doesn't refetch unless the user pressed `r` first.
+// exitLocalChangesMode flips back to the normal layout. Entries / cursor
+// state are kept so re-entry restores them; the diff body is released so
+// a large untracked-file diff doesn't sit resident between sessions.
 func (m *Model) exitLocalChangesMode() {
 	m.mode = viewModeNormal
+	m.localChanges.ClosePatch()
 	m.applyPaneSizes()
 }
 
@@ -1461,7 +1462,7 @@ func (m Model) cycleLocalChangesFocus() Model {
 	case m.focused == paneRefs:
 		m.focused = paneGraph
 		m.localChanges.SetFocus(paneLCTree)
-	case m.localChanges.focused == paneLCTree:
+	case m.localChanges.Focused() == paneLCTree:
 		m.localChanges.SetFocus(paneLCDiff)
 	default:
 		m.focused = paneRefs
@@ -1511,22 +1512,25 @@ func (m Model) dispatchLocalChangesDiff() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.localChangesReqID++
-	m.localChanges.BeginDiffLoad(m.localChangesReqID, e.Path, e.Staged())
+	m.localChanges.BeginDiffLoad(m.localChangesReqID)
 	return m, loadDiffCmd("", e.Path, e.Staged(), e.Untracked, m.localChangesReqID)
 }
 
 // dispatchLocalChangesStage picks Add vs. RestoreStaged based on which
-// section the cursor entry sits in.
+// section the cursor entry sits in. The pending-select hint preserves the
+// cursor on the same path after the post-action status reload.
 func (m Model) dispatchLocalChangesStage() (tea.Model, tea.Cmd) {
 	e, ok := m.localChanges.CurrentEntry()
 	if !ok {
 		return m, nil
 	}
 	if e.Section == sectionStaged {
+		m.localChanges.ScheduleSelectAfterReload(e.Path, false)
 		m.status = "unstage " + e.Path + "…"
 		m.statusStyle = statusBusyS
 		return m, restoreStagedCmd("", e.Path)
 	}
+	m.localChanges.ScheduleSelectAfterReload(e.Path, true)
 	m.status = "stage " + e.Path + "…"
 	m.statusStyle = statusBusyS
 	return m, addCmd("", e.Path)

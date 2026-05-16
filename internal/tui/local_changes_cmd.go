@@ -109,7 +109,6 @@ func loadDiffCmd(dir, path string, staged, untracked bool, reqID uint64) tea.Cmd
 	}
 }
 
-// addCmd stages a single path.
 func addCmd(dir, path string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), localChangesCmdTimeout)
@@ -121,7 +120,6 @@ func addCmd(dir, path string) tea.Cmd {
 	}
 }
 
-// restoreStagedCmd unstages a single path.
 func restoreStagedCmd(dir, path string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), localChangesCmdTimeout)

@@ -77,13 +77,16 @@ type localChangesModel struct {
 
 	// diffReqID is the freshest dispatch id. ApplyDiffLoaded ignores stale
 	// responses whose reqID doesn't match, so a slow git-diff for a file the
-	// user already scrolled past never repaints the viewport.
+	// user already scrolled past never repaints the viewport. The counter
+	// is monotonically incremented per dispatch, so reqID alone is enough
+	// to gate staleness — no parallel (path, staged) tracking needed.
 	diffReqID uint64
-	// diffPath / diffStaged identify which (file, side) the in-flight load
-	// is for. Compared in ApplyDiffLoaded alongside reqID — the cursor can
-	// change without bumping reqID via in-progress reload semantics.
-	diffPath   string
-	diffStaged bool
+
+	// pendingSelectPath / pendingSelectPreferStaged carry a "after the next
+	// status reload, land cursor on this path" hint across the round-trip
+	// triggered by `space`. Cleared in ApplyStatusLoaded after consumption.
+	pendingSelectPath         string
+	pendingSelectPreferStaged bool
 }
 
 func newLocalChangesModel() localChangesModel {
@@ -108,7 +111,9 @@ func (m *localChangesModel) SetSize(treeW, treeH, diffW, diffH int) {
 
 // ApplyStatusLoaded ingests a fresh git.Status snapshot, classifies each entry
 // into conflicts / unstaged / staged, and clamps the cursor / scroll offset
-// so a shrinking list never strands the selection past the end.
+// so a shrinking list never strands the selection past the end. If a stage /
+// unstage round-trip left a `pendingSelectPath` hint, the cursor lands on
+// that path's row in the preferred section so the user keeps context.
 //
 // A file that is both staged and worktree-modified produces two entries (one
 // per side) — that matches the interview's section structure.
@@ -117,7 +122,20 @@ func (m *localChangesModel) ApplyStatusLoaded(src []git.StatusEntry) {
 	m.loaded = true
 	m.loadErr = nil
 	m.clampCursor()
+	if path := m.pendingSelectPath; path != "" {
+		m.SelectByPath(path, m.pendingSelectPreferStaged)
+		m.pendingSelectPath = ""
+		m.pendingSelectPreferStaged = false
+	}
 	m.followCursor()
+}
+
+// ScheduleSelectAfterReload records a "next status reload should land
+// cursor on this path" hint, consumed by ApplyStatusLoaded. preferStaged
+// chooses between the file's Staged / Unstaged row when both exist.
+func (m *localChangesModel) ScheduleSelectAfterReload(path string, preferStaged bool) {
+	m.pendingSelectPath = path
+	m.pendingSelectPreferStaged = preferStaged
 }
 
 // ApplyStatusFailed records a load error so the tree can render a one-liner
@@ -128,13 +146,10 @@ func (m *localChangesModel) ApplyStatusFailed(err error) {
 }
 
 // BeginDiffLoad arms the model for a fresh diff dispatch. The caller picks
-// the reqID (Model.localChangesReqID counter) and the (path, staged) tuple
-// must match what the cmd actually requests; ApplyDiffLoaded compares all
-// three.
-func (m *localChangesModel) BeginDiffLoad(reqID uint64, path string, staged bool) {
+// the reqID (Model.localChangesReqID counter); the in-flight (path, staged)
+// is implicit in the reqID since the counter is bumped per dispatch.
+func (m *localChangesModel) BeginDiffLoad(reqID uint64) {
 	m.diffReqID = reqID
-	m.diffPath = path
-	m.diffStaged = staged
 	m.diffText = ""
 	m.diffLoading = true
 	m.diffErr = nil
@@ -143,9 +158,9 @@ func (m *localChangesModel) BeginDiffLoad(reqID uint64, path string, staged bool
 }
 
 // ApplyDiffLoaded paints the diff viewport with text, dropping stale
-// responses whose reqID + (path, staged) tuple no longer matches.
-func (m *localChangesModel) ApplyDiffLoaded(reqID uint64, path string, staged bool, text string) {
-	if !m.acceptsDiff(reqID, path, staged) {
+// responses whose reqID no longer matches the freshest dispatch.
+func (m *localChangesModel) ApplyDiffLoaded(reqID uint64, text string) {
+	if reqID != m.diffReqID {
 		return
 	}
 	m.diffLoading = false
@@ -157,16 +172,20 @@ func (m *localChangesModel) ApplyDiffLoaded(reqID uint64, path string, staged bo
 
 // ApplyDiffFailed records a diff load error so DiffView can show the cause.
 // Stale errors get dropped just like stale successes.
-func (m *localChangesModel) ApplyDiffFailed(reqID uint64, path string, staged bool, err error) {
-	if !m.acceptsDiff(reqID, path, staged) {
+func (m *localChangesModel) ApplyDiffFailed(reqID uint64, err error) {
+	if reqID != m.diffReqID {
 		return
 	}
 	m.diffLoading = false
 	m.diffErr = err
 }
 
-func (m localChangesModel) acceptsDiff(reqID uint64, path string, staged bool) bool {
-	return reqID == m.diffReqID && path == m.diffPath && staged == m.diffStaged
+// ClosePatch releases the diff text and viewport content. Mirrors
+// diff.go's ClosePatch so an exit-then-re-enter cycle doesn't keep a
+// large untracked-file diff resident.
+func (m *localChangesModel) ClosePatch() {
+	m.diffText = ""
+	m.diff.SetContent("")
 }
 
 // CurrentEntry returns the entry the tree cursor is on, or false when the

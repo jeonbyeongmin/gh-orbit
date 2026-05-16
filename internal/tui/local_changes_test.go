@@ -90,16 +90,12 @@ func TestLocalChangesApplyStatusClampsCursor(t *testing.T) {
 func TestLocalChangesApplyDiffStaleResponseDropped(t *testing.T) {
 	m := newLocalChangesModel()
 	m.SetSize(20, 10, 20, 10)
-	m.BeginDiffLoad(7, "f.txt", false)
-	m.ApplyDiffLoaded(6, "f.txt", false, "stale-text") // wrong reqID
+	m.BeginDiffLoad(7)
+	m.ApplyDiffLoaded(6, "stale-text") // wrong reqID
 	if m.diffText != "" || !m.diffLoading {
 		t.Fatalf("stale reqID should not paint: %q loading=%v", m.diffText, m.diffLoading)
 	}
-	m.ApplyDiffLoaded(7, "other.txt", false, "wrong-path-text") // wrong path
-	if m.diffText != "" {
-		t.Fatalf("wrong path should not paint: %q", m.diffText)
-	}
-	m.ApplyDiffLoaded(7, "f.txt", false, "fresh") // matches
+	m.ApplyDiffLoaded(7, "fresh") // matches
 	if m.diffText != "fresh" {
 		t.Fatalf("matching dispatch should paint: %q", m.diffText)
 	}
@@ -108,13 +104,34 @@ func TestLocalChangesApplyDiffStaleResponseDropped(t *testing.T) {
 func TestLocalChangesApplyDiffFailedRecordsErr(t *testing.T) {
 	m := newLocalChangesModel()
 	m.SetSize(20, 10, 20, 10)
-	m.BeginDiffLoad(1, "f.txt", false)
-	m.ApplyDiffFailed(1, "f.txt", false, errors.New("boom"))
+	m.BeginDiffLoad(1)
+	m.ApplyDiffFailed(1, errors.New("boom"))
 	if m.diffLoading {
 		t.Fatalf("error should clear loading flag")
 	}
 	if m.diffErr == nil {
 		t.Fatalf("err not recorded")
+	}
+}
+
+func TestLocalChangesScheduleSelectAfterReloadConsumed(t *testing.T) {
+	m := newLocalChangesModel()
+	m.SetSize(20, 10, 20, 10)
+	m.ApplyStatusLoaded([]git.StatusEntry{
+		{Path: "a.txt", IndexState: 'M'},
+		{Path: "b.txt", IndexState: 'M'},
+	})
+	m.ScheduleSelectAfterReload("b.txt", true)
+	m.ApplyStatusLoaded([]git.StatusEntry{
+		{Path: "a.txt", IndexState: 'M'},
+		{Path: "b.txt", IndexState: 'M'},
+	})
+	cur, ok := m.CurrentEntry()
+	if !ok || cur.Path != "b.txt" {
+		t.Fatalf("cursor should land on b.txt, got %+v", cur)
+	}
+	if m.pendingSelectPath != "" {
+		t.Fatalf("pendingSelectPath should be cleared after consumption, got %q", m.pendingSelectPath)
 	}
 }
 

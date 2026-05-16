@@ -36,6 +36,7 @@ var helpCategories = []helpCategory{
 			{"r", "reload"},
 			{"d", "patch"},
 			{",", "local changes"},
+			{"w", "worktrees"},
 			{"ctrl+↑/↓", "resize"},
 		},
 	},
@@ -78,6 +79,15 @@ var helpCategories = []helpCategory{
 			{",", "exit"},
 		},
 	},
+	{
+		title: "Worktrees",
+		entries: []helpEntry{
+			{"enter", "switch"},
+			{"a", "add"},
+			{"d", "remove"},
+			{"esc", "close"},
+		},
+	},
 }
 
 func helpData() []helpCategory { return helpCategories }
@@ -86,9 +96,9 @@ func helpData() []helpCategory { return helpCategories }
 // hint ends with `? help · q quit` so the user always sees how to expand
 // the panel or quit, regardless of which pane has focus.
 var paneHintTexts = map[pane]string{
-	paneRefs:  "enter checkout · p +pull · n new · d del/drop · m ren · o jump · ? help · q quit",
-	paneGraph: "enter checkout/ff/detach/stash · d patch · ? help · q quit",
-	paneTab:   "h/l switch · y copy · ? help · q quit",
+	paneRefs:  "enter checkout · p +pull · n new · d del/drop · m ren · o jump · w worktrees · ? help · q quit",
+	paneGraph: "enter checkout/ff/detach/stash · d patch · w worktrees · ? help · q quit",
+	paneTab:   "h/l switch · y copy · w worktrees · ? help · q quit",
 }
 
 // paneHintsRendered is the pre-styled form of paneHintTexts. View() runs on

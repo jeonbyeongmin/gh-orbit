@@ -22,6 +22,9 @@ detail.
 - [branches.md](branches.md) — `n` / `d` / `m` modals for create /
   delete / rename, key matrix, modal mechanics. The "agent left a
   pile of branches behind" cleanup surface.
+- [worktrees.md](worktrees.md) — `w` modal for list / switch / add /
+  remove, refs-pane sticky header, in-process switch + dirty fan-out.
+  The "agent occupies worktree A, reviewer inspects worktree B" surface.
 
 When a behavior crosses files (e.g. dirty-tree stash chain shows up
 in both checkout and stash), the canonical doc is **checkout.md**

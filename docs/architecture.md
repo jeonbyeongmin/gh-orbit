@@ -48,8 +48,9 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `q` / `ctrl+c`      | global        | quit (closes patch overlay first)                                                                                     |
 | `?`                 | global        | toggle expanded help panel                                                                                            |
 | `R`                 | global        | reserved for future Rebase                                                                                            |
+| `w`                 | global        | open worktree modal (list / switch / add / remove) — see [worktrees.md](worktrees.md)                                 |
 
-Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `esc` / `q`. The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)).
+Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `esc` / `q`. The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree modal (`w`) gates its own j/k/enter/a/d/y/Y/esc matrix — see [worktrees.md](worktrees.md).
 
 `?` toggles a multi-line help panel that replaces the bottom hint with pane-grouped bindings. Reference, not modal — every shortcut keeps working. Suppressed inside the patch overlay and dirty-tree confirm; those modes keep their own single-line hint.
 

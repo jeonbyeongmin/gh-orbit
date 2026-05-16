@@ -124,9 +124,9 @@ const (
 
 // helpExpandedHeight is the row count reserved for the bottom area when
 // the `?` help panel is open. Each helpData category renders as a 1-line
-// header + 1-line entries row, so 5 categories × 2 rows = 10. paneSizes
+// header + 1-line entries row, so 6 categories × 2 rows = 12. paneSizes
 // clamps this on small terminals.
-const helpExpandedHeight = 10
+const helpExpandedHeight = 12
 
 // pendingCheckout remembers what the user was trying to check out so the
 // "[s]tash & checkout" branch in the confirm modal can re-issue the same
@@ -2594,7 +2594,8 @@ func (m Model) tabBody() string {
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
 	case viewModeBranchPicker, viewModeRefNameInput, viewModeRefDeleteConfirm, viewModeCheckoutConfirm,
-		viewModeStashActionPicker, viewModeStashDropConfirm:
+		viewModeStashActionPicker, viewModeStashDropConfirm,
+		viewModeWorktreeList, viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm:
 		return " "
 	case viewModeHelp:
 		return renderHelpPanel(m.width, m.helpReservedRows())

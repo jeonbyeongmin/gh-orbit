@@ -474,8 +474,8 @@ func (m localChangesModel) DiffView() string {
 //   - Conflict → single entry in sectionConflicts.
 //   - Untracked → single entry in sectionUnstaged (with Untracked=true).
 //   - Ordinary:
-//       IndexState != '.'    → entry in sectionStaged
-//       WorktreeState != '.' → entry in sectionUnstaged
+//     IndexState != '.'    → entry in sectionStaged
+//     WorktreeState != '.' → entry in sectionUnstaged
 //     A file with both will appear in both sections (one entry each).
 func classifyStatus(src []git.StatusEntry) []localChangesEntry {
 	var out []localChangesEntry

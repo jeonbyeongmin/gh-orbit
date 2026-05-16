@@ -108,9 +108,9 @@ const (
 
 // helpExpandedHeight is the row count reserved for the bottom area when
 // the `?` help panel is open. Each helpData category renders as a 1-line
-// header + 1-line entries row, so 4 categories × 2 rows = 8. paneSizes
+// header + 1-line entries row, so 5 categories × 2 rows = 10. paneSizes
 // clamps this on small terminals.
-const helpExpandedHeight = 8
+const helpExpandedHeight = 10
 
 // pendingCheckout remembers what the user was trying to check out so the
 // "[s]tash & checkout" branch in the confirm modal can re-issue the same

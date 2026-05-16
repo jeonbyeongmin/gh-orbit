@@ -35,6 +35,7 @@ var helpCategories = []helpCategory{
 			{"P", "pull"},
 			{"r", "reload"},
 			{"d", "patch"},
+			{",", "local changes"},
 			{"ctrl+↑/↓", "resize"},
 		},
 	},
@@ -64,6 +65,17 @@ var helpCategories = []helpCategory{
 			{"g/G", "top/bot"},
 			{"y", "copy"},
 			{"ctrl+d/u", "scroll patch"},
+		},
+	},
+	{
+		title: "Local Changes",
+		entries: []helpEntry{
+			{"space", "stage/unstage"},
+			{"j/k", "nav"},
+			{"g/G", "top/bot"},
+			{"tab", "focus tree/diff"},
+			{"r", "reload"},
+			{",", "exit"},
 		},
 	},
 }

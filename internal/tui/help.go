@@ -90,6 +90,14 @@ var paneHintsRendered = func() map[pane]string {
 	return m
 }()
 
+// localChangesHintText is the mode-specific bottom hint shown while
+// viewModeLocalChanges owns the right column. It overrides the focused
+// pane's hint because the keymap inside the mode is mode-scoped (space /
+// tab cycle / r reload / , exit), not pane-scoped.
+const localChangesHintText = "space stage/unstage · tab focus · r reload · , exit · ? help · q quit"
+
+var localChangesHintRendered = help.Render(localChangesHintText)
+
 func paneHints() map[pane]string { return paneHintTexts }
 
 // fitHelpLine truncates text to width with an ellipsis when the rendered

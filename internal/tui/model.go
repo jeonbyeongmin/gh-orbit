@@ -2240,10 +2240,18 @@ func (m Model) View() string {
 	s := m.paneSizes()
 
 	refsBox := boxStyle(m.focused == paneRefs).Width(s.refsW).Height(s.refsH).Render(m.refs.View())
-	graphBox := boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
-	tabBox := boxStyle(m.focused == paneTab).Width(s.tabW).Height(s.tabH).Render(m.tabBody())
-
-	rightCol := lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
+	var rightCol string
+	if m.mode == viewModeLocalChanges {
+		treeFocused := m.focused != paneRefs && m.localChanges.Focused() == paneLCTree
+		diffFocused := m.focused != paneRefs && m.localChanges.Focused() == paneLCDiff
+		treeBox := boxStyle(treeFocused).Width(s.lcTreeW).Height(s.lcTreeH).Render(m.localChanges.TreeView())
+		diffBox := boxStyle(diffFocused).Width(s.lcDiffW).Height(s.lcDiffH).Render(m.localChanges.DiffView())
+		rightCol = lipgloss.JoinHorizontal(lipgloss.Top, treeBox, diffBox)
+	} else {
+		graphBox := boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
+		tabBox := boxStyle(m.focused == paneTab).Width(s.tabW).Height(s.tabH).Render(m.tabBody())
+		rightCol = lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
+	}
 	main := lipgloss.JoinHorizontal(lipgloss.Top, refsBox, rightCol)
 	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
 
@@ -2304,8 +2312,14 @@ func (m Model) renderHelpStatus() string {
 	case viewModeHelp:
 		return renderHelpPanel(m.width, m.helpReservedRows())
 	}
+	hint := paneHintTexts[m.focused]
+	hintRendered := paneHintsRendered[m.focused]
+	if m.mode == viewModeLocalChanges {
+		hint = localChangesHintText
+		hintRendered = localChangesHintRendered
+	}
 	if m.status == "" {
-		return paneHintsRendered[m.focused]
+		return hintRendered
 	}
 	statusRendered := m.statusStyle.Render(m.status)
 
@@ -2313,5 +2327,5 @@ func (m Model) renderHelpStatus() string {
 	if avail < 1 {
 		return statusRendered
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, fitHelpLine(paneHintTexts[m.focused], avail), " ", statusRendered)
+	return lipgloss.JoinHorizontal(lipgloss.Top, fitHelpLine(hint, avail), " ", statusRendered)
 }

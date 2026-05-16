@@ -323,7 +323,10 @@ func resolveCreateBase(focused pane, graphCursorHash string, refsCursorRef git.R
 // remote ref whose only matching local is HEAD itself — we never auto-delete
 // HEAD).
 func resolveDeleteState(target git.Ref, locals, remotes []git.Ref) (refDeleteState, bool) {
-	if target.Kind == git.RefKindTag {
+	if target.Kind == git.RefKindTag || target.Kind == git.RefKindStash {
+		// Stash routes to its own drop modal (beginStashDrop in model.go);
+		// reaching here means a caller forgot to gate. Fail closed so the
+		// branch-delete matrix never sees a stash ref.
 		return refDeleteState{}, false
 	}
 	st := refDeleteState{target: target}

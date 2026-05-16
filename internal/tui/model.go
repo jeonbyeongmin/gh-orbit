@@ -88,6 +88,16 @@ const (
 	// remote pair exists for the cursor — y/Y/f/F covers the local+remote
 	// matrix; remote-only cursors show just y. esc cancels.
 	viewModeRefDeleteConfirm
+	// viewModeStashActionPicker gates the screen on the graph-Enter stash
+	// modal: `[p] pop / [a] apply / [esc] cancel`. Drop is intentionally
+	// excluded here — destructive remove goes through the refs-pane `d`
+	// drop confirm so the user always sees a "drop?" prompt before losing
+	// an entry. Every key outside p/a/esc/ctrl+c is swallowed.
+	viewModeStashActionPicker
+	// viewModeStashDropConfirm gates the refs-pane `d` stash modal:
+	// `[y] drop / [esc] cancel`. Single key by design — stash drop has no
+	// force / multi-axis variants, so a 4-axis matrix would be noise.
+	viewModeStashDropConfirm
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
@@ -243,6 +253,30 @@ type Model struct {
 	// returns the same stash set → diff is empty → no infinite loop.
 	currentStashHashes []string
 	currentStashByHash map[string]string
+	// pendingStashAction backs viewModeStashActionPicker (graph-Enter on
+	// stash row). label is the matched stash@{N}; subject mirrors the
+	// commit subject so the modal body can show it without a second
+	// graph.Selected() lookup.
+	pendingStashAction pendingStashAction
+	// pendingStashDrop backs viewModeStashDropConfirm (refs-pane `d`).
+	// subject mirrors the same intent — drop confirm needs to show the
+	// stash subject so the user can recognize which slot is at risk.
+	pendingStashDrop pendingStashDrop
+}
+
+// pendingStashAction holds the graph-Enter stash modal's bound state.
+// subject is the stash commit's git log subject ("WIP on main: …" /
+// "On feat: <user msg>") so the picker can describe the slot.
+type pendingStashAction struct {
+	label   string
+	hash    string
+	subject string
+}
+
+// pendingStashDrop holds the refs-pane `d` stash modal's bound state.
+type pendingStashDrop struct {
+	label   string
+	subject string
 }
 
 func New() Model {
@@ -638,6 +672,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m, cmd = m.beginCheckout(msg.hash, true)
 			return m, cmd
+		case graphActionStashAction:
+			subject := ""
+			if c, ok := m.graph.Selected(); ok {
+				subject = c.Subject
+			}
+			m.pendingStashAction = pendingStashAction{
+				label:   msg.stashLabel,
+				hash:    msg.hash,
+				subject: subject,
+			}
+			m.mode = viewModeStashActionPicker
+			m.status = "stash: " + msg.stashLabel
+			m.statusStyle = statusBusyS
+			return m, nil
 		}
 		return m, nil
 
@@ -707,6 +755,69 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusOkS
 		m.pendingHEADHash = pendingHEADSentinel
 		return m, m.reloadCmd()
+
+	case stashPopSucceededMsg:
+		m.checkoutInFlight = false
+		m.pendingStashAction = pendingStashAction{}
+		m.status = "stash: popped " + msg.label
+		m.statusStyle = statusOkS
+		return m, m.reloadCmd()
+
+	case stashPopConflictMsg:
+		m.checkoutInFlight = false
+		m.pendingStashAction = pendingStashAction{}
+		m.status = "stash " + msg.label + ": CONFLICT — resolve markers; stash preserved"
+		m.statusStyle = statusErrS
+		return m, m.reloadCmd()
+
+	case stashPopFailedMsg:
+		m.checkoutInFlight = false
+		m.pendingStashAction = pendingStashAction{}
+		m.status = "stash pop failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case stashApplySucceededMsg:
+		m.checkoutInFlight = false
+		m.pendingStashAction = pendingStashAction{}
+		m.status = "stash: applied " + msg.label
+		m.statusStyle = statusOkS
+		return m, m.reloadCmd()
+
+	case stashApplyConflictMsg:
+		m.checkoutInFlight = false
+		m.pendingStashAction = pendingStashAction{}
+		m.status = "stash " + msg.label + ": CONFLICT — resolve markers; stash preserved"
+		m.statusStyle = statusErrS
+		return m, m.reloadCmd()
+
+	case stashApplyFailedMsg:
+		m.checkoutInFlight = false
+		m.pendingStashAction = pendingStashAction{}
+		m.status = "stash apply failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case stashDropSucceededMsg:
+		m.refActionInFlight = false
+		m.pendingStashDrop = pendingStashDrop{}
+		m.status = "stash: dropped " + msg.label
+		m.statusStyle = statusOkS
+		// Cursor follow-up: surviving stash slots shift down by one
+		// (stash@{1} → stash@{0}); SelectAfterDeleted lands the cursor
+		// on the next entry in the same section (or previous when last).
+		m.pendingRefCursorAfterDelete = deletedRefHandle{
+			name: msg.label,
+			kind: git.RefKindStash,
+		}
+		return m, m.reloadCmd()
+
+	case stashDropFailedMsg:
+		m.refActionInFlight = false
+		m.pendingStashDrop = pendingStashDrop{}
+		m.status = "stash drop failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
 
 	case refCreateRequestedMsg:
 		var cmd tea.Cmd
@@ -952,6 +1063,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m.dispatchRefDelete(scope)
+			}
+			return m, nil
+		}
+		if m.mode == viewModeStashActionPicker {
+			switch msg.String() {
+			case "esc":
+				m.mode = viewModeNormal
+				m.pendingStashAction = pendingStashAction{}
+				m.status = "stash: cancelled"
+				m.statusStyle = statusOkS
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			case "p":
+				p := m.pendingStashAction
+				m.mode = viewModeNormal
+				m.checkoutInFlight = true
+				m.status = "stash: popping " + p.label + "…"
+				m.statusStyle = statusBusyS
+				return m, stashPopCmd("", p.label)
+			case "a":
+				p := m.pendingStashAction
+				m.mode = viewModeNormal
+				m.checkoutInFlight = true
+				m.status = "stash: applying " + p.label + "…"
+				m.statusStyle = statusBusyS
+				return m, stashApplyCmd("", p.label)
+			}
+			return m, nil
+		}
+		if m.mode == viewModeStashDropConfirm {
+			switch msg.String() {
+			case "esc":
+				m.mode = viewModeNormal
+				m.pendingStashDrop = pendingStashDrop{}
+				m.status = "drop: cancelled"
+				m.statusStyle = statusOkS
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			case "y":
+				p := m.pendingStashDrop
+				m.mode = viewModeNormal
+				m.refActionInFlight = true
+				m.status = "stash: dropping " + p.label + "…"
+				m.statusStyle = statusBusyS
+				return m, stashDropCmd("", p.label)
 			}
 			return m, nil
 		}
@@ -1322,7 +1482,9 @@ func (m Model) beginRefRename(target git.Ref) (Model, tea.Cmd) {
 // beginRefDelete reads the cursor ref from refs and opens the delete modal
 // with the resolved 4-axis state. HEAD branches and tags are filtered with a
 // status-bar message instead of opening the modal — destructive intent
-// against those targets is almost always a misclick.
+// against those targets is almost always a misclick. Stash cursors route to
+// beginStashDrop so the single-key `[y] drop` modal opens instead of the
+// branch-delete matrix.
 func (m Model) beginRefDelete() (Model, tea.Cmd) {
 	if m.refActionInFlight {
 		return m, nil
@@ -1332,6 +1494,9 @@ func (m Model) beginRefDelete() (Model, tea.Cmd) {
 		m.status = "delete: no ref selected"
 		m.statusStyle = statusErrS
 		return m, nil
+	}
+	if ref.Kind == git.RefKindStash {
+		return m.beginStashDrop(ref), nil
 	}
 	if ref.Kind == git.RefKindLocal && ref.IsHead {
 		m.status = "cannot delete current branch"
@@ -1353,6 +1518,21 @@ func (m Model) beginRefDelete() (Model, tea.Cmd) {
 	m.mode = viewModeRefDeleteConfirm
 	m.status = ""
 	return m, nil
+}
+
+// beginStashDrop opens the refs-pane `d` stash drop modal. subject is
+// resolved best-effort from the cached stashByHash → ObjectName lookup
+// against the current graph; if absent (stash hash not yet in graph
+// stream), the modal falls back to showing just the label.
+func (m Model) beginStashDrop(ref git.Ref) Model {
+	subject := ""
+	if c, ok := m.graph.CommitByHash(ref.ObjectName); ok {
+		subject = c.Subject
+	}
+	m.pendingStashDrop = pendingStashDrop{label: ref.ShortName, subject: subject}
+	m.mode = viewModeStashDropConfirm
+	m.status = ""
+	return m
 }
 
 // dispatchRefDelete fires branchDeleteCmd for the resolved scope and arms
@@ -1686,6 +1866,41 @@ func (m Model) renderRefDeleteConfirmInner() string {
 	return strings.Join(lines, "\n")
 }
 
+// renderStashActionPickerInner returns the 3-row content for the graph-
+// Enter stash modal: bold header naming the stash slot, a body line
+// echoing the stash subject so the user can confirm the slot, and the
+// hint matrix `[p] pop · [a] apply · [esc] cancel`.
+func (m Model) renderStashActionPickerInner() string {
+	p := m.pendingStashAction
+	header := "[Stash " + p.label + "]"
+	body := p.subject
+	if body == "" {
+		body = "(no subject)"
+	}
+	hint := "[p] pop · [a] apply · [esc] cancel"
+	return strings.Join([]string{
+		modalHeaderS.Render(header),
+		statusOkS.Render(body),
+		help.Render(hint),
+	}, "\n")
+}
+
+// renderStashDropConfirmInner returns the 3-row content for the refs-pane
+// `d` stash modal: confirm-prompt header, body echoing the stash subject,
+// and the single-key hint `[y] drop · [esc] cancel`.
+func (m Model) renderStashDropConfirmInner() string {
+	p := m.pendingStashDrop
+	body := p.label
+	if p.subject != "" {
+		body = p.label + ": " + p.subject
+	}
+	return strings.Join([]string{
+		confirmPromptS.Render("Drop stash?"),
+		statusOkS.Render(body),
+		help.Render("[y] drop · [esc] cancel"),
+	}, "\n")
+}
+
 // renderCheckoutConfirmInner returns the 3-row content for the dirty-tree
 // confirm modal: bold "Uncommitted changes" header, a variant body line,
 // and a variant hint line. The withPull case sits above the skip-reason
@@ -1777,6 +1992,10 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderRefDeleteConfirmInner()), m.width, m.height)
 	case viewModeCheckoutConfirm:
 		return composeOverlay(base, renderModalBox(m.renderCheckoutConfirmInner()), m.width, m.height)
+	case viewModeStashActionPicker:
+		return composeOverlay(base, renderModalBox(m.renderStashActionPickerInner()), m.width, m.height)
+	case viewModeStashDropConfirm:
+		return composeOverlay(base, renderModalBox(m.renderStashDropConfirmInner()), m.width, m.height)
 	}
 	return base
 }
@@ -1815,7 +2034,8 @@ func (m Model) tabBody() string {
 // shortcut reference can fit the full key matrix.
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
-	case viewModeBranchPicker, viewModeRefNameInput, viewModeRefDeleteConfirm, viewModeCheckoutConfirm:
+	case viewModeBranchPicker, viewModeRefNameInput, viewModeRefDeleteConfirm, viewModeCheckoutConfirm,
+		viewModeStashActionPicker, viewModeStashDropConfirm:
 		return " "
 	case viewModeHelp:
 		return renderHelpPanel(m.width, m.helpReservedRows())

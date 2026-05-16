@@ -844,3 +844,20 @@ func (g *graphModel) JumpToHash(hash string) bool {
 	}
 	return false
 }
+
+// CommitByHash returns the loaded commit matching hash without moving the
+// cursor. Used by refs-pane actions (e.g. stash drop modal) that need the
+// commit's subject for the modal body but must not perturb the graph
+// selection. Returns ok=false when the hash isn't in the loaded window.
+func (g graphModel) CommitByHash(hash string) (git.Commit, bool) {
+	for _, it := range g.list.Items() {
+		ci, ok := it.(commitItem)
+		if !ok {
+			continue
+		}
+		if ci.c.Hash == hash {
+			return ci.c, true
+		}
+	}
+	return git.Commit{}, false
+}

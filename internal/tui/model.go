@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
 	"github.com/atotto/clipboard"
@@ -153,6 +154,14 @@ type pendingCheckout struct {
 }
 
 type Model struct {
+	// workdir is the absolute path of the git working tree every wrapper
+	// invocation runs against. Seeded from os.Getwd() in New(); the worktree
+	// modal rewrites it on switch so all subsequent loadRefs / loadCommits /
+	// fetch / status / checkout / branch-write cmds re-target the new tree
+	// without per-call site changes. Empty string falls back to the process
+	// cwd (git's default `cmd.Dir == ""` behavior) — the New() Getwd
+	// fallback path leans on this.
+	workdir       string
 	width, height int
 	focused       pane
 	mode          viewMode
@@ -306,6 +315,15 @@ func New() Model {
 		currentRefs:  []string{refsAllSentinel},
 		streamReqID:  1,
 	}
+	if wd, err := os.Getwd(); err == nil {
+		m.workdir = wd
+	} else {
+		// Non-fatal — every wrapper still accepts "" and git falls back to
+		// the process cwd. Surface so the user understands why the worktree
+		// header / modal might show a confusing path.
+		m.status = "workdir resolve failed: " + firstLine(err.Error())
+		m.statusStyle = statusErrS
+	}
 	prefs, err := config.LoadPrefs()
 	if err != nil {
 		// Non-fatal — pull falls back to git config / ff-only. Surface once
@@ -320,9 +338,9 @@ func New() Model {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		loadCommitsCmd("", m.currentRefs, nil, nil, m.streamReqID),
-		loadRefsCmd(""),
-		loadHeadAncestorsCmd("", m.streamReqID),
+		loadCommitsCmd(m.workdir, m.currentRefs, nil, nil, m.streamReqID),
+		loadRefsCmd(m.workdir),
+		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 	)
 }
 
@@ -586,8 +604,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Batch(
-			loadDiffStatCmd("", msg.hash, msg.reqID),
-			loadCommitDetailCmd("", msg.hash, msg.reqID),
+			loadDiffStatCmd(m.workdir, msg.hash, msg.reqID),
+			loadCommitDetailCmd(m.workdir, msg.hash, msg.reqID),
 		)
 
 	case diffStatLoadedMsg:
@@ -692,12 +710,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ffInFlight = true
 			m.status = ffLabel(msg.branch, msg.advance) + " …"
 			m.statusStyle = statusBusyS
-			return m, ffOnlyCmd("", msg.branch, msg.hash)
+			return m, ffOnlyCmd(m.workdir, msg.branch, msg.hash)
 		case graphActionCheckoutAndFF:
 			m.ffInFlight = true
 			m.status = "fast-forward: " + msg.branch + " (checkout + ff) …"
 			m.statusStyle = statusBusyS
-			return m, checkoutThenFFCmd("", msg.branch, msg.hash)
+			return m, checkoutThenFFCmd(m.workdir, msg.branch, msg.hash)
 		case graphActionDetach:
 			var cmd tea.Cmd
 			m, cmd = m.beginCheckout(msg.hash, true)
@@ -1021,7 +1039,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localChangesAddSucceededMsg:
 		m.status = "staged " + msg.path
 		m.statusStyle = statusOkS
-		return m, loadStatusCmd("")
+		return m, loadStatusCmd(m.workdir)
 
 	case localChangesAddFailedMsg:
 		m.status = "stage " + msg.path + ": " + firstLine(msg.err.Error())
@@ -1031,7 +1049,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localChangesRestoreSucceededMsg:
 		m.status = "unstaged " + msg.path
 		m.statusStyle = statusOkS
-		return m, loadStatusCmd("")
+		return m, loadStatusCmd(m.workdir)
 
 	case localChangesRestoreFailedMsg:
 		m.status = "unstage " + msg.path + ": " + firstLine(msg.err.Error())
@@ -1113,7 +1131,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.refNameInput.inlineErr = ""
 				m.refNameInput.validating = true
-				return m, checkRefFormatCmd("", name)
+				return m, checkRefFormatCmd(m.workdir, name)
 			}
 			var cmd tea.Cmd
 			m.refNameInput.input, cmd = m.refNameInput.input.Update(msg)
@@ -1159,14 +1177,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.checkoutInFlight = true
 				m.status = "stash: popping " + p.label + "…"
 				m.statusStyle = statusBusyS
-				return m, stashPopCmd("", p.label)
+				return m, stashPopCmd(m.workdir, p.label)
 			case "a":
 				p := m.pendingStashAction
 				m.mode = viewModeNormal
 				m.checkoutInFlight = true
 				m.status = "stash: applying " + p.label + "…"
 				m.statusStyle = statusBusyS
-				return m, stashApplyCmd("", p.label)
+				return m, stashApplyCmd(m.workdir, p.label)
 			}
 			return m, nil
 		}
@@ -1187,7 +1205,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refActionInFlight = true
 				m.status = "stash: dropping " + p.label + "…"
 				m.statusStyle = statusBusyS
-				return m, stashDropCmd("", p.label)
+				return m, stashDropCmd(m.workdir, p.label)
 			}
 			return m, nil
 		}
@@ -1208,7 +1226,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "tab":
 				return m.cycleLocalChangesFocus(), nil
 			case "r":
-				return m, loadStatusCmd("")
+				return m, loadStatusCmd(m.workdir)
 			}
 			// Tree sub-focus owns cursor movement + stage/unstage.
 			// Diff sub-focus owns viewport scroll. paneRefs focus inside the
@@ -1236,12 +1254,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if p.withFF {
 					m.ffInFlight = true
 					m.status = "fast-forward: " + p.ref + " (stashing…)"
-					return m, stashThenFFCmd("", p.ref, p.ffHash)
+					return m, stashThenFFCmd(m.workdir, p.ref, p.ffHash)
 				}
 				if p.withCheckoutFF {
 					m.ffInFlight = true
 					m.status = "fast-forward: " + p.ref + " (checkout + ff, stashing…)"
-					return m, stashThenCheckoutThenFFCmd("", p.ref, p.ffHash)
+					return m, stashThenCheckoutThenFFCmd(m.workdir, p.ref, p.ffHash)
 				}
 				m.checkoutInFlight = true
 				if p.withPull {
@@ -1255,7 +1273,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					)
 				}
 				m.status = "checkout: " + p.ref + " (stashing…)"
-				return m, stashThenCheckoutCmd("", p.ref, p.detached)
+				return m, stashThenCheckoutCmd(m.workdir, p.ref, p.detached)
 			case "a", "esc":
 				m.mode = viewModeNormal
 				p := m.pendingCheckout
@@ -1296,7 +1314,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fetchInFlight = true
 			m.status = "fetching…"
 			m.statusStyle = statusBusyS
-			return m, fetchCmd("")
+			return m, fetchCmd(m.workdir)
 		case "P":
 			if m.pullInFlight {
 				return m, nil
@@ -1304,7 +1322,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pullInFlight = true
 			m.status = "pulling…"
 			m.statusStyle = statusBusyS
-			return m, pullCmd("", m.pullPrefStrategy)
+			return m, pullCmd(m.workdir, m.pullPrefStrategy)
 		case "r":
 			return m, m.reloadCmd()
 		case ",":
@@ -1352,7 +1370,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusBusyS
 			log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d, remotes=%d, stashes=%d)",
 				shortHash(c.Hash), len(locals), len(remotes), len(stashes))
-			return m, evaluateGraphActionCmd("", c.Hash, locals, remotes, stashes)
+			return m, evaluateGraphActionCmd(m.workdir, c.Hash, locals, remotes, stashes)
 		case "d":
 			// Refs focus reinterprets `d` as the delete intent so the
 			// destructive ref-write key doesn't collide with the patch
@@ -1369,7 +1387,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.diff.BeginPatchLoad(c.Hash, m.diffReqID)
 			m.mode = viewModeDiffWindow
 			m.diff.SetPatchViewportSize(m.width, m.height-1)
-			return m, loadDiffPatchCmd("", c.Hash, m.diffReqID)
+			return m, loadDiffPatchCmd(m.workdir, c.Hash, m.diffReqID)
 		}
 		switch m.focused {
 		case paneRefs:
@@ -1442,7 +1460,7 @@ func (m *Model) enterLocalChangesMode() tea.Cmd {
 	m.focused = paneGraph
 	m.localChanges.SetFocus(paneLCTree)
 	m.applyPaneSizes()
-	return loadStatusCmd("")
+	return loadStatusCmd(m.workdir)
 }
 
 // exitLocalChangesMode flips back to the normal layout. Entries / cursor
@@ -1513,7 +1531,7 @@ func (m Model) dispatchLocalChangesDiff() (tea.Model, tea.Cmd) {
 	}
 	m.localChangesReqID++
 	m.localChanges.BeginDiffLoad(m.localChangesReqID)
-	return m, loadDiffCmd("", e.Path, e.Staged(), e.Untracked, m.localChangesReqID)
+	return m, loadDiffCmd(m.workdir, e.Path, e.Staged(), e.Untracked, m.localChangesReqID)
 }
 
 // dispatchLocalChangesStage picks Add vs. RestoreStaged based on which
@@ -1528,12 +1546,12 @@ func (m Model) dispatchLocalChangesStage() (tea.Model, tea.Cmd) {
 		m.localChanges.ScheduleSelectAfterReload(e.Path, false)
 		m.status = "unstage " + e.Path + "…"
 		m.statusStyle = statusBusyS
-		return m, restoreStagedCmd("", e.Path)
+		return m, restoreStagedCmd(m.workdir, e.Path)
 	}
 	m.localChanges.ScheduleSelectAfterReload(e.Path, true)
 	m.status = "stage " + e.Path + "…"
 	m.statusStyle = statusBusyS
-	return m, addCmd("", e.Path)
+	return m, addCmd(m.workdir, e.Path)
 }
 
 // adjustSplit nudges the graph/tab split ratio by delta percent and reflows
@@ -1587,7 +1605,7 @@ func (m Model) beginCheckout(ref string, detached bool) (Model, tea.Cmd) {
 	m.pendingCheckout = pendingCheckout{ref: ref, detached: detached}
 	m.status = checkoutLabel(ref, detached) + " …"
 	m.statusStyle = statusBusyS
-	return m, checkoutCmd("", ref, detached)
+	return m, checkoutCmd(m.workdir, ref, detached)
 }
 
 // resolvePullEligibility decides whether `p` should follow the checkout
@@ -1633,7 +1651,7 @@ func (m Model) beginCheckoutWithPull(ref string, detached bool, skipReason strin
 		m.status = checkoutLabel(ref, detached) + " + pull …"
 	}
 	m.statusStyle = statusBusyS
-	return m, checkoutThenPullCmd("", ref, detached, m.pullPrefStrategy, skipReason)
+	return m, checkoutThenPullCmd(m.workdir, ref, detached, m.pullPrefStrategy, skipReason)
 }
 
 // checkoutLabel renders the user-facing "checkout: …" prefix shared by the
@@ -1781,7 +1799,7 @@ func (m Model) dispatchRefDelete(scope deleteScope) (Model, tea.Cmd) {
 		m.status = "deleting remote '" + d.remote + "/" + d.remoteBranch + "'…"
 	}
 	m.statusStyle = statusBusyS
-	return m, branchDeleteCmd("", target, scope)
+	return m, branchDeleteCmd(m.workdir, target, scope)
 }
 
 // dispatchRefCreate fires branchCreateCmd from the validated modal state
@@ -1795,7 +1813,7 @@ func (m Model) dispatchRefCreate(name string) (Model, tea.Cmd) {
 	m.refNameInput.validating = false
 	m.status = "creating '" + name + "'…"
 	m.statusStyle = statusBusyS
-	return m, branchCreateCmd("", name, m.refNameInput.base)
+	return m, branchCreateCmd(m.workdir, name, m.refNameInput.base)
 }
 
 // dispatchRefRename fires branchRenameCmd from the validated modal state.
@@ -1811,7 +1829,7 @@ func (m Model) dispatchRefRename(name string) (Model, tea.Cmd) {
 	headWasOld := src.IsHead
 	m.status = "renaming '" + src.ShortName + "' → '" + name + "'…"
 	m.statusStyle = statusBusyS
-	return m, branchRenameCmd("", src.ShortName, name, headWasOld)
+	return m, branchRenameCmd(m.workdir, src.ShortName, name, headWasOld)
 }
 
 // ffLabel renders the user-facing "fast-forward: <branch> +<N>" status
@@ -1881,9 +1899,9 @@ func (m *Model) reloadCmd() tea.Cmd {
 	m.refs.ResetForReload()
 	return tea.Batch(
 		resetCmd,
-		loadCommitsCmd("", m.currentRefs, m.currentStashHashes, m.currentStashByHash, m.streamReqID),
-		loadRefsCmd(""),
-		loadHeadAncestorsCmd("", m.streamReqID),
+		loadCommitsCmd(m.workdir, m.currentRefs, m.currentStashHashes, m.currentStashByHash, m.streamReqID),
+		loadRefsCmd(m.workdir),
+		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 	)
 }
 

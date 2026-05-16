@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -832,8 +833,12 @@ func TestModelPullPrefStrategyPropagatesToCmd(t *testing.T) {
 	if seenPrefs != "rebase" {
 		t.Errorf("pullResolveStrategy got prefs=%q, want rebase", seenPrefs)
 	}
-	if seenDir != "" {
-		t.Errorf("pullResolveStrategy got dir=%q, want empty (cwd)", seenDir)
+	// Post-migration: pullCmd receives m.workdir, which New() seeds from
+	// os.Getwd(). Assert the cmd saw the same path so a regression to
+	// hardcoded "" surfaces immediately.
+	wd, _ := os.Getwd()
+	if seenDir != wd {
+		t.Errorf("pullResolveStrategy got dir=%q, want %q (m.workdir)", seenDir, wd)
 	}
 }
 

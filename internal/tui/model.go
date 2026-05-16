@@ -105,6 +105,12 @@ const (
 	// via the `,` keybind or by `enter` on the sticky `● Local Changes`
 	// row in the refs pane.
 	viewModeLocalChanges
+	// viewModeWorktreeList hosts the `w` worktree modal. Lists every entry
+	// from `git worktree list --porcelain`, with an async dirty fan-out
+	// painting `●dirty` on rows whose `git status` returned non-empty.
+	// The 3-pane layout stays visible underneath; only j/k/enter/esc/a/d
+	// are accepted while open (Step 6 wires enter/a/d).
+	viewModeWorktreeList
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
@@ -290,6 +296,11 @@ type Model struct {
 	// switchWorktreeMsg. The refs sidebar header reads it through
 	// refreshWorktreeHeader; nothing else consumes it directly.
 	currentWorktreeDirty bool
+	// worktreeModal backs viewModeWorktreeList. Modal open bumps reqID and
+	// arms loading=true; the post-load fan-out tags each entry's dirty
+	// state via worktreeDirtyResultMsg. Stale msgs (modal closed +
+	// reopened before all dirty responses landed) drop on reqID mismatch.
+	worktreeModal worktreeModalState
 }
 
 // pendingStashAction backs viewModeStashActionPicker. subject is the
@@ -378,6 +389,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.currentWorktreeDirty = msg.dirty
 		m.refreshWorktreeHeader()
+		return m, nil
+
+	case worktreesLoadedMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.loading = false
+		m.worktreeModal.entries = msg.entries
+		m.worktreeModal.loadErr = nil
+		// Seed cursor on the active worktree row so the user starts where
+		// they already are; falls through to 0 when no entry matches.
+		for i, e := range msg.entries {
+			if e.Path == m.workdir {
+				m.worktreeModal.cursor = i
+				break
+			}
+		}
+		paths := make([]string, 0, len(msg.entries))
+		for _, e := range msg.entries {
+			paths = append(paths, e.Path)
+		}
+		return m, worktreeDirtyFanoutCmd(m.worktreeModal.reqID, paths)
+
+	case worktreesLoadFailedMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.loading = false
+		m.worktreeModal.loadErr = msg.err
+		return m, nil
+
+	case worktreeDirtyResultMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		if m.worktreeModal.dirty == nil {
+			m.worktreeModal.dirty = make(map[string]bool)
+		}
+		m.worktreeModal.dirty[msg.path] = msg.dirty
 		return m, nil
 
 	case commitsStreamStartedMsg:
@@ -1094,6 +1144,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.mode == viewModeWorktreeList {
+			switch msg.String() {
+			case "j", "down":
+				if m.worktreeModal.cursor < len(m.worktreeModal.entries)-1 {
+					m.worktreeModal.cursor++
+				}
+				return m, nil
+			case "k", "up":
+				if m.worktreeModal.cursor > 0 {
+					m.worktreeModal.cursor--
+				}
+				return m, nil
+			case "esc":
+				m.mode = viewModeNormal
+				// Bump reqID so any in-flight dirty fan-out msgs are dropped
+				// instead of mutating the next modal-open's state.
+				m.worktreeModal = worktreeModalState{reqID: m.worktreeModal.reqID + 1}
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		if m.mode == viewModeBranchPicker {
 			switch msg.String() {
 			case "j", "down":
@@ -1350,6 +1424,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.enterLocalChangesMode()
 			m.status = "local changes"
 			m.statusStyle = statusOkS
+			return m, cmd
+		case "w":
+			// Bubble Tea must own the focus during a textinput inside the
+			// refs name modal etc. — the early `if m.mode == viewMode*`
+			// branches above already swallow keys for those modes, so by
+			// the time we reach here we know the user isn't typing.
+			cmd := m.openWorktreeModal()
+			m.mode = viewModeWorktreeList
 			return m, cmd
 		case "ctrl+up":
 			m.adjustSplit(-splitRatioStep)
@@ -2311,6 +2393,8 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderStashActionPickerInner()), m.width, m.height)
 	case viewModeStashDropConfirm:
 		return composeOverlay(base, renderModalBox(m.renderStashDropConfirmInner()), m.width, m.height)
+	case viewModeWorktreeList:
+		return composeOverlay(base, renderModalBox(m.renderWorktreeModalInner()), m.width, m.height)
 	}
 	return base
 }

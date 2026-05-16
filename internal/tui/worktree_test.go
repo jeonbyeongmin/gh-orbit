@@ -159,6 +159,166 @@ func TestCurrentWorktreeDirtyMsgAppliesAndRefreshesHeader(t *testing.T) {
 	}
 }
 
+func TestWorktreeModalOpenAndClose(t *testing.T) {
+	prev := worktreesExec
+	defer func() { worktreesExec = prev }()
+	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
+		return []git.Worktree{
+			{Path: "/tmp/main", Branch: "main", HEAD: "abc", IsMain: true},
+			{Path: "/tmp/feat-a", Branch: "feat-a", HEAD: "def"},
+		}, nil
+	}
+
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/tmp/feat-a"
+
+	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	if m.mode != viewModeWorktreeList {
+		t.Fatalf("expected viewModeWorktreeList, got %v", m.mode)
+	}
+	if !m.worktreeModal.loading {
+		t.Errorf("modal should be loading after open")
+	}
+	if openCmd == nil {
+		t.Fatal("expected loadWorktreesCmd, got nil")
+	}
+
+	// Drive the loadWorktreesCmd to completion.
+	msg := openCmd()
+	updated, _ = m.Update(msg)
+	m = updated.(Model)
+	if m.worktreeModal.loading {
+		t.Errorf("modal still loading after worktreesLoadedMsg")
+	}
+	if len(m.worktreeModal.entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(m.worktreeModal.entries))
+	}
+	// Cursor seeds onto the active worktree (feat-a is index 1).
+	if m.worktreeModal.cursor != 1 {
+		t.Errorf("cursor should land on active worktree row, got %d", m.worktreeModal.cursor)
+	}
+
+	// Esc closes + bumps reqID so any late fan-out msgs drop.
+	prevReqID := m.worktreeModal.reqID
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Errorf("esc should return to viewModeNormal, got %v", m.mode)
+	}
+	if m.worktreeModal.reqID == prevReqID {
+		t.Errorf("reqID should bump on close so stale fan-out drops")
+	}
+}
+
+func TestWorktreeModalDirtyFanoutAppliesAndDropsStale(t *testing.T) {
+	prev := worktreesExec
+	defer func() { worktreesExec = prev }()
+	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
+		return []git.Worktree{{Path: "/tmp/main", Branch: "main", IsMain: true}}, nil
+	}
+
+	m := New()
+	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	m.mode = viewModeWorktreeList
+
+	loadMsg := openCmd()
+	updated, _ = m.Update(loadMsg)
+	m = updated.(Model)
+	reqID := m.worktreeModal.reqID
+
+	// Live fan-out result applies.
+	updated, _ = m.Update(worktreeDirtyResultMsg{reqID: reqID, path: "/tmp/main", dirty: true})
+	m = updated.(Model)
+	if !m.worktreeModal.dirty["/tmp/main"] {
+		t.Errorf("expected dirty[/tmp/main]=true")
+	}
+
+	// Stale msg (reqID-1) drops.
+	updated, _ = m.Update(worktreeDirtyResultMsg{reqID: reqID - 1, path: "/tmp/other", dirty: true})
+	m = updated.(Model)
+	if _, ok := m.worktreeModal.dirty["/tmp/other"]; ok {
+		t.Errorf("stale fan-out msg should not mutate dirty map")
+	}
+}
+
+func TestRenderWorktreeRow(t *testing.T) {
+	tt := []struct {
+		name   string
+		e      git.Worktree
+		active string
+		dirty  bool
+		want   string
+	}{
+		{
+			name:   "active branch clean",
+			e:      git.Worktree{Path: "/r/main", Branch: "main", IsMain: true},
+			active: "/r/main",
+			dirty:  false,
+			want:   "* main · main",
+		},
+		{
+			name:   "non-active feat dirty",
+			e:      git.Worktree{Path: "/r/feat", Branch: "feat"},
+			active: "/r/main",
+			dirty:  true,
+			want:   "  feat · feat · ●dirty",
+		},
+		{
+			name:   "locked with reason",
+			e:      git.Worktree{Path: "/r/lck", Branch: "lck", Locked: true, LockReason: "ext"},
+			active: "/r/main",
+			want:   "  lck · lck · locked: ext",
+		},
+		{
+			name:   "detached",
+			e:      git.Worktree{Path: "/r/det", Detached: true},
+			active: "/r/main",
+			want:   "  det · (detached)",
+		},
+	}
+	for _, tc := range tt {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderWorktreeRow(tc.e, tc.active, tc.dirty, 80)
+			// Strip ANSI control bytes from the cursor-style `*` so the
+			// table-driven want strings stay plain text.
+			plain := stripANSI(got)
+			if plain != tc.want {
+				t.Errorf("got %q want %q", plain, tc.want)
+			}
+		})
+	}
+}
+
+// stripANSI removes ANSI escape sequences (CSI ... letter) so renderRow
+// output can be compared against plain strings. Vendored locally to keep
+// the worktree tests self-contained — the project doesn't import x/ansi
+// here yet.
+func stripANSI(s string) string {
+	var b strings.Builder
+	in := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			in = true
+			i++
+			continue
+		}
+		if in {
+			// CSI sequences end with a byte in 0x40..0x7e.
+			if c >= 0x40 && c <= 0x7e {
+				in = false
+			}
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
 func TestSwitchWorktreeNoopOnSamePath(t *testing.T) {
 	root := t.TempDir()
 	main := filepath.Join(root, "main")

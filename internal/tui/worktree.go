@@ -13,9 +13,190 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
+
+// Package-level seams over git.Worktree* so tests can swap in stubs.
+// Mirrors the checkoutExec / stashExec pattern in checkout.go.
+var (
+	worktreesExec      = git.Worktrees
+	worktreeAddExec    = git.WorktreeAdd
+	worktreeRemoveExec = git.WorktreeRemove
+)
+
+// worktreeModalState backs viewModeWorktreeList. Modal open bumps reqID
+// and arms loading=true; entries land via worktreesLoadedMsg and the
+// dirty fan-out tags each row via worktreeDirtyResultMsg keyed by path.
+// The map is keyed by entry.Path (absolute, as git emits) so a fanout
+// goroutine's result lookup is O(1).
+type worktreeModalState struct {
+	entries        []git.Worktree
+	dirty          map[string]bool
+	cursor         int
+	loading        bool
+	loadErr        error
+	reqID          uint64
+	actionInFlight bool // Step 6 owns add/remove gating.
+}
+
+// worktreesLoadedMsg carries the porcelain list result back to the modal.
+// reqID lets the handler drop a list that arrived after the user closed
+// and reopened the modal.
+type worktreesLoadedMsg struct {
+	reqID   uint64
+	entries []git.Worktree
+}
+
+// worktreesLoadFailedMsg surfaces a porcelain-list failure; the modal
+// shows the error in place of the list and keeps esc working.
+type worktreesLoadFailedMsg struct {
+	reqID uint64
+	err   error
+}
+
+// worktreeDirtyResultMsg carries one path's dirty-or-clean state back
+// from the fan-out. reqID matches the modal-open generation; mismatched
+// msgs are dropped by the handler.
+type worktreeDirtyResultMsg struct {
+	reqID uint64
+	path  string
+	dirty bool
+}
+
+// loadWorktreesCmd runs `git worktree list --porcelain -z` and emits the
+// result tagged with reqID.
+func loadWorktreesCmd(dir string, reqID uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), worktreeDirtyTimeout)
+		defer cancel()
+		entries, err := worktreesExec(ctx, dir)
+		if err != nil {
+			return worktreesLoadFailedMsg{reqID: reqID, err: err}
+		}
+		return worktreesLoadedMsg{reqID: reqID, entries: entries}
+	}
+}
+
+// worktreeDirtyFanoutCmd dispatches one cmd per path; each emits its own
+// worktreeDirtyResultMsg as the per-worktree `git status` returns. Using
+// tea.Batch lets Bubble Tea schedule them concurrently — the rows light
+// up incrementally instead of waiting for the slowest tree.
+func worktreeDirtyFanoutCmd(reqID uint64, paths []string) tea.Cmd {
+	cmds := make([]tea.Cmd, 0, len(paths))
+	for _, p := range paths {
+		path := p // capture
+		cmds = append(cmds, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), worktreeDirtyTimeout)
+			defer cancel()
+			entries, err := git.Status(ctx, path)
+			if err != nil {
+				return worktreeDirtyResultMsg{reqID: reqID, path: path, dirty: false}
+			}
+			return worktreeDirtyResultMsg{reqID: reqID, path: path, dirty: len(entries) > 0}
+		})
+	}
+	return tea.Batch(cmds...)
+}
+
+// openWorktreeModal bumps reqID, arms loading, and dispatches the porcelain
+// list. Callers (the `w` key handler) flip m.mode to viewModeWorktreeList
+// before returning the cmd this produces.
+func (m *Model) openWorktreeModal() tea.Cmd {
+	m.worktreeModal.reqID++
+	m.worktreeModal = worktreeModalState{
+		reqID:   m.worktreeModal.reqID,
+		loading: true,
+		dirty:   make(map[string]bool),
+	}
+	return loadWorktreesCmd(m.workdir, m.worktreeModal.reqID)
+}
+
+// renderWorktreeModalInner returns the multi-line content for the
+// viewModeWorktreeList modal. Built for composeOverlay — no border /
+// hint chrome here.
+func (m Model) renderWorktreeModalInner() string {
+	header := modalHeaderS.Render("[Worktrees]")
+	hint := help.Render(helpTextWorktreeModal)
+
+	if m.worktreeModal.loading {
+		return strings.Join([]string{header, "loading…", hint}, "\n")
+	}
+	if m.worktreeModal.loadErr != nil {
+		return strings.Join([]string{
+			header,
+			statusErrS.Render("load: " + firstLine(m.worktreeModal.loadErr.Error())),
+			hint,
+		}, "\n")
+	}
+	if len(m.worktreeModal.entries) == 0 {
+		return strings.Join([]string{header, help.Render("(no worktrees)"), hint}, "\n")
+	}
+
+	width := worktreeModalRowWidth(m.width)
+	lines := []string{header}
+	for i, e := range m.worktreeModal.entries {
+		row := renderWorktreeRow(e, m.workdir, m.worktreeModal.dirty[e.Path], width)
+		if i == m.worktreeModal.cursor {
+			row = selectedStyle.Render(row)
+		}
+		lines = append(lines, row)
+	}
+	lines = append(lines, hint)
+	return strings.Join(lines, "\n")
+}
+
+// renderWorktreeRow formats one entry: "* basename · branch · locked · prunable · ●dirty".
+// `*` flags the active worktree (m.workdir match); a leading "  " keeps
+// non-active rows aligned. Width truncate uses runewidth so unicode
+// basenames don't blow up the layout.
+func renderWorktreeRow(e git.Worktree, activePath string, dirty bool, width int) string {
+	prefix := "  "
+	if e.Path == activePath {
+		prefix = cursorStyle.Render("*") + " "
+	}
+	parts := []string{filepath.Base(e.Path)}
+	switch {
+	case e.Detached:
+		parts = append(parts, "(detached)")
+	case e.Branch != "":
+		parts = append(parts, e.Branch)
+	}
+	if e.Locked {
+		if e.LockReason != "" {
+			parts = append(parts, "locked: "+e.LockReason)
+		} else {
+			parts = append(parts, "locked")
+		}
+	}
+	if e.Prunable {
+		parts = append(parts, "prunable")
+	}
+	if dirty {
+		parts = append(parts, "●dirty")
+	}
+	body := strings.Join(parts, " · ")
+	avail := width - 2 // prefix width
+	if avail < 1 {
+		return prefix
+	}
+	return prefix + runewidth.Truncate(body, avail, "…")
+}
+
+// worktreeModalRowWidth picks a body width slightly narrower than the
+// screen so the modal box's border + padding leaves the row legible.
+func worktreeModalRowWidth(screenWidth int) int {
+	w := screenWidth - 8
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
+// helpTextWorktreeModal is the hint line painted under the list. Step 6
+// will reuse this constant after wiring enter/a/d.
+const helpTextWorktreeModal = "[j/k] nav · [esc] close"
 
 // worktreeDirtyTimeout caps how long a per-worktree `git status` call may
 // run before the dirty fan-out drops it. Long enough for cold-cache repos,

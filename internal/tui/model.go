@@ -1638,6 +1638,19 @@ func (m *Model) cancelStream() {
 func (m *Model) reloadCmd() tea.Cmd {
 	m.cancelStream()
 	m.streamReqID++
+	// Snapshot the currently focused ref so refsLoadedMsg can restore the
+	// cursor across the upcoming cursor=0 reset. Selected() returns false on
+	// detached HEAD / empty ref set / pre-load, which falls through to a
+	// zero handle and a no-op restore.
+	if ref, ok := m.refs.Selected(); ok {
+		h := persistedRefHandle{name: ref.ShortName, kind: ref.Kind}
+		if ref.Kind == git.RefKindStash {
+			h.stashHash = ref.ObjectName
+		}
+		m.pendingRefCursorPersist = h
+	} else {
+		m.pendingRefCursorPersist = persistedRefHandle{}
+	}
 	resetCmd := m.graph.ResetForReload()
 	m.refs.ResetForReload()
 	return tea.Batch(

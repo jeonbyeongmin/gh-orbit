@@ -6,12 +6,14 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
 
@@ -31,6 +33,9 @@ var (
 // dirty fan-out tags each row via worktreeDirtyResultMsg keyed by path.
 // The map is keyed by entry.Path (absolute, as git emits) so a fanout
 // goroutine's result lookup is O(1).
+//
+// addInput / addInlineErr back viewModeWorktreeAddInput.
+// removeTarget backs viewModeWorktreeRemoveConfirm.
 type worktreeModalState struct {
 	entries        []git.Worktree
 	dirty          map[string]bool
@@ -38,7 +43,14 @@ type worktreeModalState struct {
 	loading        bool
 	loadErr        error
 	reqID          uint64
-	actionInFlight bool // Step 6 owns add/remove gating.
+	actionInFlight bool
+	addInput       textinput.Model
+	addInlineErr   string
+	removeTarget   git.Worktree
+	// pendingAddPath remembers the absolute path the in-flight add is
+	// creating so worktreeAddSucceededMsg can land the cursor on it once
+	// the post-add reload completes.
+	pendingAddPath string
 }
 
 // worktreesLoadedMsg carries the porcelain list result back to the modal.
@@ -63,6 +75,34 @@ type worktreeDirtyResultMsg struct {
 	reqID uint64
 	path  string
 	dirty bool
+}
+
+// worktreeAddSucceededMsg / worktreeAddFailedMsg report the outcome of
+// the `a` action. Success carries the path so the post-reload handler
+// can land the cursor on the new entry.
+type worktreeAddSucceededMsg struct {
+	reqID  uint64
+	path   string
+	branch string
+}
+type worktreeAddFailedMsg struct {
+	reqID uint64
+	err   error
+}
+
+// worktreeRemoveSucceededMsg / worktreeRemoveFailedMsg report the outcome
+// of the `d` action. failure carries dirty/locked classification so the
+// modal can branch to the force prompt instead of dumping git's stderr.
+type worktreeRemoveSucceededMsg struct {
+	reqID uint64
+	path  string
+}
+type worktreeRemoveFailedMsg struct {
+	reqID  uint64
+	path   string
+	err    error
+	dirty  bool
+	locked bool
 }
 
 // loadWorktreesCmd runs `git worktree list --porcelain -z` and emits the
@@ -111,6 +151,79 @@ func (m *Model) openWorktreeModal() tea.Cmd {
 		dirty:   make(map[string]bool),
 	}
 	return loadWorktreesCmd(m.workdir, m.worktreeModal.reqID)
+}
+
+// reloadWorktreeModal re-fires the porcelain list against the current
+// reqID — used after a successful add/remove so the user sees the new
+// list shape without closing and reopening the modal.
+func (m *Model) reloadWorktreeModal() tea.Cmd {
+	m.worktreeModal.loading = true
+	m.worktreeModal.dirty = make(map[string]bool)
+	return loadWorktreesCmd(m.workdir, m.worktreeModal.reqID)
+}
+
+// deriveAddPath computes the default new-worktree path: sibling directory
+// of the active worktree's parent. e.g. activePath=/repo/main, branch=feat
+// → /repo/feat. Matches the convention `git worktree add ../feat -b feat`
+// would land on if invoked from main.
+func deriveAddPath(activePath, branch string) string {
+	if activePath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(activePath), branch)
+}
+
+// worktreeAddCmd validates the branch name with check-ref-format, then
+// runs WorktreeAdd. A single cmd keeps the modal flow linear — the user
+// sees the success/failure msg with no intermediate "validating…" hop.
+// On invalid branch name the err is set to git.ErrInvalidRefName via
+// CheckRefFormat's wrapping so handlers can branch on errors.Is.
+func worktreeAddCmd(dir, path, branch string, reqID uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), worktreeDirtyTimeout)
+		defer cancel()
+		if err := checkRefFormatExec(ctx, dir, branch); err != nil {
+			return worktreeAddFailedMsg{reqID: reqID, err: err}
+		}
+		if err := worktreeAddExec(ctx, dir, path, branch, true); err != nil {
+			return worktreeAddFailedMsg{reqID: reqID, err: err}
+		}
+		return worktreeAddSucceededMsg{reqID: reqID, path: path, branch: branch}
+	}
+}
+
+// worktreeRemoveCmd runs WorktreeRemove and classifies a dirty/locked
+// failure so the modal can transition to a force prompt instead of just
+// surfacing stderr.
+func worktreeRemoveCmd(dir, path string, force bool, reqID uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), worktreeDirtyTimeout)
+		defer cancel()
+		if err := worktreeRemoveExec(ctx, dir, path, force); err != nil {
+			return worktreeRemoveFailedMsg{
+				reqID:  reqID,
+				path:   path,
+				err:    err,
+				dirty:  errors.Is(err, git.ErrWorktreeDirty),
+				locked: errors.Is(err, git.ErrWorktreeLocked),
+			}
+		}
+		return worktreeRemoveSucceededMsg{reqID: reqID, path: path}
+	}
+}
+
+// openWorktreeAddInput initializes the branch-name textinput for `a` on
+// the list modal. Caller flips m.mode to viewModeWorktreeAddInput before
+// returning the cmd.
+func (m *Model) openWorktreeAddInput() tea.Cmd {
+	ti := textinput.New()
+	ti.Placeholder = "branch name"
+	ti.CharLimit = 200
+	ti.Width = 40
+	ti.Focus()
+	m.worktreeModal.addInput = ti
+	m.worktreeModal.addInlineErr = ""
+	return textinput.Blink
 }
 
 // renderWorktreeModalInner returns the multi-line content for the
@@ -194,9 +307,60 @@ func worktreeModalRowWidth(screenWidth int) int {
 	return w
 }
 
-// helpTextWorktreeModal is the hint line painted under the list. Step 6
-// will reuse this constant after wiring enter/a/d.
-const helpTextWorktreeModal = "[j/k] nav · [esc] close"
+// helpTextWorktreeModal is the hint line painted under the list. The
+// individual key labels mirror the matrix the action handlers gate on.
+const helpTextWorktreeModal = "[enter] switch · [a] add · [d] remove · [esc] close"
+
+// helpTextWorktreeAddInput / helpTextWorktreeRemoveConfirm — hints for
+// the two sub-modals reached from the list.
+const helpTextWorktreeAddInput = "[enter] add · [esc] cancel"
+const helpTextWorktreeRemoveClean = "[y] remove · [esc] cancel"
+const helpTextWorktreeRemoveDirty = "[Y] force (discards changes) · [y/esc] cancel"
+const helpTextWorktreeRemoveLocked = "[Y] force (overrides lock) · [y/esc] cancel"
+
+// renderWorktreeAddInputInner — header, textinput row, derived-path hint,
+// inline error or spacer (constant rows so the hint never bounces), and
+// the action hint. Mirrors renderRefNameInputInner's shape.
+func (m Model) renderWorktreeAddInputInner() string {
+	header := modalHeaderS.Render("[New worktree]")
+	input := m.worktreeModal.addInput.View()
+	branch := strings.TrimSpace(m.worktreeModal.addInput.Value())
+	pathHint := " "
+	if branch != "" {
+		pathHint = help.Render("→ " + deriveAddPath(m.workdir, branch))
+	}
+	errLine := " "
+	switch {
+	case m.worktreeModal.addInlineErr != "":
+		errLine = statusErrS.Render(m.worktreeModal.addInlineErr)
+	case m.worktreeModal.actionInFlight:
+		errLine = statusBusyS.Render("adding…")
+	}
+	hint := help.Render(helpTextWorktreeAddInput)
+	return strings.Join([]string{header, input, pathHint, errLine, hint}, "\n")
+}
+
+// renderWorktreeRemoveConfirmInner derives the prompt from the cached
+// dirty/locked state of the cursor entry. Force-removing a locked-AND-
+// dirty entry uses one combined `[Y] force` matrix — git itself handles
+// either failure mode with --force.
+func (m Model) renderWorktreeRemoveConfirmInner() string {
+	t := m.worktreeModal.removeTarget
+	header := confirmPromptS.Render("Remove worktree '" + filepath.Base(t.Path) + "'?")
+	sub := help.Render(t.Path)
+	hintText := helpTextWorktreeRemoveClean
+	switch {
+	case t.Locked:
+		hintText = helpTextWorktreeRemoveLocked
+	case m.worktreeModal.dirty[t.Path]:
+		hintText = helpTextWorktreeRemoveDirty
+	}
+	if m.worktreeModal.actionInFlight {
+		hintText = "removing…"
+	}
+	hint := help.Render(hintText)
+	return strings.Join([]string{header, sub, hint}, "\n")
+}
 
 // worktreeDirtyTimeout caps how long a per-worktree `git status` call may
 // run before the dirty fan-out drops it. Long enough for cold-cache repos,

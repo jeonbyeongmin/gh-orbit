@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/atotto/clipboard"
@@ -109,8 +110,16 @@ const (
 	// from `git worktree list --porcelain`, with an async dirty fan-out
 	// painting `●dirty` on rows whose `git status` returned non-empty.
 	// The 3-pane layout stays visible underneath; only j/k/enter/esc/a/d
-	// are accepted while open (Step 6 wires enter/a/d).
+	// are accepted while open.
 	viewModeWorktreeList
+	// viewModeWorktreeAddInput hosts the branch-name textinput for `a` on
+	// the worktree modal. The path is auto-derived (sibling directory of
+	// the active worktree's parent) so a single input clears the modal.
+	viewModeWorktreeAddInput
+	// viewModeWorktreeRemoveConfirm hosts the `d` confirm prompt. Hint
+	// matrix derives from dirty + locked: clean rows offer [y] remove,
+	// dirty/locked rows require [Y] for force.
+	viewModeWorktreeRemoveConfirm
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
@@ -428,6 +437,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.worktreeModal.dirty = make(map[string]bool)
 		}
 		m.worktreeModal.dirty[msg.path] = msg.dirty
+		return m, nil
+
+	case worktreeAddSucceededMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.actionInFlight = false
+		m.worktreeModal.addInput = textinput.Model{}
+		m.worktreeModal.addInlineErr = ""
+		m.mode = viewModeWorktreeList
+		m.status = "worktree added: " + msg.branch + " → " + filepath.Base(msg.path)
+		m.statusStyle = statusOkS
+		return m, m.reloadWorktreeModal()
+
+	case worktreeAddFailedMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.actionInFlight = false
+		m.worktreeModal.pendingAddPath = ""
+		m.worktreeModal.addInlineErr = firstLine(msg.err.Error())
+		// Stay in viewModeWorktreeAddInput so the user can fix the input.
+		return m, nil
+
+	case worktreeRemoveSucceededMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.actionInFlight = false
+		m.worktreeModal.removeTarget = git.Worktree{}
+		m.mode = viewModeWorktreeList
+		m.status = "worktree removed: " + filepath.Base(msg.path)
+		m.statusStyle = statusOkS
+		return m, m.reloadWorktreeModal()
+
+	case worktreeRemoveFailedMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.actionInFlight = false
+		m.worktreeModal.removeTarget = git.Worktree{}
+		m.mode = viewModeWorktreeList
+		m.status = "remove: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
 		return m, nil
 
 	case commitsStreamStartedMsg:
@@ -1145,6 +1198,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.mode == viewModeWorktreeList {
+			if m.worktreeModal.actionInFlight {
+				if msg.String() == "ctrl+c" {
+					m.cancelStream()
+					return m, tea.Quit
+				}
+				return m, nil
+			}
 			switch msg.String() {
 			case "j", "down":
 				if m.worktreeModal.cursor < len(m.worktreeModal.entries)-1 {
@@ -1156,6 +1216,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.worktreeModal.cursor--
 				}
 				return m, nil
+			case "enter":
+				if m.worktreeModal.cursor >= len(m.worktreeModal.entries) {
+					return m, nil
+				}
+				target := m.worktreeModal.entries[m.worktreeModal.cursor]
+				m.mode = viewModeNormal
+				m.worktreeModal = worktreeModalState{reqID: m.worktreeModal.reqID + 1}
+				return m, func() tea.Msg { return switchWorktreeMsg{path: target.Path} }
+			case "a":
+				m.mode = viewModeWorktreeAddInput
+				return m, m.openWorktreeAddInput()
+			case "d":
+				if m.worktreeModal.cursor >= len(m.worktreeModal.entries) {
+					return m, nil
+				}
+				target := m.worktreeModal.entries[m.worktreeModal.cursor]
+				if target.Path == m.workdir {
+					m.status = "remove: cannot remove current worktree — switch first"
+					m.statusStyle = statusErrS
+					return m, nil
+				}
+				m.worktreeModal.removeTarget = target
+				m.mode = viewModeWorktreeRemoveConfirm
+				return m, nil
 			case "esc":
 				m.mode = viewModeNormal
 				// Bump reqID so any in-flight dirty fan-out msgs are dropped
@@ -1165,6 +1249,78 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+c":
 				m.cancelStream()
 				return m, tea.Quit
+			}
+			return m, nil
+		}
+		if m.mode == viewModeWorktreeAddInput {
+			switch msg.String() {
+			case "esc":
+				m.mode = viewModeWorktreeList
+				m.worktreeModal.addInput = textinput.Model{}
+				m.worktreeModal.addInlineErr = ""
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			case "enter":
+				if m.worktreeModal.actionInFlight {
+					return m, nil
+				}
+				branch := strings.TrimSpace(m.worktreeModal.addInput.Value())
+				if branch == "" {
+					m.worktreeModal.addInlineErr = "branch name is empty"
+					return m, nil
+				}
+				path := deriveAddPath(m.workdir, branch)
+				m.worktreeModal.actionInFlight = true
+				m.worktreeModal.pendingAddPath = path
+				m.worktreeModal.addInlineErr = ""
+				return m, worktreeAddCmd(m.workdir, path, branch, m.worktreeModal.reqID)
+			}
+			var cmd tea.Cmd
+			m.worktreeModal.addInput, cmd = m.worktreeModal.addInput.Update(msg)
+			return m, cmd
+		}
+		if m.mode == viewModeWorktreeRemoveConfirm {
+			if m.worktreeModal.actionInFlight {
+				if msg.String() == "ctrl+c" {
+					m.cancelStream()
+					return m, tea.Quit
+				}
+				return m, nil
+			}
+			t := m.worktreeModal.removeTarget
+			isDirty := m.worktreeModal.dirty[t.Path]
+			isLocked := t.Locked
+			needsForce := isDirty || isLocked
+			switch msg.String() {
+			case "esc":
+				m.mode = viewModeWorktreeList
+				m.worktreeModal.removeTarget = git.Worktree{}
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			case "y":
+				if needsForce {
+					m.mode = viewModeWorktreeList
+					m.worktreeModal.removeTarget = git.Worktree{}
+					reason := "dirty"
+					if isLocked && !isDirty {
+						reason = "locked"
+					}
+					m.status = "remove: cancelled (" + reason + " — use [Y] to force)"
+					m.statusStyle = statusOkS
+					return m, nil
+				}
+				m.worktreeModal.actionInFlight = true
+				return m, worktreeRemoveCmd(m.workdir, t.Path, false, m.worktreeModal.reqID)
+			case "Y":
+				if !needsForce {
+					return m, nil
+				}
+				m.worktreeModal.actionInFlight = true
+				return m, worktreeRemoveCmd(m.workdir, t.Path, true, m.worktreeModal.reqID)
 			}
 			return m, nil
 		}
@@ -2395,6 +2551,10 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderStashDropConfirmInner()), m.width, m.height)
 	case viewModeWorktreeList:
 		return composeOverlay(base, renderModalBox(m.renderWorktreeModalInner()), m.width, m.height)
+	case viewModeWorktreeAddInput:
+		return composeOverlay(base, renderModalBox(m.renderWorktreeAddInputInner()), m.width, m.height)
+	case viewModeWorktreeRemoveConfirm:
+		return composeOverlay(base, renderModalBox(m.renderWorktreeRemoveConfirmInner()), m.width, m.height)
 	}
 	return base
 }

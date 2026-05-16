@@ -319,6 +319,245 @@ func stripANSI(s string) string {
 	return b.String()
 }
 
+func TestWorktreeModalEnterEmitsSwitchMsg(t *testing.T) {
+	prev := worktreesExec
+	defer func() { worktreesExec = prev }()
+	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
+		return []git.Worktree{
+			{Path: "/tmp/main", Branch: "main", IsMain: true},
+			{Path: "/tmp/feat", Branch: "feat"},
+		}, nil
+	}
+	m := New()
+	m.workdir = "/tmp/main"
+	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	updated, _ = m.Update(openCmd())
+	m = updated.(Model)
+	m.worktreeModal.cursor = 1 // feat
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Errorf("expected viewModeNormal after enter, got %v", m.mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected switchWorktreeMsg cmd, got nil")
+	}
+	// Drive the cmd to confirm it dispatches switchWorktreeMsg{path: /tmp/feat}.
+	msg, ok := cmd().(switchWorktreeMsg)
+	if !ok {
+		t.Fatalf("expected switchWorktreeMsg, got %T", cmd())
+	}
+	if msg.path != "/tmp/feat" {
+		t.Errorf("path: got %q want /tmp/feat", msg.path)
+	}
+}
+
+func TestWorktreeModalRemoveRefusesActive(t *testing.T) {
+	prev := worktreesExec
+	defer func() { worktreesExec = prev }()
+	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
+		return []git.Worktree{{Path: "/tmp/main", Branch: "main", IsMain: true}}, nil
+	}
+	m := New()
+	m.workdir = "/tmp/main"
+	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	updated, _ = m.Update(openCmd())
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.mode != viewModeWorktreeList {
+		t.Errorf("d on active should keep modal open, got %v", m.mode)
+	}
+	if !strings.Contains(m.status, "cannot remove current worktree") {
+		t.Errorf("expected refusal status, got %q", m.status)
+	}
+}
+
+func TestWorktreeModalRemoveCleanFlow(t *testing.T) {
+	prevList := worktreesExec
+	prevRemove := worktreeRemoveExec
+	defer func() {
+		worktreesExec = prevList
+		worktreeRemoveExec = prevRemove
+	}()
+	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
+		return []git.Worktree{
+			{Path: "/tmp/main", Branch: "main", IsMain: true},
+			{Path: "/tmp/feat", Branch: "feat"},
+		}, nil
+	}
+	var seenForce bool
+	var seenPath string
+	worktreeRemoveExec = func(_ context.Context, _, path string, force bool) error {
+		seenPath = path
+		seenForce = force
+		return nil
+	}
+
+	m := New()
+	m.workdir = "/tmp/main"
+	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	updated, _ = m.Update(openCmd())
+	m = updated.(Model)
+	m.worktreeModal.cursor = 1 // feat
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.mode != viewModeWorktreeRemoveConfirm {
+		t.Fatalf("expected confirm mode, got %v", m.mode)
+	}
+
+	// y on a clean unlocked entry executes a non-force remove.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if !m.worktreeModal.actionInFlight {
+		t.Errorf("actionInFlight should be set during remove")
+	}
+	if cmd == nil {
+		t.Fatal("expected worktreeRemoveCmd, got nil")
+	}
+	resultMsg := cmd()
+	if _, ok := resultMsg.(worktreeRemoveSucceededMsg); !ok {
+		t.Fatalf("expected worktreeRemoveSucceededMsg, got %T", resultMsg)
+	}
+	if seenForce {
+		t.Errorf("clean remove should not pass force=true")
+	}
+	if seenPath != "/tmp/feat" {
+		t.Errorf("remove path: got %q want /tmp/feat", seenPath)
+	}
+}
+
+func TestWorktreeModalRemoveDirtyRequiresUppercaseY(t *testing.T) {
+	prevList := worktreesExec
+	prevRemove := worktreeRemoveExec
+	defer func() {
+		worktreesExec = prevList
+		worktreeRemoveExec = prevRemove
+	}()
+	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
+		return []git.Worktree{
+			{Path: "/tmp/main", Branch: "main", IsMain: true},
+			{Path: "/tmp/feat", Branch: "feat"},
+		}, nil
+	}
+	var seenForce bool
+	worktreeRemoveExec = func(_ context.Context, _, _ string, force bool) error {
+		seenForce = force
+		return nil
+	}
+
+	m := New()
+	m.workdir = "/tmp/main"
+	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	updated, _ = m.Update(openCmd())
+	m = updated.(Model)
+	m.worktreeModal.cursor = 1
+	m.worktreeModal.dirty = map[string]bool{"/tmp/feat": true}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+
+	// lowercase y on dirty entry → cancels (force needed).
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Errorf("lowercase y on dirty should not dispatch remove cmd")
+	}
+	if m.mode != viewModeWorktreeList {
+		t.Errorf("expected to return to list, got %v", m.mode)
+	}
+	if !strings.Contains(m.status, "dirty") {
+		t.Errorf("status should mention dirty, got %q", m.status)
+	}
+
+	// Re-open confirm, this time uppercase Y → force remove.
+	m.worktreeModal.removeTarget = git.Worktree{Path: "/tmp/feat", Branch: "feat"}
+	m.mode = viewModeWorktreeRemoveConfirm
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("uppercase Y should dispatch force remove")
+	}
+	_ = cmd()
+	if !seenForce {
+		t.Errorf("Y on dirty should pass force=true")
+	}
+}
+
+func TestWorktreeModalAddInputValidationAndSuccess(t *testing.T) {
+	prevList := worktreesExec
+	prevAdd := worktreeAddExec
+	prevCRF := checkRefFormatExec
+	defer func() {
+		worktreesExec = prevList
+		worktreeAddExec = prevAdd
+		checkRefFormatExec = prevCRF
+	}()
+	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
+		return []git.Worktree{{Path: "/tmp/main", Branch: "main", IsMain: true}}, nil
+	}
+	checkRefFormatExec = func(_ context.Context, _, _ string) error { return nil }
+	var seenPath, seenBranch string
+	var seenCreate bool
+	worktreeAddExec = func(_ context.Context, _, path, branch string, createBranch bool) error {
+		seenPath, seenBranch, seenCreate = path, branch, createBranch
+		return nil
+	}
+
+	m := New()
+	m.workdir = "/tmp/main"
+	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	updated, _ = m.Update(openCmd())
+	m = updated.(Model)
+
+	// `a` opens add input.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = updated.(Model)
+	if m.mode != viewModeWorktreeAddInput {
+		t.Fatalf("expected add input mode, got %v", m.mode)
+	}
+
+	// Empty branch → inline error.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.worktreeModal.addInlineErr == "" {
+		t.Errorf("expected inline error on empty submit")
+	}
+
+	// Type "feat-x" and submit.
+	m.worktreeModal.addInput.SetValue("feat-x")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected worktreeAddCmd")
+	}
+	if !m.worktreeModal.actionInFlight {
+		t.Errorf("actionInFlight should be set during add")
+	}
+	resultMsg := cmd()
+	if _, ok := resultMsg.(worktreeAddSucceededMsg); !ok {
+		t.Fatalf("expected worktreeAddSucceededMsg, got %T", resultMsg)
+	}
+	if seenBranch != "feat-x" {
+		t.Errorf("branch: got %q want feat-x", seenBranch)
+	}
+	if !seenCreate {
+		t.Errorf("createBranch should be true for v1")
+	}
+	wantPath := deriveAddPath("/tmp/main", "feat-x")
+	if seenPath != wantPath {
+		t.Errorf("path: got %q want %q", seenPath, wantPath)
+	}
+}
+
 func TestSwitchWorktreeNoopOnSamePath(t *testing.T) {
 	root := t.TempDir()
 	main := filepath.Join(root, "main")

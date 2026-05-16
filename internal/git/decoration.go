@@ -136,6 +136,9 @@ func MergeLocalRemotePairs(refs []DecoratedRef) []ChipRef {
 }
 
 func classifyRefName(name string) RefKind {
+	if strings.HasPrefix(name, "stash@{") {
+		return RefKindStash
+	}
 	if _, ok := stripRemotePrefix(name); ok {
 		return RefKindRemote
 	}

@@ -386,15 +386,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.refs, cmd = m.refs.Update(msg)
 		// Apply pending refs cursor jumps after the model has the new ref
-		// list. SelectByName / SelectAfterDeleted are no-ops on a load
-		// failure (refs.loaded stays false), so the order is safe.
-		if name := m.pendingRefCursorName; name != "" {
-			m.refs.SelectByName(name)
+		// list. Priority: name (create / rename) > delete > persist
+		// (reload-cursor snapshot). The switch fires at most one branch and
+		// drops the persist handle whenever a higher-priority branch wins,
+		// so a name/delete-armed reload doesn't leak persist state to the
+		// next cycle. SelectByName / SelectAfterDeleted / SelectByNameKind
+		// are all no-ops on a load failure (refs.loaded stays false).
+		switch {
+		case m.pendingRefCursorName != "":
+			m.refs.SelectByName(m.pendingRefCursorName)
 			m.pendingRefCursorName = ""
-		}
-		if h := m.pendingRefCursorAfterDelete; h.name != "" {
-			m.refs.SelectAfterDeleted(h.name, h.kind)
+			m.pendingRefCursorPersist = persistedRefHandle{}
+		case m.pendingRefCursorAfterDelete.name != "":
+			m.refs.SelectAfterDeleted(m.pendingRefCursorAfterDelete.name, m.pendingRefCursorAfterDelete.kind)
 			m.pendingRefCursorAfterDelete = deletedRefHandle{}
+			m.pendingRefCursorPersist = persistedRefHandle{}
+		case m.pendingRefCursorPersist.name != "" || m.pendingRefCursorPersist.stashHash != "":
+			h := m.pendingRefCursorPersist
+			if h.kind == git.RefKindStash && h.stashHash != "" {
+				if !m.refs.SelectStashByHash(h.stashHash) {
+					m.refs.SelectAfterDeleted(h.name, git.RefKindStash)
+				}
+			} else {
+				m.refs.SelectByNameKindOrNeighbor(h.name, h.kind)
+			}
+			m.pendingRefCursorPersist = persistedRefHandle{}
 		}
 		// Sync stash tips into the commit stream when the set has changed.
 		// reloadCmd is idempotent against an unchanged stash set — the next

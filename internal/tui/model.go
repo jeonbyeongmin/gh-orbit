@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/atotto/clipboard"
@@ -104,13 +106,27 @@ const (
 	// via the `,` keybind or by `enter` on the sticky `● Local Changes`
 	// row in the refs pane.
 	viewModeLocalChanges
+	// viewModeWorktreeList hosts the `w` worktree modal. Lists every entry
+	// from `git worktree list --porcelain`, with an async dirty fan-out
+	// painting `●dirty` on rows whose `git status` returned non-empty.
+	// The 3-pane layout stays visible underneath; only j/k/enter/esc/a/d
+	// are accepted while open.
+	viewModeWorktreeList
+	// viewModeWorktreeAddInput hosts the branch-name textinput for `a` on
+	// the worktree modal. The path is auto-derived (sibling directory of
+	// the active worktree's parent) so a single input clears the modal.
+	viewModeWorktreeAddInput
+	// viewModeWorktreeRemoveConfirm hosts the `d` confirm prompt. Hint
+	// matrix derives from dirty + locked: clean rows offer [y] remove,
+	// dirty/locked rows require [Y] for force.
+	viewModeWorktreeRemoveConfirm
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
 // the `?` help panel is open. Each helpData category renders as a 1-line
-// header + 1-line entries row, so 5 categories × 2 rows = 10. paneSizes
+// header + 1-line entries row, so 6 categories × 2 rows = 12. paneSizes
 // clamps this on small terminals.
-const helpExpandedHeight = 10
+const helpExpandedHeight = 12
 
 // pendingCheckout remembers what the user was trying to check out so the
 // "[s]tash & checkout" branch in the confirm modal can re-issue the same
@@ -153,6 +169,14 @@ type pendingCheckout struct {
 }
 
 type Model struct {
+	// workdir is the absolute path of the git working tree every wrapper
+	// invocation runs against. Seeded from os.Getwd() in New(); the worktree
+	// modal rewrites it on switch so all subsequent loadRefs / loadCommits /
+	// fetch / status / checkout / branch-write cmds re-target the new tree
+	// without per-call site changes. Empty string falls back to the process
+	// cwd (git's default `cmd.Dir == ""` behavior) — the New() Getwd
+	// fallback path leans on this.
+	workdir       string
 	width, height int
 	focused       pane
 	mode          viewMode
@@ -276,6 +300,16 @@ type Model struct {
 	// staged) to drop stale responses when the user keeps moving the
 	// cursor mid-load.
 	localChangesReqID uint64
+	// currentWorktreeDirty is the latest dirty-marker bit for m.workdir,
+	// refreshed by loadCurrentWorktreeDirtyCmd on Init / refsLoadedMsg /
+	// switchWorktreeMsg. The refs sidebar header reads it through
+	// refreshWorktreeHeader; nothing else consumes it directly.
+	currentWorktreeDirty bool
+	// worktreeModal backs viewModeWorktreeList. Modal open bumps reqID and
+	// arms loading=true; the post-load fan-out tags each entry's dirty
+	// state via worktreeDirtyResultMsg. Stale msgs (modal closed +
+	// reopened before all dirty responses landed) drop on reqID mismatch.
+	worktreeModal worktreeModalState
 }
 
 // pendingStashAction backs viewModeStashActionPicker. subject is the
@@ -306,6 +340,15 @@ func New() Model {
 		currentRefs:  []string{refsAllSentinel},
 		streamReqID:  1,
 	}
+	if wd, err := os.Getwd(); err == nil {
+		m.workdir = wd
+	} else {
+		// Non-fatal — every wrapper still accepts "" and git falls back to
+		// the process cwd. Surface so the user understands why the worktree
+		// header / modal might show a confusing path.
+		m.status = "workdir resolve failed: " + firstLine(err.Error())
+		m.statusStyle = statusErrS
+	}
 	prefs, err := config.LoadPrefs()
 	if err != nil {
 		// Non-fatal — pull falls back to git config / ff-only. Surface once
@@ -320,9 +363,10 @@ func New() Model {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		loadCommitsCmd("", m.currentRefs, nil, nil, m.streamReqID),
-		loadRefsCmd(""),
-		loadHeadAncestorsCmd("", m.streamReqID),
+		loadCommitsCmd(m.workdir, m.currentRefs, nil, nil, m.streamReqID),
+		loadRefsCmd(m.workdir),
+		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
+		loadCurrentWorktreeDirtyCmd(m.workdir),
 	)
 }
 
@@ -340,6 +384,103 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == viewModeDiffWindow {
 			m.diff.SetPatchViewportSize(m.width, m.height-1)
 		}
+		return m, nil
+
+	case switchWorktreeMsg:
+		next, cmd := m.switchWorktree(msg.path)
+		return next, cmd
+
+	case currentWorktreeDirtyMsg:
+		// Drop stale results from a previous worktree — m.workdir may have
+		// flipped after the cmd fired but before its goroutine returned.
+		if msg.dir != m.workdir {
+			return m, nil
+		}
+		m.currentWorktreeDirty = msg.dirty
+		m.refreshWorktreeHeader()
+		return m, nil
+
+	case worktreesLoadedMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.loading = false
+		m.worktreeModal.entries = msg.entries
+		m.worktreeModal.loadErr = nil
+		// Seed cursor on the active worktree row so the user starts where
+		// they already are; falls through to 0 when no entry matches.
+		for i, e := range msg.entries {
+			if e.Path == m.workdir {
+				m.worktreeModal.cursor = i
+				break
+			}
+		}
+		paths := make([]string, 0, len(msg.entries))
+		for _, e := range msg.entries {
+			paths = append(paths, e.Path)
+		}
+		return m, worktreeDirtyFanoutCmd(m.worktreeModal.reqID, paths)
+
+	case worktreesLoadFailedMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.loading = false
+		m.worktreeModal.loadErr = msg.err
+		return m, nil
+
+	case worktreeDirtyResultMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		if m.worktreeModal.dirty == nil {
+			m.worktreeModal.dirty = make(map[string]bool)
+		}
+		m.worktreeModal.dirty[msg.path] = msg.dirty
+		return m, nil
+
+	case worktreeAddSucceededMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.actionInFlight = false
+		m.worktreeModal.addInput = textinput.Model{}
+		m.worktreeModal.addInlineErr = ""
+		m.mode = viewModeWorktreeList
+		m.status = "worktree added: " + msg.branch + " → " + filepath.Base(msg.path)
+		m.statusStyle = statusOkS
+		return m, m.reloadWorktreeModal()
+
+	case worktreeAddFailedMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.actionInFlight = false
+		m.worktreeModal.pendingAddPath = ""
+		m.worktreeModal.addInlineErr = firstLine(msg.err.Error())
+		// Stay in viewModeWorktreeAddInput so the user can fix the input.
+		return m, nil
+
+	case worktreeRemoveSucceededMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.actionInFlight = false
+		m.worktreeModal.removeTarget = git.Worktree{}
+		m.mode = viewModeWorktreeList
+		m.status = "worktree removed: " + filepath.Base(msg.path)
+		m.statusStyle = statusOkS
+		return m, m.reloadWorktreeModal()
+
+	case worktreeRemoveFailedMsg:
+		if msg.reqID != m.worktreeModal.reqID {
+			return m, nil
+		}
+		m.worktreeModal.actionInFlight = false
+		m.worktreeModal.removeTarget = git.Worktree{}
+		m.mode = viewModeWorktreeList
+		m.status = "remove: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
 		return m, nil
 
 	case commitsStreamStartedMsg:
@@ -433,6 +574,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// reloadCmd is idempotent against an unchanged stash set — the next
 		// refsLoadedMsg will see the same hashes and skip this branch.
 		if _, ok := msg.(refsLoadedMsg); ok {
+			m.refreshWorktreeHeader()
 			if hashes, byHash, changed := diffStashRefs(m.refs.StashRefs(), m.currentStashHashes); changed {
 				m.currentStashHashes = hashes
 				m.currentStashByHash = byHash
@@ -586,8 +728,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Batch(
-			loadDiffStatCmd("", msg.hash, msg.reqID),
-			loadCommitDetailCmd("", msg.hash, msg.reqID),
+			loadDiffStatCmd(m.workdir, msg.hash, msg.reqID),
+			loadCommitDetailCmd(m.workdir, msg.hash, msg.reqID),
 		)
 
 	case diffStatLoadedMsg:
@@ -692,12 +834,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ffInFlight = true
 			m.status = ffLabel(msg.branch, msg.advance) + " …"
 			m.statusStyle = statusBusyS
-			return m, ffOnlyCmd("", msg.branch, msg.hash)
+			return m, ffOnlyCmd(m.workdir, msg.branch, msg.hash)
 		case graphActionCheckoutAndFF:
 			m.ffInFlight = true
 			m.status = "fast-forward: " + msg.branch + " (checkout + ff) …"
 			m.statusStyle = statusBusyS
-			return m, checkoutThenFFCmd("", msg.branch, msg.hash)
+			return m, checkoutThenFFCmd(m.workdir, msg.branch, msg.hash)
 		case graphActionDetach:
 			var cmd tea.Cmd
 			m, cmd = m.beginCheckout(msg.hash, true)
@@ -1021,7 +1163,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localChangesAddSucceededMsg:
 		m.status = "staged " + msg.path
 		m.statusStyle = statusOkS
-		return m, loadStatusCmd("")
+		return m, loadStatusCmd(m.workdir)
 
 	case localChangesAddFailedMsg:
 		m.status = "stage " + msg.path + ": " + firstLine(msg.err.Error())
@@ -1031,7 +1173,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localChangesRestoreSucceededMsg:
 		m.status = "unstaged " + msg.path
 		m.statusStyle = statusOkS
-		return m, loadStatusCmd("")
+		return m, loadStatusCmd(m.workdir)
 
 	case localChangesRestoreFailedMsg:
 		m.status = "unstage " + msg.path + ": " + firstLine(msg.err.Error())
@@ -1052,6 +1194,133 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			case "j", "k", "down", "up", "pgdown", "pgup":
 				return m, m.diff.ScrollPatch(msg)
+			}
+			return m, nil
+		}
+		if m.mode == viewModeWorktreeList {
+			if m.worktreeModal.actionInFlight {
+				if msg.String() == "ctrl+c" {
+					m.cancelStream()
+					return m, tea.Quit
+				}
+				return m, nil
+			}
+			switch msg.String() {
+			case "j", "down":
+				if m.worktreeModal.cursor < len(m.worktreeModal.entries)-1 {
+					m.worktreeModal.cursor++
+				}
+				return m, nil
+			case "k", "up":
+				if m.worktreeModal.cursor > 0 {
+					m.worktreeModal.cursor--
+				}
+				return m, nil
+			case "enter":
+				if m.worktreeModal.cursor >= len(m.worktreeModal.entries) {
+					return m, nil
+				}
+				target := m.worktreeModal.entries[m.worktreeModal.cursor]
+				m.mode = viewModeNormal
+				m.worktreeModal = worktreeModalState{reqID: m.worktreeModal.reqID + 1}
+				return m, func() tea.Msg { return switchWorktreeMsg{path: target.Path} }
+			case "a":
+				m.mode = viewModeWorktreeAddInput
+				return m, m.openWorktreeAddInput()
+			case "d":
+				if m.worktreeModal.cursor >= len(m.worktreeModal.entries) {
+					return m, nil
+				}
+				target := m.worktreeModal.entries[m.worktreeModal.cursor]
+				if target.Path == m.workdir {
+					m.status = "remove: cannot remove current worktree — switch first"
+					m.statusStyle = statusErrS
+					return m, nil
+				}
+				m.worktreeModal.removeTarget = target
+				m.mode = viewModeWorktreeRemoveConfirm
+				return m, nil
+			case "esc":
+				m.mode = viewModeNormal
+				// Bump reqID so any in-flight dirty fan-out msgs are dropped
+				// instead of mutating the next modal-open's state.
+				m.worktreeModal = worktreeModalState{reqID: m.worktreeModal.reqID + 1}
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+		if m.mode == viewModeWorktreeAddInput {
+			switch msg.String() {
+			case "esc":
+				m.mode = viewModeWorktreeList
+				m.worktreeModal.addInput = textinput.Model{}
+				m.worktreeModal.addInlineErr = ""
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			case "enter":
+				if m.worktreeModal.actionInFlight {
+					return m, nil
+				}
+				branch := strings.TrimSpace(m.worktreeModal.addInput.Value())
+				if branch == "" {
+					m.worktreeModal.addInlineErr = "branch name is empty"
+					return m, nil
+				}
+				path := deriveAddPath(m.workdir, branch)
+				m.worktreeModal.actionInFlight = true
+				m.worktreeModal.pendingAddPath = path
+				m.worktreeModal.addInlineErr = ""
+				return m, worktreeAddCmd(m.workdir, path, branch, m.worktreeModal.reqID)
+			}
+			var cmd tea.Cmd
+			m.worktreeModal.addInput, cmd = m.worktreeModal.addInput.Update(msg)
+			return m, cmd
+		}
+		if m.mode == viewModeWorktreeRemoveConfirm {
+			if m.worktreeModal.actionInFlight {
+				if msg.String() == "ctrl+c" {
+					m.cancelStream()
+					return m, tea.Quit
+				}
+				return m, nil
+			}
+			t := m.worktreeModal.removeTarget
+			isDirty := m.worktreeModal.dirty[t.Path]
+			isLocked := t.Locked
+			needsForce := isDirty || isLocked
+			switch msg.String() {
+			case "esc":
+				m.mode = viewModeWorktreeList
+				m.worktreeModal.removeTarget = git.Worktree{}
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			case "y":
+				if needsForce {
+					m.mode = viewModeWorktreeList
+					m.worktreeModal.removeTarget = git.Worktree{}
+					reason := "dirty"
+					if isLocked && !isDirty {
+						reason = "locked"
+					}
+					m.status = "remove: cancelled (" + reason + " — use [Y] to force)"
+					m.statusStyle = statusOkS
+					return m, nil
+				}
+				m.worktreeModal.actionInFlight = true
+				return m, worktreeRemoveCmd(m.workdir, t.Path, false, m.worktreeModal.reqID)
+			case "Y":
+				if !needsForce {
+					return m, nil
+				}
+				m.worktreeModal.actionInFlight = true
+				return m, worktreeRemoveCmd(m.workdir, t.Path, true, m.worktreeModal.reqID)
 			}
 			return m, nil
 		}
@@ -1113,7 +1382,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.refNameInput.inlineErr = ""
 				m.refNameInput.validating = true
-				return m, checkRefFormatCmd("", name)
+				return m, checkRefFormatCmd(m.workdir, name)
 			}
 			var cmd tea.Cmd
 			m.refNameInput.input, cmd = m.refNameInput.input.Update(msg)
@@ -1159,14 +1428,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.checkoutInFlight = true
 				m.status = "stash: popping " + p.label + "…"
 				m.statusStyle = statusBusyS
-				return m, stashPopCmd("", p.label)
+				return m, stashPopCmd(m.workdir, p.label)
 			case "a":
 				p := m.pendingStashAction
 				m.mode = viewModeNormal
 				m.checkoutInFlight = true
 				m.status = "stash: applying " + p.label + "…"
 				m.statusStyle = statusBusyS
-				return m, stashApplyCmd("", p.label)
+				return m, stashApplyCmd(m.workdir, p.label)
 			}
 			return m, nil
 		}
@@ -1187,7 +1456,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refActionInFlight = true
 				m.status = "stash: dropping " + p.label + "…"
 				m.statusStyle = statusBusyS
-				return m, stashDropCmd("", p.label)
+				return m, stashDropCmd(m.workdir, p.label)
 			}
 			return m, nil
 		}
@@ -1208,7 +1477,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "tab":
 				return m.cycleLocalChangesFocus(), nil
 			case "r":
-				return m, loadStatusCmd("")
+				return m, loadStatusCmd(m.workdir)
 			}
 			// Tree sub-focus owns cursor movement + stage/unstage.
 			// Diff sub-focus owns viewport scroll. paneRefs focus inside the
@@ -1236,12 +1505,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if p.withFF {
 					m.ffInFlight = true
 					m.status = "fast-forward: " + p.ref + " (stashing…)"
-					return m, stashThenFFCmd("", p.ref, p.ffHash)
+					return m, stashThenFFCmd(m.workdir, p.ref, p.ffHash)
 				}
 				if p.withCheckoutFF {
 					m.ffInFlight = true
 					m.status = "fast-forward: " + p.ref + " (checkout + ff, stashing…)"
-					return m, stashThenCheckoutThenFFCmd("", p.ref, p.ffHash)
+					return m, stashThenCheckoutThenFFCmd(m.workdir, p.ref, p.ffHash)
 				}
 				m.checkoutInFlight = true
 				if p.withPull {
@@ -1255,7 +1524,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					)
 				}
 				m.status = "checkout: " + p.ref + " (stashing…)"
-				return m, stashThenCheckoutCmd("", p.ref, p.detached)
+				return m, stashThenCheckoutCmd(m.workdir, p.ref, p.detached)
 			case "a", "esc":
 				m.mode = viewModeNormal
 				p := m.pendingCheckout
@@ -1296,7 +1565,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fetchInFlight = true
 			m.status = "fetching…"
 			m.statusStyle = statusBusyS
-			return m, fetchCmd("")
+			return m, fetchCmd(m.workdir)
 		case "P":
 			if m.pullInFlight {
 				return m, nil
@@ -1304,13 +1573,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pullInFlight = true
 			m.status = "pulling…"
 			m.statusStyle = statusBusyS
-			return m, pullCmd("", m.pullPrefStrategy)
+			return m, pullCmd(m.workdir, m.pullPrefStrategy)
 		case "r":
 			return m, m.reloadCmd()
 		case ",":
 			cmd := m.enterLocalChangesMode()
 			m.status = "local changes"
 			m.statusStyle = statusOkS
+			return m, cmd
+		case "w":
+			// Bubble Tea must own the focus during a textinput inside the
+			// refs name modal etc. — the early `if m.mode == viewMode*`
+			// branches above already swallow keys for those modes, so by
+			// the time we reach here we know the user isn't typing.
+			cmd := m.openWorktreeModal()
+			m.mode = viewModeWorktreeList
 			return m, cmd
 		case "ctrl+up":
 			m.adjustSplit(-splitRatioStep)
@@ -1352,7 +1629,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusBusyS
 			log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d, remotes=%d, stashes=%d)",
 				shortHash(c.Hash), len(locals), len(remotes), len(stashes))
-			return m, evaluateGraphActionCmd("", c.Hash, locals, remotes, stashes)
+			return m, evaluateGraphActionCmd(m.workdir, c.Hash, locals, remotes, stashes)
 		case "d":
 			// Refs focus reinterprets `d` as the delete intent so the
 			// destructive ref-write key doesn't collide with the patch
@@ -1369,7 +1646,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.diff.BeginPatchLoad(c.Hash, m.diffReqID)
 			m.mode = viewModeDiffWindow
 			m.diff.SetPatchViewportSize(m.width, m.height-1)
-			return m, loadDiffPatchCmd("", c.Hash, m.diffReqID)
+			return m, loadDiffPatchCmd(m.workdir, c.Hash, m.diffReqID)
 		}
 		switch m.focused {
 		case paneRefs:
@@ -1442,7 +1719,7 @@ func (m *Model) enterLocalChangesMode() tea.Cmd {
 	m.focused = paneGraph
 	m.localChanges.SetFocus(paneLCTree)
 	m.applyPaneSizes()
-	return loadStatusCmd("")
+	return loadStatusCmd(m.workdir)
 }
 
 // exitLocalChangesMode flips back to the normal layout. Entries / cursor
@@ -1513,7 +1790,7 @@ func (m Model) dispatchLocalChangesDiff() (tea.Model, tea.Cmd) {
 	}
 	m.localChangesReqID++
 	m.localChanges.BeginDiffLoad(m.localChangesReqID)
-	return m, loadDiffCmd("", e.Path, e.Staged(), e.Untracked, m.localChangesReqID)
+	return m, loadDiffCmd(m.workdir, e.Path, e.Staged(), e.Untracked, m.localChangesReqID)
 }
 
 // dispatchLocalChangesStage picks Add vs. RestoreStaged based on which
@@ -1528,12 +1805,12 @@ func (m Model) dispatchLocalChangesStage() (tea.Model, tea.Cmd) {
 		m.localChanges.ScheduleSelectAfterReload(e.Path, false)
 		m.status = "unstage " + e.Path + "…"
 		m.statusStyle = statusBusyS
-		return m, restoreStagedCmd("", e.Path)
+		return m, restoreStagedCmd(m.workdir, e.Path)
 	}
 	m.localChanges.ScheduleSelectAfterReload(e.Path, true)
 	m.status = "stage " + e.Path + "…"
 	m.statusStyle = statusBusyS
-	return m, addCmd("", e.Path)
+	return m, addCmd(m.workdir, e.Path)
 }
 
 // adjustSplit nudges the graph/tab split ratio by delta percent and reflows
@@ -1587,7 +1864,7 @@ func (m Model) beginCheckout(ref string, detached bool) (Model, tea.Cmd) {
 	m.pendingCheckout = pendingCheckout{ref: ref, detached: detached}
 	m.status = checkoutLabel(ref, detached) + " …"
 	m.statusStyle = statusBusyS
-	return m, checkoutCmd("", ref, detached)
+	return m, checkoutCmd(m.workdir, ref, detached)
 }
 
 // resolvePullEligibility decides whether `p` should follow the checkout
@@ -1633,7 +1910,7 @@ func (m Model) beginCheckoutWithPull(ref string, detached bool, skipReason strin
 		m.status = checkoutLabel(ref, detached) + " + pull …"
 	}
 	m.statusStyle = statusBusyS
-	return m, checkoutThenPullCmd("", ref, detached, m.pullPrefStrategy, skipReason)
+	return m, checkoutThenPullCmd(m.workdir, ref, detached, m.pullPrefStrategy, skipReason)
 }
 
 // checkoutLabel renders the user-facing "checkout: …" prefix shared by the
@@ -1781,7 +2058,7 @@ func (m Model) dispatchRefDelete(scope deleteScope) (Model, tea.Cmd) {
 		m.status = "deleting remote '" + d.remote + "/" + d.remoteBranch + "'…"
 	}
 	m.statusStyle = statusBusyS
-	return m, branchDeleteCmd("", target, scope)
+	return m, branchDeleteCmd(m.workdir, target, scope)
 }
 
 // dispatchRefCreate fires branchCreateCmd from the validated modal state
@@ -1795,7 +2072,7 @@ func (m Model) dispatchRefCreate(name string) (Model, tea.Cmd) {
 	m.refNameInput.validating = false
 	m.status = "creating '" + name + "'…"
 	m.statusStyle = statusBusyS
-	return m, branchCreateCmd("", name, m.refNameInput.base)
+	return m, branchCreateCmd(m.workdir, name, m.refNameInput.base)
 }
 
 // dispatchRefRename fires branchRenameCmd from the validated modal state.
@@ -1811,7 +2088,7 @@ func (m Model) dispatchRefRename(name string) (Model, tea.Cmd) {
 	headWasOld := src.IsHead
 	m.status = "renaming '" + src.ShortName + "' → '" + name + "'…"
 	m.statusStyle = statusBusyS
-	return m, branchRenameCmd("", src.ShortName, name, headWasOld)
+	return m, branchRenameCmd(m.workdir, src.ShortName, name, headWasOld)
 }
 
 // ffLabel renders the user-facing "fast-forward: <branch> +<N>" status
@@ -1881,9 +2158,9 @@ func (m *Model) reloadCmd() tea.Cmd {
 	m.refs.ResetForReload()
 	return tea.Batch(
 		resetCmd,
-		loadCommitsCmd("", m.currentRefs, m.currentStashHashes, m.currentStashByHash, m.streamReqID),
-		loadRefsCmd(""),
-		loadHeadAncestorsCmd("", m.streamReqID),
+		loadCommitsCmd(m.workdir, m.currentRefs, m.currentStashHashes, m.currentStashByHash, m.streamReqID),
+		loadRefsCmd(m.workdir),
+		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 	)
 }
 
@@ -2272,6 +2549,12 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderStashActionPickerInner()), m.width, m.height)
 	case viewModeStashDropConfirm:
 		return composeOverlay(base, renderModalBox(m.renderStashDropConfirmInner()), m.width, m.height)
+	case viewModeWorktreeList:
+		return composeOverlay(base, renderModalBox(m.renderWorktreeModalInner()), m.width, m.height)
+	case viewModeWorktreeAddInput:
+		return composeOverlay(base, renderModalBox(m.renderWorktreeAddInputInner()), m.width, m.height)
+	case viewModeWorktreeRemoveConfirm:
+		return composeOverlay(base, renderModalBox(m.renderWorktreeRemoveConfirmInner()), m.width, m.height)
 	}
 	return base
 }
@@ -2311,7 +2594,8 @@ func (m Model) tabBody() string {
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
 	case viewModeBranchPicker, viewModeRefNameInput, viewModeRefDeleteConfirm, viewModeCheckoutConfirm,
-		viewModeStashActionPicker, viewModeStashDropConfirm:
+		viewModeStashActionPicker, viewModeStashDropConfirm,
+		viewModeWorktreeList, viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm:
 		return " "
 	case viewModeHelp:
 		return renderHelpPanel(m.width, m.helpReservedRows())

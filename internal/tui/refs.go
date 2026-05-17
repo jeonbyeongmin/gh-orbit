@@ -31,6 +31,12 @@ type refModel struct {
 	// separate flag so cursor semantics ("n-th selectable ref") stay the
 	// same — every SelectBy* helper / persist path is unchanged.
 	onLocalChanges bool
+	// worktreeHeader is the preformatted one-line "Worktree: <name> ·
+	// <branch> · ●dirty" string painted at the very top of the pane. The
+	// Model layer rewrites it on every refsLoadedMsg / switchWorktreeMsg /
+	// dirty status result so the header tracks the live tree without the
+	// view layer ever computing it. Empty string hides the row entirely.
+	worktreeHeader string
 }
 
 func newRefsModel() refModel { return refModel{} }
@@ -466,6 +472,10 @@ func (r refModel) Selected() (git.Ref, bool) {
 // route enter on the refs pane into the mode-toggle path.
 func (r refModel) IsLocalChangesSelected() bool { return r.onLocalChanges }
 
+// SetWorktreeHeader rewrites the sticky one-line worktree summary at the
+// very top of the pane. Empty string hides the row.
+func (r *refModel) SetWorktreeHeader(s string) { r.worktreeHeader = s }
+
 func (r refModel) selectableCount() int {
 	total := 0
 	for i := range r.byKind {
@@ -513,6 +523,10 @@ const (
 	// (not r.cursor), so the normal cursorFlatRow lookup keeps its
 	// "n-th ref" semantics.
 	refRowLocalChanges
+	// refRowWorktreeHeader is the one-line summary of the current
+	// worktree, painted above refRowLocalChanges when the Model layer has
+	// set worktreeHeader. Never selectable.
+	refRowWorktreeHeader
 )
 
 type refRow struct {
@@ -522,10 +536,15 @@ type refRow struct {
 }
 
 // flatRows expands the sections into a flat row list in render order:
-// sticky Local Changes (always first) → gap → section header → empty/refs.
-// This is the index space visible-window slicing and scroll math share.
+// optional worktree header → sticky Local Changes → gap → section header
+// → empty/refs. This is the index space visible-window slicing and scroll
+// math share.
 func (r refModel) flatRows() []refRow {
-	rows := []refRow{{kind: refRowLocalChanges}}
+	var rows []refRow
+	if r.worktreeHeader != "" {
+		rows = append(rows, refRow{kind: refRowWorktreeHeader})
+	}
+	rows = append(rows, refRow{kind: refRowLocalChanges})
 	for i := range refSections {
 		rows = append(rows, refRow{kind: refRowGap, sectionIdx: i})
 		rows = append(rows, refRow{kind: refRowHeader, sectionIdx: i})
@@ -559,6 +578,8 @@ func (r refModel) cursorFlatRow(rows []refRow) (int, bool) {
 
 func (r refModel) renderRow(row refRow, width int, selected bool) string {
 	switch row.kind {
+	case refRowWorktreeHeader:
+		return refHeaderStyle.Render(runewidth.Truncate(r.worktreeHeader, width, "…"))
 	case refRowLocalChanges:
 		text := runewidth.Truncate("● Local Changes", width, "…")
 		if selected {
@@ -593,9 +614,15 @@ func (r refModel) View() string {
 	rows := r.flatRows()
 	cursorRow, _ := r.cursorFlatRow(rows)
 	if r.onLocalChanges {
-		// Highlight the sticky row instead of any ref. flatRows always
-		// emits it at index 0, so the lookup is constant — no scan.
-		cursorRow = 0
+		// Highlight the sticky row instead of any ref. With the optional
+		// worktree-header row above it, the sticky's flat index isn't
+		// constant anymore — scan for it.
+		for i, row := range rows {
+			if row.kind == refRowLocalChanges {
+				cursorRow = i
+				break
+			}
+		}
 	}
 
 	start, end := 0, len(rows)

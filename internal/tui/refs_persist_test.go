@@ -61,37 +61,6 @@ func TestSelectByNameKindIgnoresSameNameInOtherSection(t *testing.T) {
 	}
 }
 
-func TestSelectStashByHashHit(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 20)
-	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal},
-		{ShortName: "stash@{0}", Kind: git.RefKindStash, ObjectName: "aaa111"},
-		{ShortName: "stash@{1}", Kind: git.RefKindStash, ObjectName: "bbb222"},
-	}})
-	if !r.SelectStashByHash("bbb222") {
-		t.Fatal("hash hit returned false")
-	}
-	got, _ := r.Selected()
-	if got.ObjectName != "bbb222" {
-		t.Errorf("Selected.ObjectName=%q, want bbb222", got.ObjectName)
-	}
-}
-
-func TestSelectStashByHashMiss(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 20)
-	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
-		{ShortName: "stash@{0}", Kind: git.RefKindStash, ObjectName: "aaa111"},
-	}})
-	if r.SelectStashByHash("ffff") {
-		t.Error("miss returned true")
-	}
-	if r.SelectStashByHash("") {
-		t.Error("empty hash should return false fast")
-	}
-}
-
 func TestSelectByNameKindOrNeighborFallsBackToSection(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 20)
@@ -147,7 +116,7 @@ func simulateReload(t *testing.T, m Model, trigger tea.Msg, newRefs []git.Ref) M
 	t.Helper()
 	updated, _ := m.Update(trigger)
 	m = updated.(Model)
-	if m.pendingRefCursorPersist.name == "" && m.pendingRefCursorPersist.stashHash == "" {
+	if m.pendingRefCursorPersist.name == "" {
 		t.Fatalf("trigger %T did not arm pendingRefCursorPersist", trigger)
 	}
 	updated, _ = m.Update(refsLoadedMsg{refs: newRefs})
@@ -181,14 +150,6 @@ func TestPersistCursorAcrossCheckoutReload(t *testing.T) {
 	m := refsCursorPersistSetup(t, basicLocalRefs(), "feat/b", git.RefKindLocal)
 	m = simulateReload(t, m, checkoutSucceededMsg{ref: "feat/b"}, basicLocalRefs())
 	assertSelected(t, m, "feat/b", git.RefKindLocal)
-}
-
-func TestPersistCursorAcrossStashThenCheckoutReload(t *testing.T) {
-	m := refsCursorPersistSetup(t, basicLocalRefs(), "feat/a", git.RefKindLocal)
-	m = simulateReload(t, m,
-		stashThenCheckoutMsg{ref: "feat/a", stashLabel: "stash@{0}"},
-		basicLocalRefs())
-	assertSelected(t, m, "feat/a", git.RefKindLocal)
 }
 
 func TestPersistCursorAcrossCheckoutThenPullReload(t *testing.T) {
@@ -246,7 +207,7 @@ func TestPersistDroppedWhenPendingCursorNameWins(t *testing.T) {
 	updated, _ := m.Update(refsLoadedMsg{refs: basicLocalRefs()})
 	m = updated.(Model)
 	assertSelected(t, m, "feat/b", git.RefKindLocal)
-	if m.pendingRefCursorPersist.name != "" || m.pendingRefCursorPersist.stashHash != "" {
+	if m.pendingRefCursorPersist.name != "" {
 		t.Errorf("persist not cleared after name branch fired: %+v", m.pendingRefCursorPersist)
 	}
 }
@@ -262,59 +223,9 @@ func TestPersistDroppedWhenPendingDeleteWins(t *testing.T) {
 	updated, _ := m.Update(refsLoadedMsg{refs: postRefs})
 	m = updated.(Model)
 	assertSelected(t, m, "feat/b", git.RefKindLocal)
-	if m.pendingRefCursorPersist.name != "" || m.pendingRefCursorPersist.stashHash != "" {
+	if m.pendingRefCursorPersist.name != "" {
 		t.Errorf("persist not cleared after delete branch fired: %+v", m.pendingRefCursorPersist)
 	}
-}
-
-func TestPersistStashHashSurvivesPopRenumber(t *testing.T) {
-	// Cursor parks on stash@{1} (hash bbb). Then stash@{0} is popped, so
-	// the reload returns a single stash entry whose ShortName is now
-	// stash@{0} but whose hash is still bbb. Hash matching is what saves it.
-	refsBefore := []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
-		{ShortName: "stash@{0}", Kind: git.RefKindStash, ObjectName: "aaa"},
-		{ShortName: "stash@{1}", Kind: git.RefKindStash, ObjectName: "bbb"},
-	}
-	refsAfter := []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
-		{ShortName: "stash@{0}", Kind: git.RefKindStash, ObjectName: "bbb"},
-	}
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	// Pre-seed the stash snapshot so the first refsLoadedMsg does not
-	// trigger an auto-reload (which would wipe refs.loaded before the
-	// test gets to call SelectStashByHash).
-	m.currentStashHashes, m.currentStashByHash = stashTipsFromRefs(stashRefsOnly(refsBefore))
-	updated, _ = m.Update(refsLoadedMsg{refs: refsBefore})
-	m = updated.(Model)
-	if !m.refs.SelectStashByHash("bbb") {
-		t.Fatal("setup: SelectStashByHash(bbb) miss")
-	}
-	m.reloadCmd()
-	if m.pendingRefCursorPersist.stashHash != "bbb" {
-		t.Fatalf("persist did not capture stash hash: %+v", m.pendingRefCursorPersist)
-	}
-	// Pre-seed the post-pop stash snapshot too, otherwise the same
-	// auto-reload guard fires on the second refsLoadedMsg.
-	m.currentStashHashes, m.currentStashByHash = stashTipsFromRefs(stashRefsOnly(refsAfter))
-	updated, _ = m.Update(refsLoadedMsg{refs: refsAfter})
-	m = updated.(Model)
-	got, _ := m.refs.Selected()
-	if got.ObjectName != "bbb" {
-		t.Errorf("after stash pop reload, Selected.ObjectName=%q, want bbb", got.ObjectName)
-	}
-}
-
-func stashRefsOnly(refs []git.Ref) []git.Ref {
-	var out []git.Ref
-	for _, r := range refs {
-		if r.Kind == git.RefKindStash {
-			out = append(out, r)
-		}
-	}
-	return out
 }
 
 func TestPersistMissFallsBackToNeighbor(t *testing.T) {
@@ -344,7 +255,7 @@ func TestPersistEmptyRefSetDoesNotCrash(t *testing.T) {
 	updated, _ = m.Update(refsLoadedMsg{refs: nil})
 	m = updated.(Model)
 	m.reloadCmd()
-	if m.pendingRefCursorPersist.name != "" || m.pendingRefCursorPersist.stashHash != "" {
+	if m.pendingRefCursorPersist.name != "" {
 		t.Errorf("persist captured non-zero on empty ref set: %+v", m.pendingRefCursorPersist)
 	}
 	updated, _ = m.Update(refsLoadedMsg{refs: nil})

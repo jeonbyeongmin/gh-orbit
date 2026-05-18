@@ -20,6 +20,5 @@ Stderr matching turns common git failures into typed sentinels so the TUI can br
 
 - `ErrCheckoutNeedsCleanTree` — "Please commit your changes or stash them" / "would be overwritten" / "Your local changes". Drives the dirty-tree confirm flow ([checkout.md](checkout.md)).
 - `ErrBranchAlreadyExists`, `ErrInvalidRefName`, `ErrBranchNotFullyMerged` — branch lifecycle ([branches.md](branches.md)).
-- `ErrStashApplyConflict` — stash apply CONFLICT ([stash.md](stash.md)).
 
 Add new sentinels when a TUI flow needs to react to a specific git failure mode; otherwise pass stderr through unchanged.

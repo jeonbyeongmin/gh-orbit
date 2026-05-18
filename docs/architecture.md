@@ -9,7 +9,7 @@ Fork-style three-pane TUI. Refs sidebar, commit graph on top-right, detail tab b
 │ local  │                                      │
 │ remote ├──────────────────────────────────────┤
 │ tags   │ [Commit] · Changes  (40%)            │
-│ stash  │ author / date / parents / sign       │
+│        │ author / date / parents / sign       │
 │        │ full message — or — file-list ↔ diff │
 └────────┴──────────────────────────────────────┘
 ```
@@ -37,9 +37,9 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `o`                 | refs          | jump graph cursor to ref tip                                                                                          |
 | `a`                 | refs          | unified `--all` view                                                                                                  |
 | `n`                 | refs          | new branch — see [branches.md](branches.md)                                                                           |
-| `d`                 | refs          | delete branch / drop stash — see [branches.md](branches.md) and [stash.md](stash.md)                                  |
+| `d`                 | refs          | delete branch — see [branches.md](branches.md)                                                                        |
 | `m`                 | refs          | rename local branch — see [branches.md](branches.md)                                                                  |
-| `enter`             | graph         | context-aware: checkout / FF / detach / stash picker — see [checkout.md](checkout.md) and [stash.md](stash.md)        |
+| `enter`             | graph         | context-aware: checkout / FF / detach — see [checkout.md](checkout.md)                                                |
 | `y`                 | Commit tab    | copy full hash to clipboard                                                                                           |
 | `d`                 | graph / tab   | open the focused commit's full patch overlay                                                                          |
 | `F`                 | global        | `git fetch --all` in background                                                                                       |

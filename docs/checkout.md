@@ -13,20 +13,10 @@ Translates the cursor ref into a local-name argument before invoking `git checko
 ## Dirty-tree confirm flow
 
 - The wrapper does **not** pre-flight `git status`. It runs the checkout, matches git's stderr, and wraps the failure with `ErrCheckoutNeedsCleanTree`. No race window between detection and the actual command.
-- On that sentinel the TUI enters `viewModeCheckoutConfirm`. Only `s` / `a` / `esc` / `ctrl+c` work; every other key is swallowed.
-- `s` runs `git stash push -m "gh-orbit: before checkout <ref>"` (no `-u`, untracked files stay in the working tree) and re-issues the checkout. The stash is **not** popped automatically — the status bar surfaces the `stash@{0}` label so the user can resolve it on their own time.
+- On that sentinel the TUI enters `viewModeCheckoutConfirm`. Only `a` / `esc` / `ctrl+c` work; every other key is swallowed.
 - `a` / `esc` clear `pendingCheckout` and leave the working tree alone.
 
-Variants for the other entry points reuse the same modal with flags:
-
-| flag                 | hint text                                | use                                                                |
-| -------------------- | ---------------------------------------- | ------------------------------------------------------------------ |
-| (default)            | `[s] stash & checkout`                   | refs `enter`                                                       |
-| `withPull=true`      | `[s] stash & checkout & pull`            | refs `p`                                                           |
-| `withFF=true`        | `[s] stash & fast-forward`               | graph `enter` same-branch FF (no checkout step)                    |
-| `withCheckoutFF=true`| `[s] stash & checkout & fast-forward`    | graph `enter` cross-branch FF                                      |
-
-All chains follow the no-auto-pop policy of `stashThenCheckoutCmd`, with one exception: `withPull` does pop (next section).
+The modal is reused for the same-branch FF (`withFF`), cross-branch FF (`withCheckoutFF`), and checkout-with-pull (`withPull`) paths — the hint text reflects which chain the abort applies to.
 
 ## refs `p` — checkout + pull
 
@@ -41,19 +31,12 @@ Pull eligibility decided at keypress time from the ref's `Kind` and `Upstream`:
 | Local branch with upstream                   | checkout, then pull                                             |
 | Remote-tracking ref                          | checkout (dwim creates local tracker), then pull                |
 
-Dirty-tree with `p`: modal hint is `[s] stash & checkout & pull` and `s` chains `stash → checkout → pull → stash pop`. The user's edits land on top of the freshly-pulled HEAD. Failure modes:
-
-- **Pull conflict** → stash pop still runs (chain treats pop as the final step). Status: `pull: CONFLICT — resolve in your terminal; stash preserved at stash@{0}`.
-- **Pull generic failure** (transport, auth, non-fast-forward) → stash preserved, pop **not** attempted. Status: `pull failed: <reason>; stash preserved at stash@{0}`. Working tree sits on the new ref's clean state.
-- **Stash pop conflict** (after a successful pull) → conflict markers written, stash entry preserved. Status: `pop conflict — resolve markers and run \`git stash drop\` (stash@{0})`. No modal — status bar is the only surface.
-
 ## graph `enter`
 
 Single context-aware shortcut. Action depends on the cursor commit's chip state and HEAD's relationship to the cursor:
 
 | cursor state                                                       | HEAD                                            | action                                                                                                              |
 | ------------------------------------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| cursor commit matches a stash entry (stash@{N})                    | —                                               | open `viewModeStashActionPicker` → `[p] pop / [a] apply / [esc]`. Wins over every branch / FF / detach branch below |
 | local branch chip 1 (`B`), HEAD on `B`                             | —                                               | no-op (`already on B`)                                                                                              |
 | local branch chip 1 (`B`), HEAD elsewhere                          | —                                               | `checkout B`                                                                                                        |
 | local branch chips ≥ 2, HEAD on one of them                        | —                                               | no-op                                                                                                               |

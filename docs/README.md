@@ -14,8 +14,7 @@ Reading order for a new contributor:
 3. [config.md](config.md) — where logs and prefs go.
 4. [checkout.md](checkout.md) — the largest behavioral surface
    (refs/graph `enter`, `p`, dirty-tree, fast-forward).
-5. [stash.md](stash.md) — Stashes section and its write actions.
-6. [branches.md](branches.md) — `n` / `d` / `m` branch lifecycle
+5. [branches.md](branches.md) — `n` / `d` / `m` branch lifecycle
    modals.
 
 [index.md](index.md) is the same map in one-line form, optimized for

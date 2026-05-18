@@ -1,7 +1,6 @@
 package git
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -57,18 +56,6 @@ var ErrPullConflict = errors.New("pull conflict")
 // stash-and-retry vs. abort decision instead of just dumping git's stderr.
 var ErrCheckoutNeedsCleanTree = errors.New("checkout needs clean working tree")
 
-// ErrStashPopConflict marks a `git stash pop` failure where the popped
-// changes collided with the post-checkout working tree. The TUI surfaces
-// this so the user knows conflict markers are present and the stash entry
-// is preserved (git keeps stash@{0} on conflict).
-var ErrStashPopConflict = errors.New("stash pop conflict")
-
-// ErrStashApplyConflict marks a `git stash apply` failure where the applied
-// changes collided with the working tree. Symmetric to ErrStashPopConflict —
-// the entry is preserved either way, but the TUI distinguishes the two so
-// the post-action status surface can name which command was attempted.
-var ErrStashApplyConflict = errors.New("stash apply conflict")
-
 // ErrFFNotPossible marks a `git merge --ff-only` rejection where the target
 // hash isn't a descendant of HEAD (divergence). The TUI sites that drive
 // MergeFFOnly normally pre-gate with IsAncestor so this surfaces only on a
@@ -108,12 +95,12 @@ func gitEnv() []string {
 }
 
 // wrapMergeLikeErr formats the post-run error for git commands that can
-// emit a "CONFLICT" marker (pull, stash pop, future merge/cherry-pick).
-// Both stdout and stderr are scanned because git writes the marker to
-// stdout during the merge phase but transport / strategy errors land on
-// stderr — capture both, prefer stderr's first non-empty line for the
-// human message. Conflict failures wrap conflictSentinel so callers can
-// branch on errors.Is; non-conflict failures fall through to wrapGitErr.
+// emit a "CONFLICT" marker (pull and future merge/cherry-pick). Both
+// stdout and stderr are scanned because git writes the marker to stdout
+// during the merge phase but transport / strategy errors land on stderr —
+// capture both, prefer stderr's first non-empty line for the human
+// message. Conflict failures wrap conflictSentinel so callers can branch
+// on errors.Is; non-conflict failures fall through to wrapGitErr.
 func wrapMergeLikeErr(label string, runErr error, stdout, stderr string, conflictSentinel error) error {
 	if runErr == nil {
 		return nil
@@ -203,145 +190,6 @@ func Checkout(ctx context.Context, dir, name string) error {
 // HEAD pointing at that commit. Same dirty-tree wrapping as Checkout.
 func CheckoutDetached(ctx context.Context, dir, hash string) error {
 	return runCheckout(ctx, dir, []string{"--detach", hash})
-}
-
-// Stash runs `git stash push -m <message>`. The "-u" flag is intentionally
-// not used: untracked files stay in the working tree across the checkout,
-// which matches Fork/lazygit habit and the interview decision. Callers
-// surface the conventional `stash@{0}` label to the user — git itself
-// re-indexes stashes on push, but in a single-user TUI session the newest
-// entry is always at slot 0.
-func Stash(ctx context.Context, dir, message string) error {
-	cmd := exec.CommandContext(ctx, "git", "stash", "push", "-m", message)
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	cmd.Stdout = io.Discard
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return wrapGitErr("git stash", err, stderr.String())
-	}
-	return nil
-}
-
-// StashPop runs `git stash pop [label]`. Empty label pops the implicit
-// stash@{0} (the dirty-tree checkout chain's auto-stash); a non-empty
-// label targets a specific slot for user-explicit pops. On conflict the
-// error chain includes ErrStashPopConflict so the TUI can surface
-// "marker(s) in tree, stash preserved" guidance (git keeps the entry on
-// conflict). Other failures (no stash, transport errors, …) are wrapped
-// with stderr.
-func StashPop(ctx context.Context, dir, label string) error {
-	args := []string{"stash", "pop"}
-	if label != "" {
-		args = append(args, label)
-	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	return wrapMergeLikeErr("git stash pop", cmd.Run(), stdout.String(), stderr.String(), ErrStashPopConflict)
-}
-
-// StashApply runs `git stash apply <label>` — apply without dropping. On
-// conflict the error chain includes ErrStashApplyConflict; the entry is
-// preserved either way (apply never drops).
-func StashApply(ctx context.Context, dir, label string) error {
-	cmd := exec.CommandContext(ctx, "git", "stash", "apply", label)
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	return wrapMergeLikeErr("git stash apply", cmd.Run(), stdout.String(), stderr.String(), ErrStashApplyConflict)
-}
-
-// StashDrop runs `git stash drop <label>` — destructive remove of a single
-// entry. No sentinel mapping: missing-label / index-out-of-range / lock
-// failures all surface as the wrapped stderr string. Re-indexing of later
-// slots is git's concern; callers reload refs after a successful drop.
-func StashDrop(ctx context.Context, dir, label string) error {
-	return runGitWrite(ctx, dir, "git stash drop", nil, "stash", "drop", label)
-}
-
-// StashEntry is one row from `git stash list`. Label is git's slot name
-// (e.g. "stash@{0}"); Hash is the commit object the entry points at;
-// Subject is the reflog subject (`%gs`) — typically
-// "WIP on <branch>: <hash> <message>" for an auto-stash, or
-// "On <branch>: <user message>" when `git stash push -m` was used.
-type StashEntry struct {
-	Label   string
-	Hash    string
-	Subject string
-}
-
-// stashListFormat: %gd = reflog selector ("stash@{N}"), %H = full commit
-// hash, %gs = reflog subject. NUL separators keep the parser stable
-// against subjects that contain spaces, colons, commas, or any printable
-// byte except NUL itself.
-const stashListFormat = "%gd%x00%H%x00%gs"
-
-// StashList runs `git stash list --format=...` and returns one StashEntry
-// per slot, newest first (git's natural order: stash@{0} ahead of
-// stash@{1}, ...). An empty stash returns (nil, nil).
-//
-// `git stash list` (without --format) shells out to log; with --format the
-// output is one record per line, NUL-separated fields. We use --format
-// rather than `git for-each-ref refs/stash` because the latter returns
-// only the top entry; --format lists the full reflog history of refs/stash.
-func StashList(ctx context.Context, dir string) ([]StashEntry, error) {
-	cmd := exec.CommandContext(ctx, "git", "stash", "list", "--format="+stashListFormat)
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("git stash list: start: %w", err)
-	}
-	entries, parseErr := parseStashList(stdout)
-	waitErr := cmd.Wait()
-	if waitErr != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			return nil, fmt.Errorf("git stash list: %w", waitErr)
-		}
-		return nil, fmt.Errorf("git stash list: %w: %s", waitErr, msg)
-	}
-	if parseErr != nil {
-		return nil, fmt.Errorf("git stash list: parse: %w", parseErr)
-	}
-	return entries, nil
-}
-
-func parseStashList(r io.Reader) ([]StashEntry, error) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	var out []StashEntry
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-		fields := strings.Split(line, "\x00")
-		if len(fields) != 3 {
-			return nil, fmt.Errorf("unexpected field count %d in %q", len(fields), line)
-		}
-		out = append(out, StashEntry{
-			Label:   fields[0],
-			Hash:    fields[1],
-			Subject: fields[2],
-		})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 // runCheckout is the shared body of Checkout and CheckoutDetached.

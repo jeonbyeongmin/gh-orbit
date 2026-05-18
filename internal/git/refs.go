@@ -19,7 +19,6 @@ const (
 	RefKindLocal
 	RefKindRemote
 	RefKindTag
-	RefKindStash
 )
 
 func (k RefKind) String() string {
@@ -30,8 +29,6 @@ func (k RefKind) String() string {
 		return "remote"
 	case RefKindTag:
 		return "tag"
-	case RefKindStash:
-		return "stash"
 	default:
 		return "unknown"
 	}
@@ -61,13 +58,11 @@ const (
 	refsHeadsPrefix   = "refs/heads/"
 	refsRemotesPrefix = "refs/remotes/"
 	refsTagsPrefix    = "refs/tags/"
-	refsStashName     = "refs/stash"
 )
 
-// defaultRefPatterns intentionally excludes refs/stash, refs/notes, refs/pull,
-// etc. — stash has its own UX surface (Stash section + StashList) and
-// for-each-ref on refs/stash returns only the top entry which would dedup-
-// collide with StashList's N entries.
+// defaultRefPatterns covers the namespaces the TUI renders. refs/notes,
+// refs/pull, refs/stash, etc. are intentionally excluded — they aren't
+// surfaced anywhere in the cockpit.
 var defaultRefPatterns = []string{refsHeadsPrefix, refsRemotesPrefix, refsTagsPrefix}
 
 // ForEachRef runs `git for-each-ref` and returns one Ref per matching entry.
@@ -183,8 +178,6 @@ func refKindFromName(fullName string) RefKind {
 		return RefKindRemote
 	case strings.HasPrefix(fullName, refsTagsPrefix):
 		return RefKindTag
-	case fullName == refsStashName || strings.HasPrefix(fullName, refsStashName+"@"):
-		return RefKindStash
 	default:
 		return RefKindUnknown
 	}

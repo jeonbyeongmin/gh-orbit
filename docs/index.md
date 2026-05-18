@@ -17,8 +17,6 @@ detail.
 - [checkout.md](checkout.md) — refs `enter` / `p`, graph `enter`,
   dirty-tree confirm flow, fast-forward variants. The "land on the
   agent's branch fast" surface.
-- [stash.md](stash.md) — Stashes refs section, graph injection,
-  `enter`/`d` write actions, conflict policy.
 - [branches.md](branches.md) — `n` / `d` / `m` modals for create /
   delete / rename, key matrix, modal mechanics. The "agent left a
   pile of branches behind" cleanup surface.
@@ -26,9 +24,8 @@ detail.
   remove, refs-pane sticky header, in-process switch + dirty fan-out.
   The "agent occupies worktree A, reviewer inspects worktree B" surface.
 
-When a behavior crosses files (e.g. dirty-tree stash chain shows up
-in both checkout and stash), the canonical doc is **checkout.md**
-for control flow, **stash.md** for the wrapper surface.
+When a behavior crosses files, the canonical doc is **checkout.md**
+for control flow and **git-wrappers.md** for the wrapper surface.
 
 ## Reading order for an AI agent
 
@@ -39,6 +36,6 @@ If you (the agent) were just dropped into this repo to make a change:
 2. Skim [git-wrappers.md](git-wrappers.md) before touching anything
    that runs git.
 3. Read the doc that matches the *surface* your task is on (checkout
-   / stash / branches / config).
+   / branches / config).
 4. Do not silently override an invariant documented here. If a doc
    is wrong, fix the doc as part of the same change.

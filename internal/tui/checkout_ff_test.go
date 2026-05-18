@@ -77,58 +77,6 @@ func TestFFOnlyCmdGenericFailureSurfaces(t *testing.T) {
 	}
 }
 
-func TestStashThenFFCmdSuccess(t *testing.T) {
-	var stashCalled, ffCalled bool
-	withChainStubs(t, chainStubs{
-		stash: func(context.Context, string, string) error { stashCalled = true; return nil },
-		mergeFFOnly: func(context.Context, string, string) error {
-			ffCalled = true
-			if !stashCalled {
-				t.Error("FF ran before stash")
-			}
-			return nil
-		},
-		countAhead: func(context.Context, string, string, string) (int, error) { return 2, nil },
-	})
-
-	msg := stashThenFFCmd("", "main", "abc1234")()
-	if !stashCalled || !ffCalled {
-		t.Errorf("stash=%v ff=%v, want both true", stashCalled, ffCalled)
-	}
-	got, ok := msg.(stashThenFFMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want stashThenFFMsg", msg)
-	}
-	if got.advance != 2 {
-		t.Errorf("advance = %d, want 2", got.advance)
-	}
-	if got.stashLabel != stashLabelHEAD {
-		t.Errorf("stashLabel = %q, want %q", got.stashLabel, stashLabelHEAD)
-	}
-}
-
-func TestStashThenFFCmdStashFailureBlocksFF(t *testing.T) {
-	boom := errors.New("stash refused")
-	var ffCalled bool
-	withChainStubs(t, chainStubs{
-		stash:       func(context.Context, string, string) error { return boom },
-		mergeFFOnly: func(context.Context, string, string) error { ffCalled = true; return nil },
-		countAhead:  func(context.Context, string, string, string) (int, error) { return 0, nil },
-	})
-
-	msg := stashThenFFCmd("", "main", "abc1234")()
-	if ffCalled {
-		t.Error("FF should not run if stash failed")
-	}
-	got, ok := msg.(ffFailedMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want ffFailedMsg", msg)
-	}
-	if !errors.Is(got.err, boom) {
-		t.Errorf("err = %v, want chain to include %v", got.err, boom)
-	}
-}
-
 func TestCheckoutThenFFCmdSuccess(t *testing.T) {
 	var coRan, ffRan bool
 	var coBranch, ffHash string
@@ -199,33 +147,5 @@ func TestCheckoutThenFFCmdFFFailureSurfaces(t *testing.T) {
 	}
 	if !errors.Is(got.err, git.ErrFFNotPossible) {
 		t.Errorf("err = %v, want ErrFFNotPossible chain", got.err)
-	}
-}
-
-func TestStashThenCheckoutThenFFCmdSuccess(t *testing.T) {
-	var stRan, coRan, ffRan bool
-	withChainStubs(t, chainStubs{
-		stash:    func(context.Context, string, string) error { stRan = true; return nil },
-		checkout: func(context.Context, string, string) error { coRan = true; return nil },
-		mergeFFOnly: func(context.Context, string, string) error {
-			ffRan = true
-			if !stRan || !coRan {
-				t.Error("FF ran before stash/checkout")
-			}
-			return nil
-		},
-		countAhead: func(context.Context, string, string, string) (int, error) { return 2, nil },
-	})
-
-	msg := stashThenCheckoutThenFFCmd("", "develop", "abc1234")()
-	if !stRan || !coRan || !ffRan {
-		t.Errorf("st=%v co=%v ff=%v, want all true", stRan, coRan, ffRan)
-	}
-	got, ok := msg.(stashThenCheckoutThenFFMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want stashThenCheckoutThenFFMsg", msg)
-	}
-	if got.advance != 2 || got.stashLabel != stashLabelHEAD {
-		t.Errorf("got = %+v, want advance=2 stashLabel=%q", got, stashLabelHEAD)
 	}
 }

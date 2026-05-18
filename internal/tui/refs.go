@@ -19,7 +19,7 @@ const refLoadTimeout = 30 * time.Second
 
 type refModel struct {
 	// byKind index matches refSections.
-	byKind  [4][]git.Ref
+	byKind  [3][]git.Ref
 	width   int
 	height  int
 	cursor  int
@@ -92,22 +92,6 @@ func loadRefsCmd(dir string) tea.Cmd {
 		refs, err := git.ForEachRef(ctx, git.ForEachRefOptions{Dir: dir})
 		if err != nil {
 			return refsLoadFailedMsg{err: err}
-		}
-		// Stash entries don't come from for-each-ref (excluded from
-		// defaultRefPatterns) because `for-each-ref refs/stash` returns only
-		// the top entry. StashList supplies the full reflog so the Stash
-		// section can show every entry.
-		stashes, stashErr := git.StashList(ctx, dir)
-		if stashErr != nil {
-			return refsLoadFailedMsg{err: stashErr}
-		}
-		for _, s := range stashes {
-			refs = append(refs, git.Ref{
-				FullName:   "refs/" + s.Label,
-				ShortName:  s.Label,
-				Kind:       git.RefKindStash,
-				ObjectName: s.Hash,
-			})
 		}
 		return refsLoadedMsg{refs: refs}
 	}
@@ -303,11 +287,6 @@ func (r refModel) LocalRefs() []git.Ref { return r.byKind[0] }
 // tracks this remote, then FF" cross-branch path.
 func (r refModel) RemoteRefs() []git.Ref { return r.byKind[1] }
 
-// StashRefs returns the cached stash-entry slice. The graph Enter
-// evaluator uses it to detect when the cursor commit is a stash so it can
-// open the pop/apply modal instead of the chip-driven dispatch.
-func (r refModel) StashRefs() []git.Ref { return r.byKind[3] }
-
 // SelectByName moves the cursor onto the first ref whose ShortName matches.
 // Search order is the visible section order (local → remote → tag) so a
 // post-create / post-rename jump lands on the local row even when a
@@ -347,33 +326,6 @@ func (r *refModel) SelectByNameKind(name string, kind git.RefKind) bool {
 		}
 		for _, ref := range r.byKind[i] {
 			if ref.ShortName == name {
-				r.cursor = idx
-				*r = r.scrollCursorIntoView()
-				return true
-			}
-			idx++
-		}
-		return false
-	}
-	return false
-}
-
-// SelectStashByHash moves the cursor onto the stash entry whose ObjectName
-// (commit hash) matches. Reloads can renumber stash@{N} after pop/drop, so
-// matching by ShortName would land on a different entry — hashes are stable
-// across the rename. Returns true on a hit.
-func (r *refModel) SelectStashByHash(hash string) bool {
-	if !r.loaded || hash == "" {
-		return false
-	}
-	idx := 0
-	for i, sec := range refSections {
-		if sec.kind != git.RefKindStash {
-			idx += len(r.byKind[i])
-			continue
-		}
-		for _, ref := range r.byKind[i] {
-			if ref.ObjectName == hash {
 				r.cursor = idx
 				*r = r.scrollCursorIntoView()
 				return true
@@ -484,8 +436,8 @@ func (r refModel) selectableCount() int {
 	return total
 }
 
-func partitionByKind(refs []git.Ref) [4][]git.Ref {
-	var out [4][]git.Ref
+func partitionByKind(refs []git.Ref) [3][]git.Ref {
+	var out [3][]git.Ref
 	for i, sec := range refSections {
 		for _, ref := range refs {
 			if ref.Kind == sec.kind {
@@ -503,11 +455,10 @@ type refSection struct {
 	kind  git.RefKind
 }
 
-var refSections = [4]refSection{
+var refSections = [3]refSection{
 	{"Local branches", git.RefKindLocal},
 	{"Remote branches", git.RefKindRemote},
 	{"Tags", git.RefKindTag},
-	{"Stashes", git.RefKindStash},
 }
 
 // refRowKind tags every visible line so View can slice by yOffset.

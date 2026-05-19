@@ -34,7 +34,6 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `ctrl+↑` / `ctrl+↓` | global        | resize graph/tab split                                                                                                |
 | `enter`             | refs          | checkout cursor ref — see [checkout.md](checkout.md)                                                                  |
 | `o`                 | refs          | jump graph cursor to ref tip                                                                                          |
-| `a`                 | refs          | unified `--all` view                                                                                                  |
 | `d`                 | refs          | delete branch (inline confirm) — see [branches.md](branches.md)                                                       |
 | `enter`             | graph         | context-aware: checkout / FF / detach — see [checkout.md](checkout.md)                                                |
 | `y`                 | Commit tab    | copy full hash to clipboard                                                                                           |

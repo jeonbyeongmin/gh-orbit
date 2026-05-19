@@ -79,17 +79,17 @@ Today the build wires up:
   - `ctrl+d` / `ctrl+u` — scroll the Changes-tab patch viewport
   - `enter` — jump graph cursor to the focused ref tip (refs pane) /
     open Local Changes view when on the `● Local Changes` row
-  - `a` — show every ref's commits (refs pane)
-  - `n` / `d` / `m` — new branch / delete (modal) / rename (refs pane);
-    see [docs/branches.md](./docs/branches.md)
+  - `d` — delete branch via inline confirm (refs pane) /
+    open patch overlay (graph / tab focus); see
+    [docs/branches.md](./docs/branches.md)
   - `y` — copy the focused commit's hash to the clipboard (Commit tab)
-  - `d` — open the patch overlay (graph / tab focus; refs focus is
-    delete)
   - `F` — `git fetch --all` in the background
-  - `P` — `git pull` in the background; strategy from
+  - `p` — `git pull` in the background; strategy from
     `~/.config/gh-orbit/config.toml` (`[pull] strategy = "ff-only" |
     "merge" | "rebase"`), then git's `pull.rebase` / `pull.ff`,
     falling back to `--ff-only`
+  - `w` — open the worktree modal (list / switch / add / remove);
+    see [docs/worktrees.md](./docs/worktrees.md)
   - `r` — reload refs + log
   - `q` / `ctrl+c` — quit (closes the patch overlay first)
   - `R` is reserved for a future Rebase action
@@ -104,18 +104,15 @@ Today the build wires up:
 
 Ordered by current intent, not commitment:
 
-1. **Local Changes** — extend the existing view with stage/unstage and
-   per-hunk operations so reviewing an agent's working tree doesn't
-   require dropping to a second shell.
+1. **Per-hunk staging** — extend the existing Local Changes stage /
+   unstage with per-hunk operations so reviewing an agent's working
+   tree doesn't require dropping to a second shell.
 2. **PR review pane** — the original Fork+`gh dash` half: pull a PR
    into the same three-pane layout, read its diff with the Changes
    tab, approve / request-changes / merge inline.
-3. **Worktree awareness** — agents often run in `git worktree add`'d
-   sibling directories; surface those as first-class entries in the
-   refs sidebar so you can flip between them without re-launching.
 
-None of these are wired up yet — they're listed so the project's
-trajectory is legible from the README.
+Neither is wired up yet — they're listed so the project's trajectory
+is legible from the README.
 
 ## Install
 

@@ -33,7 +33,6 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `h` / `l` / `←` / `→` | tab pane    | switch between Commit and Changes (toggle, wraps)                                                                     |
 | `ctrl+↑` / `ctrl+↓` | global        | resize graph/tab split                                                                                                |
 | `enter`             | refs          | checkout cursor ref — see [checkout.md](checkout.md)                                                                  |
-| `p`                 | refs          | checkout then pull — see [checkout.md](checkout.md)                                                                   |
 | `o`                 | refs          | jump graph cursor to ref tip                                                                                          |
 | `a`                 | refs          | unified `--all` view                                                                                                  |
 | `d`                 | refs          | delete branch (inline confirm) — see [branches.md](branches.md)                                                       |
@@ -41,7 +40,7 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `y`                 | Commit tab    | copy full hash to clipboard                                                                                           |
 | `d`                 | graph / tab   | open the focused commit's full patch overlay                                                                          |
 | `F`                 | global        | `git fetch --all` in background                                                                                       |
-| `P`                 | global        | `git pull` in background (strategy in [config.md](config.md))                                                         |
+| `p`                 | global        | `git pull` in background (strategy in [config.md](config.md))                                                         |
 | `r`                 | global        | reload refs + log                                                                                                     |
 | `q` / `ctrl+c`      | global        | quit (closes patch overlay first)                                                                                     |
 | `?`                 | global        | toggle expanded help panel                                                                                            |
@@ -54,7 +53,7 @@ Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `esc` / `q`. The 
 
 Bottom hint is focus-aware:
 
-- refs → `enter checkout · p checkout+pull · o jump`
+- refs → `enter checkout · o jump`
 - graph → `enter/d patch · C detach`
 - tab → `h/l switch · y copy`
 - every focus appends `? help · q quit`.

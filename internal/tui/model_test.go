@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -1146,18 +1145,16 @@ func TestPaneTabCommit_CtrlDIsNoOp(t *testing.T) {
 
 func stubCheckout(t *testing.T) (
 	getRef func() (string, bool),
-	getStash func() (string, bool),
 	getDetached func() (string, bool),
 ) {
 	t.Helper()
-	prevC, prevCD, prevS := checkoutExec, checkoutDetachedExec, stashExec
+	prevC, prevCD := checkoutExec, checkoutDetachedExec
 	t.Cleanup(func() {
 		checkoutExec = prevC
 		checkoutDetachedExec = prevCD
-		stashExec = prevS
 	})
-	var ref, stashMsg, detachedRef string
-	var refSet, stashSet, detachedSet bool
+	var ref, detachedRef string
+	var refSet, detachedSet bool
 	checkoutExec = func(_ context.Context, _, r string) error {
 		ref, refSet = r, true
 		return nil
@@ -1166,17 +1163,12 @@ func stubCheckout(t *testing.T) (
 		detachedRef, detachedSet = r, true
 		return nil
 	}
-	stashExec = func(_ context.Context, _, m string) error {
-		stashMsg, stashSet = m, true
-		return nil
-	}
 	return func() (string, bool) { return ref, refSet },
-		func() (string, bool) { return stashMsg, stashSet },
 		func() (string, bool) { return detachedRef, detachedSet }
 }
 
 func TestModelRefCheckoutEnterDispatchesLocalShortName(t *testing.T) {
-	getRef, _, _ := stubCheckout(t)
+	getRef, _ := stubCheckout(t)
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -1204,7 +1196,7 @@ func TestModelRefCheckoutEnterDispatchesLocalShortName(t *testing.T) {
 }
 
 func TestModelRefCheckoutEnterStripsRemotePrefix(t *testing.T) {
-	getRef, _, _ := stubCheckout(t)
+	getRef, _ := stubCheckout(t)
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -1323,51 +1315,6 @@ func TestModelCheckoutFailedSurfacesError(t *testing.T) {
 	}
 }
 
-func TestModelStashThenCheckoutMsgIncludesStashLabel(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	updated, cmd := m.Update(stashThenCheckoutMsg{ref: "feat", stashLabel: "stash@{0}"})
-	m = updated.(Model)
-
-	if !strings.Contains(m.status, "stash@{0}") {
-		t.Errorf("status = %q, want it to surface the stash label", m.status)
-	}
-	if m.pendingHEADHash != pendingHEADSentinel {
-		t.Errorf("pendingHEADHash = %q, want sentinel", m.pendingHEADHash)
-	}
-	if cmd == nil {
-		t.Fatal("stashThenCheckoutMsg should also batch a reload cmd")
-	}
-}
-
-func TestModelCheckoutConfirmStashKeyDispatches(t *testing.T) {
-	_, getStash, _ := stubCheckout(t)
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.mode = viewModeCheckoutConfirm
-	m.pendingCheckout = pendingCheckout{ref: "feat"}
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	m = updated.(Model)
-
-	if m.mode != viewModeNormal {
-		t.Errorf("mode after 's' = %v, want viewModeNormal", m.mode)
-	}
-	if !m.checkoutInFlight {
-		t.Error("checkoutInFlight should re-arm on 's' (stashing…)")
-	}
-	if cmd == nil {
-		t.Fatal("'s' should dispatch stashThenCheckoutCmd")
-	}
-	_ = cmd()
-	if msg, ok := getStash(); !ok || !strings.Contains(msg, "feat") {
-		t.Errorf("stashExec called with %q ok=%v, want a message mentioning the ref", msg, ok)
-	}
-}
-
 func TestModelCheckoutConfirmAbortClears(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -1415,12 +1362,19 @@ func TestModelCheckoutConfirmSwallowsOtherKeys(t *testing.T) {
 	m.mode = viewModeCheckoutConfirm
 	m.pendingCheckout = pendingCheckout{ref: "feat"}
 
+	// `s` and `Y` are explicitly listed: they belonged to the (now-cut)
+	// stash & force-checkout branches the design retired in subtract-stash.
+	// If a future refactor accidentally re-wires either key, this test
+	// fails immediately rather than silently dispatching a chain.
 	for _, k := range []tea.KeyMsg{
 		{Type: tea.KeyRunes, Runes: []rune{'j'}},
 		{Type: tea.KeyTab},
 		{Type: tea.KeyRunes, Runes: []rune{'F'}},
 		{Type: tea.KeyRunes, Runes: []rune{'P'}},
 		{Type: tea.KeyRunes, Runes: []rune{'d'}},
+		{Type: tea.KeyRunes, Runes: []rune{'s'}},
+		{Type: tea.KeyRunes, Runes: []rune{'Y'}},
+		{Type: tea.KeyRunes, Runes: []rune{'y'}},
 		{Type: tea.KeyEnter},
 	} {
 		updated, cmd := m.Update(k)
@@ -1431,10 +1385,63 @@ func TestModelCheckoutConfirmSwallowsOtherKeys(t *testing.T) {
 		if cmd != nil {
 			t.Errorf("swallowed key %v should not return cmd, got %v", k, cmd)
 		}
-		if m.fetchInFlight || m.pullInFlight || m.checkoutInFlight {
-			t.Errorf("swallowed key %v leaked into a dispatch (fetch=%v pull=%v checkout=%v)",
-				k, m.fetchInFlight, m.pullInFlight, m.checkoutInFlight)
+		if m.fetchInFlight || m.pullInFlight || m.checkoutInFlight || m.ffInFlight {
+			t.Errorf("swallowed key %v leaked into a dispatch (fetch=%v pull=%v checkout=%v ff=%v)",
+				k, m.fetchInFlight, m.pullInFlight, m.checkoutInFlight, m.ffInFlight)
 		}
+	}
+}
+
+// TestModelCheckoutConfirmMatrixAbortOnly asserts the dirty-tree matrix
+// reduces to {a, esc} after subtract-stash. The CEO plan called this an
+// explicit-assertion gate so a future re-wire of `s` (stash) or `Y`
+// (force) can't slip in silently.
+func TestModelCheckoutConfirmMatrixAbortOnly(t *testing.T) {
+	for _, variant := range []struct {
+		name string
+		p    pendingCheckout
+	}{
+		{"plain", pendingCheckout{ref: "feat"}},
+		{"withPull", pendingCheckout{ref: "feat", withPull: true}},
+		{"withPull+skip", pendingCheckout{ref: "v1.0", withPull: true, skipReason: "tag has no upstream"}},
+		{"withFF", pendingCheckout{ref: "main", withFF: true, ffHash: "abc1234"}},
+		{"withCheckoutFF", pendingCheckout{ref: "develop", withCheckoutFF: true, ffHash: "abc1234"}},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			m := New()
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+			m = updated.(Model)
+			m.mode = viewModeCheckoutConfirm
+			m.pendingCheckout = variant.p
+
+			// `a` exits to viewModeNormal with an aborted-status line.
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+			m = updated.(Model)
+			if m.mode != viewModeNormal {
+				t.Errorf("[a] should exit modal, mode = %v", m.mode)
+			}
+			if cmd != nil {
+				t.Errorf("[a] should not dispatch a cmd, got %v", cmd)
+			}
+			if !strings.Contains(m.status, "aborted") {
+				t.Errorf("[a] should set 'aborted' status, got %q", m.status)
+			}
+			if (m.pendingCheckout != pendingCheckout{}) {
+				t.Errorf("[a] should clear pendingCheckout, got %+v", m.pendingCheckout)
+			}
+
+			// `esc` does the same — symmetric escape hatch.
+			m.mode = viewModeCheckoutConfirm
+			m.pendingCheckout = variant.p
+			updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+			m = updated.(Model)
+			if m.mode != viewModeNormal {
+				t.Errorf("[esc] should exit modal, mode = %v", m.mode)
+			}
+			if cmd != nil {
+				t.Errorf("[esc] should not dispatch a cmd, got %v", cmd)
+			}
+		})
 	}
 }
 
@@ -1443,7 +1450,7 @@ func TestModelGraphCKeyRemoved(t *testing.T) {
 	// flow now subsumes that — chipless rows fall through to detach. Make
 	// sure 'C' is no longer wired so a stray keypress doesn't latch a
 	// checkout chain.
-	_, _, _ = stubCheckout(t)
+	_, _ = stubCheckout(t)
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -1690,220 +1697,6 @@ func TestModelCheckoutThenPullConflictSurfacesAndReloadsWithoutJump(t *testing.T
 	}
 }
 
-func TestModelStashChainSucceededShowsAllLabels(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.checkoutInFlight = true
-	m.pendingCheckout = pendingCheckout{ref: "feat", withPull: true}
-
-	updated, cmd := m.Update(stashThenCheckoutThenPullThenPopSucceededMsg{
-		ref:        "feat",
-		stashLabel: "stash@{0}",
-	})
-	m = updated.(Model)
-
-	for _, want := range []string{"feat", "stashed", "pull", "popped", "stash@{0}"} {
-		if !strings.Contains(m.status, want) {
-			t.Errorf("status %q missing %q", m.status, want)
-		}
-	}
-	if m.pendingHEADHash != pendingHEADSentinel {
-		t.Errorf("pendingHEADHash = %q, want sentinel", m.pendingHEADHash)
-	}
-	if cmd == nil {
-		t.Fatal("succeeded should reload")
-	}
-}
-
-func TestModelStashChainSucceededWithSkipShowsReason(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	updated, _ = m.Update(stashThenCheckoutThenPullThenPopSucceededMsg{
-		ref:         "v1.0",
-		stashLabel:  "stash@{0}",
-		pullSkipped: true,
-		skipReason:  "tag has no upstream",
-	})
-	m = updated.(Model)
-	for _, want := range []string{"pull skipped", "tag has no upstream", "stashed", "popped", "stash@{0}"} {
-		if !strings.Contains(m.status, want) {
-			t.Errorf("status %q missing %q", m.status, want)
-		}
-	}
-}
-
-func TestModelStashChainPullConflictPreservesNoJump(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	conflictErr := fmt.Errorf("git pull: %w: CONFLICT (content)", git.ErrPullConflict)
-	updated, cmd := m.Update(stashThenCheckoutThenPullThenPopConflictMsg{
-		ref:        "feat",
-		stashLabel: "stash@{0}",
-		phase:      chainPhasePull,
-		err:        conflictErr,
-	})
-	m = updated.(Model)
-
-	if !strings.Contains(m.status, "CONFLICT") {
-		t.Errorf("status = %q, should surface CONFLICT", m.status)
-	}
-	if !strings.Contains(m.status, "stash preserved") {
-		t.Errorf("status = %q, should mention stash preserved", m.status)
-	}
-	if m.pendingHEADHash != "" {
-		t.Errorf("pull conflict should not jump HEAD, got %q", m.pendingHEADHash)
-	}
-	if cmd == nil {
-		t.Error("conflict should still reload")
-	}
-}
-
-func TestModelStashChainPullFailureKeepsStashAndJumpsHEAD(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	updated, cmd := m.Update(stashThenCheckoutThenPullThenPopConflictMsg{
-		ref:        "feat",
-		stashLabel: "stash@{0}",
-		phase:      chainPhasePull,
-		err:        errors.New("could not resolve host github.com"),
-	})
-	m = updated.(Model)
-
-	for _, want := range []string{"checkout: feat", "pull failed", "stash preserved", "stash@{0}"} {
-		if !strings.Contains(m.status, want) {
-			t.Errorf("status %q missing %q", m.status, want)
-		}
-	}
-	// Generic pull failure → HEAD did move (checkout landed), pop didn't run.
-	// Jumping the cursor to the new HEAD lets the user see where they are.
-	if m.pendingHEADHash != pendingHEADSentinel {
-		t.Errorf("generic pull failure: pendingHEADHash = %q, want sentinel", m.pendingHEADHash)
-	}
-	if cmd == nil {
-		t.Error("should still reload after pull failure")
-	}
-}
-
-func TestModelStashChainPopConflictSurfacesGuidance(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	updated, cmd := m.Update(stashThenCheckoutThenPullThenPopConflictMsg{
-		ref:        "feat",
-		stashLabel: "stash@{0}",
-		phase:      chainPhaseStashPop,
-		err:        errors.New("git stash pop: stash pop conflict: CONFLICT"),
-	})
-	m = updated.(Model)
-
-	for _, want := range []string{"pull: done", "pop conflict", "git stash drop", "stash@{0}"} {
-		if !strings.Contains(m.status, want) {
-			t.Errorf("status %q missing %q", m.status, want)
-		}
-	}
-	if m.pendingHEADHash != pendingHEADSentinel {
-		t.Errorf("pop conflict: pendingHEADHash = %q, want sentinel", m.pendingHEADHash)
-	}
-	if cmd == nil {
-		t.Error("pop conflict should still reload")
-	}
-}
-
-func TestModelCheckoutConfirmStashKeyDispatchesChainWhenWithPull(t *testing.T) {
-	var seq []string
-	withChainStubs(t, chainStubs{
-		checkout: func(context.Context, string, string) error {
-			seq = append(seq, "checkout")
-			return nil
-		},
-		stash: func(context.Context, string, string) error {
-			seq = append(seq, "stash")
-			return nil
-		},
-		stashPop: func(context.Context, string, string) error {
-			seq = append(seq, "pop")
-			return nil
-		},
-		pullResolve: noopPullResolveFFOnly,
-		pull: func(context.Context, string, git.PullStrategy) error {
-			seq = append(seq, "pull")
-			return nil
-		},
-	})
-
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.mode = viewModeCheckoutConfirm
-	m.pendingCheckout = pendingCheckout{ref: "feat", withPull: true}
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("mode after 's' = %v, want viewModeNormal", m.mode)
-	}
-	if !m.checkoutInFlight {
-		t.Error("checkoutInFlight should re-arm")
-	}
-	if !strings.Contains(m.status, "pull") {
-		t.Errorf("status = %q, want it to mention pull (chain busy)", m.status)
-	}
-	if cmd == nil {
-		t.Fatal("'s' with withPull should dispatch the chain cmd")
-	}
-	_ = cmd()
-	wantSeq := []string{"stash", "checkout", "pull", "pop"}
-	if !slices.Equal(seq, wantSeq) {
-		t.Errorf("chain seq = %v, want %v", seq, wantSeq)
-	}
-}
-
-func TestModelCheckoutConfirmStashKeyFallsBackToLegacyWithoutPull(t *testing.T) {
-	// pendingCheckout.withPull=false means the user reached the modal via
-	// plain Enter (refCheckoutRequestedMsg). The legacy stash → checkout
-	// path must keep its existing surface — pop is NOT auto-fired.
-	var seq []string
-	withChainStubs(t, chainStubs{
-		checkout: func(context.Context, string, string) error {
-			seq = append(seq, "checkout")
-			return nil
-		},
-		stash: func(context.Context, string, string) error {
-			seq = append(seq, "stash")
-			return nil
-		},
-		stashPop: func(context.Context, string, string) error {
-			seq = append(seq, "pop")
-			return nil
-		},
-	})
-
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.mode = viewModeCheckoutConfirm
-	m.pendingCheckout = pendingCheckout{ref: "feat"}
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	_ = updated.(Model)
-	if cmd == nil {
-		t.Fatal("'s' should still dispatch the legacy stash+checkout cmd")
-	}
-	_ = cmd()
-	wantSeq := []string{"stash", "checkout"}
-	if !slices.Equal(seq, wantSeq) {
-		t.Errorf("legacy seq = %v, want %v (no pop)", seq, wantSeq)
-	}
-}
-
 func TestModelCheckoutConfirmModalShowsPullVariant(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -1912,10 +1705,13 @@ func TestModelCheckoutConfirmModalShowsPullVariant(t *testing.T) {
 	m.pendingCheckout = pendingCheckout{ref: "feat", withPull: true}
 
 	got := ansi.Strip(m.View())
-	for _, want := range []string{"checkout 'feat' and pull", "stash & checkout & pull"} {
+	for _, want := range []string{"checkout 'feat' and pull", "[a] abort"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("modal text missing %q\n--- view ---\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "stash") {
+		t.Errorf("modal must not mention stash after subtract-stash\n--- view ---\n%s", got)
 	}
 }
 
@@ -1934,10 +1730,7 @@ func TestModelCheckoutConfirmModalShowsSkipVariantWhenPullElided(t *testing.T) {
 	if strings.Contains(got, "and pull") {
 		t.Errorf("modal must not say 'and pull' when pull is skipped\n--- view ---\n%s", got)
 	}
-	if strings.Contains(got, "stash & checkout & pull") {
-		t.Errorf("modal must not advertise 'stash & checkout & pull' when pull is skipped\n--- view ---\n%s", got)
-	}
-	for _, want := range []string{"v1.0", "pull skipped: tag has no upstream", "stash & checkout"} {
+	for _, want := range []string{"v1.0", "pull skipped: tag has no upstream", "[a] abort"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("modal text missing %q\n--- view ---\n%s", want, got)
 		}

@@ -21,7 +21,7 @@ import (
 )
 
 // Package-level seams over git.Worktree* so tests can swap in stubs.
-// Mirrors the checkoutExec / stashExec pattern in checkout.go.
+// Mirrors the checkoutExec pattern in checkout.go.
 var (
 	worktreesExec      = git.Worktrees
 	worktreeAddExec    = git.WorktreeAdd
@@ -446,12 +446,10 @@ func (m Model) switchWorktree(path string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.workdir = path
-	// The new tree may not host any of the refs / stash entries the old
-	// stream was filtered to. Reset to the unified --all view so the first
-	// load shows something meaningful; the user can re-filter from there.
+	// The new tree may not host any of the refs the old stream was
+	// filtered to. Reset to the unified --all view so the first load
+	// shows something meaningful; the user can re-filter from there.
 	m.currentRefs = []string{refsAllSentinel}
-	m.currentStashHashes = nil
-	m.currentStashByHash = nil
 	// Switch is intentionally cursor-amnesiac: same branch name in two
 	// trees is rare and would land the cursor on the wrong row anyway.
 	// Drop persist state explicitly so reloadCmd's snapshot below doesn't

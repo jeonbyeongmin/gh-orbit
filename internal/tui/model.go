@@ -63,11 +63,11 @@ type viewMode int
 const (
 	viewModeNormal viewMode = iota
 	viewModeDiffWindow
-	// viewModeCheckoutConfirm gates the screen on a "stash & checkout vs.
-	// abort" prompt while pendingCheckout holds the ref the user picked.
+	// viewModeCheckoutConfirm gates the screen on an "uncommitted changes
+	// — abort" prompt while pendingCheckout holds the ref the user picked.
 	// The 3-pane layout stays visible underneath (so the user keeps their
 	// context); only the help/status line below switches to the choice
-	// keys, and every key except s/a/esc/ctrl+c is swallowed.
+	// keys, and every key except a/esc/ctrl+c is swallowed.
 	viewModeCheckoutConfirm
 	// viewModeHelp expands the bottom area into a multi-line help panel.
 	// The 3-pane layout stays visible above; only the bottom shrinks the
@@ -90,16 +90,6 @@ const (
 	// remote pair exists for the cursor — y/Y/f/F covers the local+remote
 	// matrix; remote-only cursors show just y. esc cancels.
 	viewModeRefDeleteConfirm
-	// viewModeStashActionPicker gates the screen on the graph-Enter stash
-	// modal: `[p] pop / [a] apply / [esc] cancel`. Drop is intentionally
-	// excluded here — destructive remove goes through the refs-pane `d`
-	// drop confirm so the user always sees a "drop?" prompt before losing
-	// an entry. Every key outside p/a/esc/ctrl+c is swallowed.
-	viewModeStashActionPicker
-	// viewModeStashDropConfirm gates the refs-pane `d` stash modal:
-	// `[y] drop / [esc] cancel`. Single key by design — stash drop has no
-	// force / multi-axis variants, so a 4-axis matrix would be noise.
-	viewModeStashDropConfirm
 	// viewModeLocalChanges replaces the right column (graph + tab) with a
 	// file-tree + diff layout for working-tree work. refs sidebar stays
 	// put so the branch context is unchanged across the toggle. Entered
@@ -129,35 +119,20 @@ const (
 const helpExpandedHeight = 12
 
 // pendingCheckout remembers what the user was trying to check out so the
-// "[s]tash & checkout" branch in the confirm modal can re-issue the same
-// request after stashing. detached=true means graph Enter resolved to
-// detach (CheckoutDetached); detached=false means a refs-pane Enter
-// (named ref) or a graph-Enter checkout to a chip-bearing branch.
+// confirm modal's hint can name the chain it's aborting. detached=true
+// means graph Enter resolved to detach (CheckoutDetached); detached=false
+// means a refs-pane Enter (named ref) or a graph-Enter checkout to a
+// chip-bearing branch.
 //
 // withPull and skipReason carry the refs-pane `p` chain's state across
 // the dirty-tree confirm modal. Zero values mean "plain checkout" —
-// refCheckoutRequestedMsg (Enter) leaves them off, so the existing
-// behavior is unchanged. refCheckoutWithPullRequestedMsg (`p`) sets
-// withPull=true and stamps a non-empty skipReason for tag / detached /
-// no-upstream local refs (where pull will be elided); the modal's `s`
-// branch consults withPull to pick stashThenCheckoutThenPullThenPopCmd
-// vs. the legacy stashThenCheckoutCmd. skipReason being non-empty is
-// the single signal of "pull will be skipped" — the chain commands
-// derive their skip flag from that, no parallel boolean needed.
+// refCheckoutRequestedMsg (Enter) leaves them off. skipReason being
+// non-empty is the single signal of "pull will be skipped" (tag /
+// detached / no-upstream local refs).
 //
 // withFF / withCheckoutFF / ffHash flag the graph-Enter FF paths so the
-// dirty-tree confirm modal can route `s` to the right chain. ref carries
-// the local-branch name; ffHash carries the cursor commit MergeFFOnly
-// should advance to.
-//
-//   - withFF: HEAD is already on ref. Modal `s` → stashThenFFCmd
-//     (no checkout step).
-//   - withCheckoutFF: HEAD is on a different branch (cross-branch case
-//     from a remote chip). Modal `s` → stashThenCheckoutThenFFCmd
-//     (checkout ref then FF).
-//
-// Both are mutually exclusive with withPull (different keys originate
-// the chains).
+// modal hint can name the chain. ref carries the local-branch name;
+// ffHash carries the cursor commit MergeFFOnly should advance to.
 type pendingCheckout struct {
 	ref            string
 	detached       bool
@@ -234,8 +209,8 @@ type Model struct {
 	// gates; git's .git/index.lock is the real serialization point.
 	checkoutInFlight bool
 	// pendingCheckout is set the moment beginCheckout fires so the dirty-
-	// tree confirm modal can re-issue the same request (with stashing) on
-	// 's', or drop the slot on 'a'/esc.
+	// tree confirm modal can name what the user was attempting to do and
+	// drop the slot on 'a'/esc.
 	pendingCheckout pendingCheckout
 	// actionInFlight gates graph-pane Enter while evaluateGraphActionCmd
 	// is resolving the cursor's chip / ancestry state. Released by the
@@ -243,10 +218,10 @@ type Model struct {
 	// downstream gates (checkoutInFlight / ffInFlight) take over from
 	// there. A second Enter while resolving is swallowed.
 	actionInFlight bool
-	// ffInFlight gates graph Enter while ffOnlyCmd / stashThenFFCmd is
+	// ffInFlight gates graph Enter while ffOnlyCmd / checkoutThenFFCmd is
 	// running. Tracked separately from checkoutInFlight so the FF and
 	// checkout chains can't collide on a status overwrite. Cleared by
-	// ffSucceededMsg / ffFailedMsg / ffNeedsCleanTreeMsg / stashThenFFMsg.
+	// ffSucceededMsg / ffFailedMsg / ffNeedsCleanTreeMsg.
 	ffInFlight bool
 	// branchPicker backs viewModeBranchPicker. Reset to the zero value on
 	// esc / enter; the picker reads candidates+cursor while open and
@@ -282,14 +257,6 @@ type Model struct {
 	// is running. Distinct from checkoutInFlight so a stuck refs write
 	// can't deadlock checkout / pull / FF chains.
 	refActionInFlight bool
-	// currentStashHashes / currentStashByHash snapshot the stash set the
-	// running stream was started with. refsLoadedMsg diffs against these
-	// and triggers reloadCmd only when the set differs — the reloadCmd's
-	// own refsLoadedMsg sees the same set, diff is empty, no loop.
-	currentStashHashes []string
-	currentStashByHash map[string]string
-	pendingStashAction pendingStashAction
-	pendingStashDrop   pendingStashDrop
 	// localChanges hosts the file-tree + diff viewport that the right
 	// column renders when mode == viewModeLocalChanges. The graph / tab
 	// models are left untouched across the toggle so exiting the mode
@@ -310,20 +277,6 @@ type Model struct {
 	// state via worktreeDirtyResultMsg. Stale msgs (modal closed +
 	// reopened before all dirty responses landed) drop on reqID mismatch.
 	worktreeModal worktreeModalState
-}
-
-// pendingStashAction backs viewModeStashActionPicker. subject is the
-// stash commit's git log subject, best-effort from the graph window —
-// empty when the stash hash isn't yet streamed in.
-type pendingStashAction struct {
-	label   string
-	hash    string
-	subject string
-}
-
-type pendingStashDrop struct {
-	label   string
-	subject string
 }
 
 func New() Model {
@@ -363,7 +316,7 @@ func New() Model {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		loadCommitsCmd(m.workdir, m.currentRefs, nil, nil, m.streamReqID),
+		loadCommitsCmd(m.workdir, m.currentRefs, m.streamReqID),
 		loadRefsCmd(m.workdir),
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 		loadCurrentWorktreeDirtyCmd(m.workdir),
@@ -559,27 +512,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refs.SelectAfterDeleted(m.pendingRefCursorAfterDelete.name, m.pendingRefCursorAfterDelete.kind)
 			m.pendingRefCursorAfterDelete = deletedRefHandle{}
 			m.pendingRefCursorPersist = persistedRefHandle{}
-		case m.pendingRefCursorPersist.name != "" || m.pendingRefCursorPersist.stashHash != "":
+		case m.pendingRefCursorPersist.name != "":
 			h := m.pendingRefCursorPersist
-			if h.kind == git.RefKindStash && h.stashHash != "" {
-				if !m.refs.SelectStashByHash(h.stashHash) {
-					m.refs.SelectAfterDeleted(h.name, git.RefKindStash)
-				}
-			} else {
-				m.refs.SelectByNameKindOrNeighbor(h.name, h.kind)
-			}
+			m.refs.SelectByNameKindOrNeighbor(h.name, h.kind)
 			m.pendingRefCursorPersist = persistedRefHandle{}
 		}
-		// Sync stash tips into the commit stream when the set has changed.
-		// reloadCmd is idempotent against an unchanged stash set — the next
-		// refsLoadedMsg will see the same hashes and skip this branch.
 		if _, ok := msg.(refsLoadedMsg); ok {
 			m.refreshWorktreeHeader()
-			if hashes, byHash, changed := diffStashRefs(m.refs.StashRefs(), m.currentStashHashes); changed {
-				m.currentStashHashes = hashes
-				m.currentStashByHash = byHash
-				return m, tea.Batch(cmd, m.reloadCmd())
-			}
 		}
 		return m, cmd
 
@@ -606,9 +545,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.reloadCmd()
 
 	case checkoutNeedsCleanTreeMsg:
-		// Modal owns the next decision; release the in-flight gate so
-		// 's' → stashThenCheckoutCmd can re-arm it without colliding.
-		// pendingCheckout stays intact so 's' can re-issue the same request.
+		// Modal owns the next decision; release the in-flight gate.
+		// pendingCheckout stays intact so the modal hint can name the
+		// chain that was about to run.
 		m.checkoutInFlight = false
 		m.mode = viewModeCheckoutConfirm
 		m.status = "checkout: " + msg.ref + " — uncommitted changes"
@@ -621,15 +560,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "checkout failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
-
-	case stashThenCheckoutMsg:
-		m.checkoutInFlight = false
-		m.pendingCheckout = pendingCheckout{}
-		m.status = checkoutLabel(msg.ref, msg.detached) +
-			" (stashed before checkout: " + msg.stashLabel + ")"
-		m.statusStyle = statusOkS
-		m.pendingHEADHash = pendingHEADSentinel
-		return m, m.reloadCmd()
 
 	case checkoutThenPullSucceededMsg:
 		m.checkoutInFlight = false
@@ -655,48 +585,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			"; pull: CONFLICT — resolve in your terminal"
 		m.statusStyle = statusErrS
 		return m, m.reloadCmd()
-
-	case stashThenCheckoutThenPullThenPopSucceededMsg:
-		m.checkoutInFlight = false
-		m.pendingCheckout = pendingCheckout{}
-		if msg.pullSkipped {
-			m.status = checkoutLabel(msg.ref, msg.detached) +
-				" (pull skipped: " + msg.skipReason + "); stashed → popped " + msg.stashLabel
-		} else {
-			m.status = checkoutLabel(msg.ref, msg.detached) +
-				"; stashed → pull → popped " + msg.stashLabel
-		}
-		m.statusStyle = statusOkS
-		m.pendingHEADHash = pendingHEADSentinel
-		return m, m.reloadCmd()
-
-	case stashThenCheckoutThenPullThenPopConflictMsg:
-		// Three sub-cases collapse into one msg type:
-		//   phase=Pull, ErrPullConflict → pop already ran; show conflict + label
-		//   phase=Pull, generic err     → pop never ran; stash preserved
-		//   phase=StashPop              → pop conflict; markers + stash preserved
-		m.checkoutInFlight = false
-		m.pendingCheckout = pendingCheckout{}
-		m.statusStyle = statusErrS
-		switch {
-		case msg.phase == chainPhasePull && errors.Is(msg.err, git.ErrPullConflict):
-			m.status = checkoutLabel(msg.ref, msg.detached) +
-				"; pull: CONFLICT — resolve in your terminal; stash preserved at " + msg.stashLabel
-			// HEAD is mid-conflict — no jump.
-			return m, m.reloadCmd()
-		case msg.phase == chainPhasePull:
-			m.status = checkoutLabel(msg.ref, msg.detached) +
-				"; pull failed: " + firstLine(msg.err.Error()) + "; stash preserved at " + msg.stashLabel
-			// HEAD did move (checkout landed). Jump to it on reload so the
-			// graph shows the user where they are.
-			m.pendingHEADHash = pendingHEADSentinel
-			return m, m.reloadCmd()
-		default: // chainPhaseStashPop
-			m.status = checkoutLabel(msg.ref, msg.detached) +
-				"; pull: done; pop conflict — resolve markers and run `git stash drop` (" + msg.stashLabel + ")"
-			m.pendingHEADHash = pendingHEADSentinel
-			return m, m.reloadCmd()
-		}
 
 	case refSelectedMsg:
 		// Unified graph: Enter no longer reloads; it jumps the graph cursor
@@ -844,20 +732,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m, cmd = m.beginCheckout(msg.hash, true)
 			return m, cmd
-		case graphActionStashAction:
-			subject := ""
-			if c, ok := m.graph.Selected(); ok {
-				subject = c.Subject
-			}
-			m.pendingStashAction = pendingStashAction{
-				label:   msg.stashLabel,
-				hash:    msg.hash,
-				subject: subject,
-			}
-			m.mode = viewModeStashActionPicker
-			m.status = "stash: " + msg.stashLabel
-			m.statusStyle = statusBusyS
-			return m, nil
 		}
 		return m, nil
 
@@ -876,8 +750,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ffNeedsCleanTreeMsg:
-		// Modal owns the next decision; release the in-flight gate so
-		// 's' → stashThenFFCmd can re-arm it without colliding.
 		m.ffInFlight = false
 		m.pendingCheckout = pendingCheckout{
 			ref:    msg.branch,
@@ -889,15 +761,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 
-	case stashThenFFMsg:
-		m.ffInFlight = false
-		m.pendingCheckout = pendingCheckout{}
-		m.status = ffLabel(msg.branch, msg.advance) +
-			" (stashed before fast-forward: " + msg.stashLabel + ")"
-		m.statusStyle = statusOkS
-		m.pendingHEADHash = pendingHEADSentinel
-		return m, m.reloadCmd()
-
 	case checkoutThenFFSucceededMsg:
 		m.ffInFlight = false
 		m.status = ffLabel(msg.branch, msg.advance) + " (after checkout)"
@@ -906,8 +769,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.reloadCmd()
 
 	case ffCheckoutNeedsCleanTreeMsg:
-		// Modal owns the next decision; release the in-flight gate so
-		// 's' → stashThenCheckoutThenFFCmd can re-arm it without colliding.
 		m.ffInFlight = false
 		m.pendingCheckout = pendingCheckout{
 			ref:            msg.branch,
@@ -916,78 +777,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = viewModeCheckoutConfirm
 		m.status = "checkout+fast-forward: " + msg.branch + " — uncommitted changes"
-		m.statusStyle = statusErrS
-		return m, nil
-
-	case stashThenCheckoutThenFFMsg:
-		m.ffInFlight = false
-		m.pendingCheckout = pendingCheckout{}
-		m.status = ffLabel(msg.branch, msg.advance) +
-			" (stashed before checkout+fast-forward: " + msg.stashLabel + ")"
-		m.statusStyle = statusOkS
-		m.pendingHEADHash = pendingHEADSentinel
-		return m, m.reloadCmd()
-
-	case stashPopSucceededMsg:
-		m.checkoutInFlight = false
-		m.pendingStashAction = pendingStashAction{}
-		m.status = "stash: popped " + msg.label
-		m.statusStyle = statusOkS
-		return m, m.reloadCmd()
-
-	case stashPopConflictMsg:
-		m.checkoutInFlight = false
-		m.pendingStashAction = pendingStashAction{}
-		m.status = "stash " + msg.label + ": CONFLICT — resolve markers; stash preserved"
-		m.statusStyle = statusErrS
-		return m, m.reloadCmd()
-
-	case stashPopFailedMsg:
-		m.checkoutInFlight = false
-		m.pendingStashAction = pendingStashAction{}
-		m.status = "stash pop failed: " + firstLine(msg.err.Error())
-		m.statusStyle = statusErrS
-		return m, nil
-
-	case stashApplySucceededMsg:
-		m.checkoutInFlight = false
-		m.pendingStashAction = pendingStashAction{}
-		m.status = "stash: applied " + msg.label
-		m.statusStyle = statusOkS
-		return m, m.reloadCmd()
-
-	case stashApplyConflictMsg:
-		m.checkoutInFlight = false
-		m.pendingStashAction = pendingStashAction{}
-		m.status = "stash " + msg.label + ": CONFLICT — resolve markers; stash preserved"
-		m.statusStyle = statusErrS
-		return m, m.reloadCmd()
-
-	case stashApplyFailedMsg:
-		m.checkoutInFlight = false
-		m.pendingStashAction = pendingStashAction{}
-		m.status = "stash apply failed: " + firstLine(msg.err.Error())
-		m.statusStyle = statusErrS
-		return m, nil
-
-	case stashDropSucceededMsg:
-		m.refActionInFlight = false
-		m.pendingStashDrop = pendingStashDrop{}
-		m.status = "stash: dropped " + msg.label
-		m.statusStyle = statusOkS
-		// Cursor follow-up: surviving stash slots shift down by one
-		// (stash@{1} → stash@{0}); SelectAfterDeleted lands the cursor
-		// on the next entry in the same section (or previous when last).
-		m.pendingRefCursorAfterDelete = deletedRefHandle{
-			name: msg.label,
-			kind: git.RefKindStash,
-		}
-		return m, m.reloadCmd()
-
-	case stashDropFailedMsg:
-		m.refActionInFlight = false
-		m.pendingStashDrop = pendingStashDrop{}
-		m.status = "stash drop failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
 
@@ -1411,55 +1200,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.mode == viewModeStashActionPicker {
-			switch msg.String() {
-			case "esc":
-				m.mode = viewModeNormal
-				m.pendingStashAction = pendingStashAction{}
-				m.status = "stash: cancelled"
-				m.statusStyle = statusOkS
-				return m, nil
-			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
-			case "p":
-				p := m.pendingStashAction
-				m.mode = viewModeNormal
-				m.checkoutInFlight = true
-				m.status = "stash: popping " + p.label + "…"
-				m.statusStyle = statusBusyS
-				return m, stashPopCmd(m.workdir, p.label)
-			case "a":
-				p := m.pendingStashAction
-				m.mode = viewModeNormal
-				m.checkoutInFlight = true
-				m.status = "stash: applying " + p.label + "…"
-				m.statusStyle = statusBusyS
-				return m, stashApplyCmd(m.workdir, p.label)
-			}
-			return m, nil
-		}
-		if m.mode == viewModeStashDropConfirm {
-			switch msg.String() {
-			case "esc":
-				m.mode = viewModeNormal
-				m.pendingStashDrop = pendingStashDrop{}
-				m.status = "drop: cancelled"
-				m.statusStyle = statusOkS
-				return m, nil
-			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
-			case "y":
-				p := m.pendingStashDrop
-				m.mode = viewModeNormal
-				m.refActionInFlight = true
-				m.status = "stash: dropping " + p.label + "…"
-				m.statusStyle = statusBusyS
-				return m, stashDropCmd(m.workdir, p.label)
-			}
-			return m, nil
-		}
 		if m.mode == viewModeLocalChanges {
 			switch msg.String() {
 			case "ctrl+c", "q":
@@ -1498,33 +1238,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == viewModeCheckoutConfirm {
 			switch msg.String() {
-			case "s":
-				p := m.pendingCheckout
-				m.mode = viewModeNormal
-				m.statusStyle = statusBusyS
-				if p.withFF {
-					m.ffInFlight = true
-					m.status = "fast-forward: " + p.ref + " (stashing…)"
-					return m, stashThenFFCmd(m.workdir, p.ref, p.ffHash)
-				}
-				if p.withCheckoutFF {
-					m.ffInFlight = true
-					m.status = "fast-forward: " + p.ref + " (checkout + ff, stashing…)"
-					return m, stashThenCheckoutThenFFCmd(m.workdir, p.ref, p.ffHash)
-				}
-				m.checkoutInFlight = true
-				if p.withPull {
-					if p.skipReason != "" {
-						m.status = "checkout: " + p.ref + " (pull skipped: " + p.skipReason + ", stashing…)"
-					} else {
-						m.status = "checkout: " + p.ref + " + pull (stashing…)"
-					}
-					return m, stashThenCheckoutThenPullThenPopCmd(
-						"", p.ref, p.detached, m.pullPrefStrategy, p.skipReason,
-					)
-				}
-				m.status = "checkout: " + p.ref + " (stashing…)"
-				return m, stashThenCheckoutCmd(m.workdir, p.ref, p.detached)
 			case "a", "esc":
 				m.mode = viewModeNormal
 				p := m.pendingCheckout
@@ -1623,13 +1336,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			remotes := m.refs.RemoteRefs()
-			stashes := m.refs.StashRefs()
 			m.actionInFlight = true
 			m.status = "→ resolving…"
 			m.statusStyle = statusBusyS
-			log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d, remotes=%d, stashes=%d)",
-				shortHash(c.Hash), len(locals), len(remotes), len(stashes))
-			return m, evaluateGraphActionCmd(m.workdir, c.Hash, locals, remotes, stashes)
+			log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d, remotes=%d)",
+				shortHash(c.Hash), len(locals), len(remotes))
+			return m, evaluateGraphActionCmd(m.workdir, c.Hash, locals, remotes)
 		case "d":
 			// Refs focus reinterprets `d` as the delete intent so the
 			// destructive ref-write key doesn't collide with the patch
@@ -1914,8 +1626,8 @@ func (m Model) beginCheckoutWithPull(ref string, detached bool, skipReason strin
 }
 
 // checkoutLabel renders the user-facing "checkout: …" prefix shared by the
-// busy / success / stash-then-success status lines. Detached checkouts
-// short-hash the ref since the user picked a commit, not a name.
+// busy and success status lines. Detached checkouts short-hash the ref
+// since the user picked a commit, not a name.
 func checkoutLabel(ref string, detached bool) string {
 	if detached {
 		return "checkout: detached at " + shortHash(ref)
@@ -1982,9 +1694,7 @@ func (m Model) beginRefRename(target git.Ref) (Model, tea.Cmd) {
 // beginRefDelete reads the cursor ref from refs and opens the delete modal
 // with the resolved 4-axis state. HEAD branches and tags are filtered with a
 // status-bar message instead of opening the modal — destructive intent
-// against those targets is almost always a misclick. Stash cursors route to
-// beginStashDrop so the single-key `[y] drop` modal opens instead of the
-// branch-delete matrix.
+// against those targets is almost always a misclick.
 func (m Model) beginRefDelete() (Model, tea.Cmd) {
 	if m.refActionInFlight {
 		return m, nil
@@ -1994,9 +1704,6 @@ func (m Model) beginRefDelete() (Model, tea.Cmd) {
 		m.status = "delete: no ref selected"
 		m.statusStyle = statusErrS
 		return m, nil
-	}
-	if ref.Kind == git.RefKindStash {
-		return m.beginStashDrop(ref), nil
 	}
 	if ref.Kind == git.RefKindLocal && ref.IsHead {
 		m.status = "cannot delete current branch"
@@ -2018,21 +1725,6 @@ func (m Model) beginRefDelete() (Model, tea.Cmd) {
 	m.mode = viewModeRefDeleteConfirm
 	m.status = ""
 	return m, nil
-}
-
-// beginStashDrop opens the refs-pane `d` stash drop modal. subject is
-// resolved best-effort from the cached stashByHash → ObjectName lookup
-// against the current graph; if absent (stash hash not yet in graph
-// stream), the modal falls back to showing just the label.
-func (m Model) beginStashDrop(ref git.Ref) Model {
-	subject := ""
-	if c, ok := m.graph.CommitByHash(ref.ObjectName); ok {
-		subject = c.Subject
-	}
-	m.pendingStashDrop = pendingStashDrop{label: ref.ShortName, subject: subject}
-	m.mode = viewModeStashDropConfirm
-	m.status = ""
-	return m
 }
 
 // dispatchRefDelete fires branchDeleteCmd for the resolved scope and arms
@@ -2092,8 +1784,8 @@ func (m Model) dispatchRefRename(name string) (Model, tea.Cmd) {
 }
 
 // ffLabel renders the user-facing "fast-forward: <branch> +<N>" status
-// prefix shared by busy / success / stash-then-success lines. Mirrors
-// checkoutLabel's role for the FF path.
+// prefix shared by busy and success lines. Mirrors checkoutLabel's role
+// for the FF path.
 func ffLabel(branch string, advance int) string {
 	return fmt.Sprintf("fast-forward: %s +%d", branch, advance)
 }
@@ -2136,8 +1828,7 @@ func (m *Model) cancelStream() {
 
 // reloadCmd resets both panes to their loading state and dispatches fresh
 // log + refs queries. A stale ref in m.currentRefs surfaces via the new
-// stream's commitsStreamDoneMsg.err. The stash tips are passed alongside
-// currentRefs so the graph keeps showing stash entries across reloads.
+// stream's commitsStreamDoneMsg.err.
 func (m *Model) reloadCmd() tea.Cmd {
 	m.cancelStream()
 	m.streamReqID++
@@ -2146,11 +1837,7 @@ func (m *Model) reloadCmd() tea.Cmd {
 	// detached HEAD / empty ref set / pre-load, which falls through to a
 	// zero handle and a no-op restore.
 	if ref, ok := m.refs.Selected(); ok {
-		h := persistedRefHandle{name: ref.ShortName, kind: ref.Kind}
-		if ref.Kind == git.RefKindStash {
-			h.stashHash = ref.ObjectName
-		}
-		m.pendingRefCursorPersist = h
+		m.pendingRefCursorPersist = persistedRefHandle{name: ref.ShortName, kind: ref.Kind}
 	} else {
 		m.pendingRefCursorPersist = persistedRefHandle{}
 	}
@@ -2158,7 +1845,7 @@ func (m *Model) reloadCmd() tea.Cmd {
 	m.refs.ResetForReload()
 	return tea.Batch(
 		resetCmd,
-		loadCommitsCmd(m.workdir, m.currentRefs, m.currentStashHashes, m.currentStashByHash, m.streamReqID),
+		loadCommitsCmd(m.workdir, m.currentRefs, m.streamReqID),
 		loadRefsCmd(m.workdir),
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 	)
@@ -2414,69 +2101,32 @@ func (m Model) renderRefDeleteConfirmInner() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderStashModalInner is the shared 3-row skeleton for the stash modals:
-// styled header, subject body (or fallback), and the hint matrix. Caller
-// picks the header style (modalHeaderS for the picker, confirmPromptS for
-// the drop confirm — same convention as the create/rename vs delete-confirm
-// pair).
-func renderStashModalInner(headerStyle lipgloss.Style, header, body, hint string) string {
-	if body == "" {
-		body = "(no subject)"
-	}
-	return strings.Join([]string{
-		headerStyle.Render(header),
-		statusOkS.Render(body),
-		help.Render(hint),
-	}, "\n")
-}
-
-func (m Model) renderStashActionPickerInner() string {
-	p := m.pendingStashAction
-	return renderStashModalInner(modalHeaderS, "[Stash "+p.label+"]", p.subject,
-		"[p] pop · [a] apply · [esc] cancel")
-}
-
-func (m Model) renderStashDropConfirmInner() string {
-	p := m.pendingStashDrop
-	body := p.label
-	if p.subject != "" {
-		body = p.label + ": " + p.subject
-	}
-	return renderStashModalInner(confirmPromptS, "Drop stash?", body,
-		"[y] drop · [esc] cancel")
-}
-
 // renderCheckoutConfirmInner returns the 3-row content for the dirty-tree
 // confirm modal: bold "Uncommitted changes" header, a variant body line,
-// and a variant hint line. The withPull case sits above the skip-reason
-// case so a no-skip pull advertises "and pull"; the skip variant falls
-// through to "stash & checkout" instead, since the chain elides the pull.
+// and an abort hint. The hint stays uniform across variants since the only
+// way forward through a dirty tree is to commit / drop changes outside the
+// cockpit, then retry — the modal exists to name what was attempted.
 func (m Model) renderCheckoutConfirmInner() string {
 	p := m.pendingCheckout
 
-	var body, hint string
+	var body string
 	switch {
 	case p.withFF:
 		body = "fast-forward '" + p.ref + "'?"
-		hint = "[s] stash & fast-forward · [a] abort · [esc] cancel"
 	case p.withCheckoutFF:
 		body = "checkout '" + p.ref + "' and fast-forward?"
-		hint = "[s] stash & checkout & fast-forward · [a] abort · [esc] cancel"
 	case p.withPull && p.skipReason == "":
 		body = "checkout '" + p.ref + "' and pull?"
-		hint = "[s] stash & checkout & pull · [a] abort · [esc] cancel"
 	case p.withPull:
 		body = "checkout '" + p.ref + "' (pull skipped: " + p.skipReason + ")?"
-		hint = "[s] stash & checkout · [a] abort · [esc] cancel"
 	default:
 		body = "checkout '" + p.ref + "'?"
-		hint = "[s] stash & checkout · [a] abort · [esc] cancel"
 	}
 
 	return strings.Join([]string{
 		confirmPromptS.Render("Uncommitted changes"),
 		statusBusyS.Render(body),
-		help.Render(hint),
+		help.Render("[a] abort · [esc] cancel"),
 	}, "\n")
 }
 
@@ -2545,10 +2195,6 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderRefDeleteConfirmInner()), m.width, m.height)
 	case viewModeCheckoutConfirm:
 		return composeOverlay(base, renderModalBox(m.renderCheckoutConfirmInner()), m.width, m.height)
-	case viewModeStashActionPicker:
-		return composeOverlay(base, renderModalBox(m.renderStashActionPickerInner()), m.width, m.height)
-	case viewModeStashDropConfirm:
-		return composeOverlay(base, renderModalBox(m.renderStashDropConfirmInner()), m.width, m.height)
 	case viewModeWorktreeList:
 		return composeOverlay(base, renderModalBox(m.renderWorktreeModalInner()), m.width, m.height)
 	case viewModeWorktreeAddInput:
@@ -2594,7 +2240,6 @@ func (m Model) tabBody() string {
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
 	case viewModeBranchPicker, viewModeRefNameInput, viewModeRefDeleteConfirm, viewModeCheckoutConfirm,
-		viewModeStashActionPicker, viewModeStashDropConfirm,
 		viewModeWorktreeList, viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm:
 		return " "
 	case viewModeHelp:

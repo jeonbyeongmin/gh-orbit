@@ -122,7 +122,7 @@ func TestGraphActionMsgNoOpStaysOnBranch(t *testing.T) {
 }
 
 func TestGraphActionMsgCheckoutCallsCheckout(t *testing.T) {
-	getRef, _, _ := stubCheckout(t)
+	getRef, _ := stubCheckout(t)
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -185,7 +185,7 @@ func TestGraphActionMsgFFDispatchesFFOnly(t *testing.T) {
 }
 
 func TestGraphActionMsgDetachCallsCheckoutDetached(t *testing.T) {
-	_, _, getDetached := stubCheckout(t)
+	_, getDetached := stubCheckout(t)
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -260,7 +260,7 @@ func TestGraphActionMsgStaleHashIsDropped(t *testing.T) {
 }
 
 func TestBranchPickerEnterDispatchesCheckout(t *testing.T) {
-	getRef, _, _ := stubCheckout(t)
+	getRef, _ := stubCheckout(t)
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -408,39 +408,6 @@ func TestFFNeedsCleanTreeEntersConfirmModal(t *testing.T) {
 	}
 }
 
-func TestCheckoutConfirmStashWithFFRunsStashThenFFChain(t *testing.T) {
-	var stashCalled, ffCalled bool
-	withChainStubs(t, chainStubs{
-		stash:       func(context.Context, string, string) error { stashCalled = true; return nil },
-		mergeFFOnly: func(context.Context, string, string) error { ffCalled = true; return nil },
-		countAhead:  func(context.Context, string, string, string) (int, error) { return 1, nil },
-	})
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.mode = viewModeCheckoutConfirm
-	m.pendingCheckout = pendingCheckout{ref: "main", withFF: true, ffHash: "abc1234"}
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("mode = %v, want viewModeNormal after s", m.mode)
-	}
-	if !m.ffInFlight {
-		t.Error("modal s on withFF should latch ffInFlight (not checkoutInFlight)")
-	}
-	if m.checkoutInFlight {
-		t.Error("modal s on withFF should NOT latch checkoutInFlight")
-	}
-	if cmd == nil {
-		t.Fatal("modal s should return stashThenFFCmd")
-	}
-	_ = cmd()
-	if !stashCalled || !ffCalled {
-		t.Errorf("stash=%v ff=%v, want both true", stashCalled, ffCalled)
-	}
-}
-
 func TestGraphActionMsgCheckoutAndFFDispatchesCheckoutThenFF(t *testing.T) {
 	var coCalled, ffCalled bool
 	withChainStubs(t, chainStubs{
@@ -498,40 +465,6 @@ func TestFFCheckoutNeedsCleanTreeEntersConfirmModalWithCheckoutFF(t *testing.T) 
 	}
 }
 
-func TestCheckoutConfirmStashWithCheckoutFFRunsChain(t *testing.T) {
-	var stCalled, coCalled, ffCalled bool
-	withChainStubs(t, chainStubs{
-		stash:       func(context.Context, string, string) error { stCalled = true; return nil },
-		checkout:    func(context.Context, string, string) error { coCalled = true; return nil },
-		mergeFFOnly: func(context.Context, string, string) error { ffCalled = true; return nil },
-		countAhead:  func(context.Context, string, string, string) (int, error) { return 1, nil },
-	})
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.mode = viewModeCheckoutConfirm
-	m.pendingCheckout = pendingCheckout{ref: "develop", withCheckoutFF: true, ffHash: "abc1234"}
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("mode = %v, want viewModeNormal after s", m.mode)
-	}
-	if !m.ffInFlight {
-		t.Error("modal s on withCheckoutFF should latch ffInFlight (not checkoutInFlight)")
-	}
-	if m.checkoutInFlight {
-		t.Error("modal s on withCheckoutFF should NOT latch checkoutInFlight")
-	}
-	if cmd == nil {
-		t.Fatal("modal s should return stashThenCheckoutThenFFCmd")
-	}
-	_ = cmd()
-	if !stCalled || !coCalled || !ffCalled {
-		t.Errorf("st=%v co=%v ff=%v, want all true", stCalled, coCalled, ffCalled)
-	}
-}
-
 func TestCheckoutThenFFSucceededMsgReloadsAndJumpsHEAD(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -554,32 +487,5 @@ func TestCheckoutThenFFSucceededMsgReloadsAndJumpsHEAD(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("checkoutThenFFSucceededMsg should dispatch reload cmd")
-	}
-}
-
-func TestStashThenFFMsgReloadsAndJumpsHEAD(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.ffInFlight = true
-
-	updated, cmd := m.Update(stashThenFFMsg{
-		branch: "main", advance: 2, stashLabel: "stash@{0}",
-	})
-	m = updated.(Model)
-	if m.ffInFlight {
-		t.Error("stashThenFFMsg should release ffInFlight")
-	}
-	if !strings.Contains(m.status, "fast-forward: main +2") {
-		t.Errorf("status = %q, want '+2' advance reflected", m.status)
-	}
-	if !strings.Contains(m.status, "stash@{0}") {
-		t.Errorf("status = %q, want it to surface the stash label", m.status)
-	}
-	if m.pendingHEADHash != pendingHEADSentinel {
-		t.Errorf("pendingHEADHash = %q, want sentinel", m.pendingHEADHash)
-	}
-	if cmd == nil {
-		t.Fatal("stashThenFFMsg should dispatch reload cmd")
 	}
 }

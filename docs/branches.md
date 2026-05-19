@@ -36,8 +36,6 @@ Execution order is local → remote, with **no rollback** on partial failure (in
 - local OK + remote FAIL → `branchDeletePartialMsg` → status: `deleted '<name>'; remote push failed: <reason>` (statusErrS).
 - local FAIL (any cause) → remote step skipped. `ErrBranchNotFullyMerged` from a safe delete routes to `branchDeleteNotMergedMsg` → status: `delete: '<name>' not fully merged — press [f] or [F] to force`. Modal closes; pressing `d` again re-opens it so the user can pick the force pair.
 
-Stash drop is also bound to `d` on the refs pane — see [stash.md](stash.md).
-
 ## Rename (`m`)
 
 Local branches only. `refs.go` emits `refRenameRejectedMsg` for tags / remote-tracking refs / detached HEAD with `rename: local branch only`.

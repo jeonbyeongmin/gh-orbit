@@ -17,7 +17,6 @@ const (
 	colorChipLocal  = "39"
 	colorChipRemote = "207"
 	colorChipTag    = "220"
-	colorChipStash  = "165"
 	colorChipFG     = "232"
 	// colorChipMore aliases colorDim — both the "+N" overflow chip and
 	// the dim-band chip share the same neutral grey. Keeping one source
@@ -41,7 +40,6 @@ var (
 	chipLocalStyle    = newChipStyle(colorChipLocal, colorChipFG)
 	chipRemoteStyle   = newChipStyle(colorChipRemote, colorChipFG)
 	chipTagStyle      = newChipStyle(colorChipTag, colorChipFG)
-	chipStashStyle    = newChipStyle(colorChipStash, colorChipFG)
 	chipMoreStyle     = newChipStyle(colorChipMore, colorChipFG)
 	chipSelectedStyle = newChipStyle(colorSelected, colorChipFG)
 	chipDimStyle      = newChipStyle(colorDim, colorChipFG)
@@ -118,8 +116,6 @@ func chipStyleFor(c git.ChipRef) lipgloss.Style {
 		return chipRemoteStyle
 	case git.RefKindTag:
 		return chipTagStyle
-	case git.RefKindStash:
-		return chipStashStyle
 	default:
 		return chipLocalStyle
 	}

@@ -111,14 +111,10 @@ type deletedRefHandle struct {
 
 // persistedRefHandle snapshots the refs cursor at reloadCmd time so the
 // post-reload refsLoadedMsg handler can restore the same ref across the
-// reload's cursor=0 reset. For non-stash refs name+kind is enough; for
-// stash entries we capture the commit hash too because reloads can
-// renumber stash@{N} after pop/drop and ShortName alone would land on
-// a different entry. Zero value (all fields empty) means "no persist".
+// reload's cursor=0 reset. Zero value (all fields empty) means "no persist".
 type persistedRefHandle struct {
-	name      string
-	kind      git.RefKind
-	stashHash string
+	name string
+	kind git.RefKind
 }
 
 // branchCreateSucceededMsg fires when `git branch <name> [<base>]` returned
@@ -335,10 +331,7 @@ func resolveCreateBase(focused pane, graphCursorHash string, refsCursorRef git.R
 // remote ref whose only matching local is HEAD itself — we never auto-delete
 // HEAD).
 func resolveDeleteState(target git.Ref, locals, remotes []git.Ref) (refDeleteState, bool) {
-	if target.Kind == git.RefKindTag || target.Kind == git.RefKindStash {
-		// Stash routes to its own drop modal (beginStashDrop in model.go);
-		// reaching here means a caller forgot to gate. Fail closed so the
-		// branch-delete matrix never sees a stash ref.
+	if target.Kind == git.RefKindTag {
 		return refDeleteState{}, false
 	}
 	st := refDeleteState{target: target}

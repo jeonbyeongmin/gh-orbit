@@ -152,12 +152,6 @@ func TestPersistCursorAcrossCheckoutReload(t *testing.T) {
 	assertSelected(t, m, "feat/b", git.RefKindLocal)
 }
 
-func TestPersistCursorAcrossCheckoutThenPullReload(t *testing.T) {
-	m := refsCursorPersistSetup(t, basicLocalRefs(), "feat/b", git.RefKindLocal)
-	m = simulateReload(t, m, checkoutThenPullSucceededMsg{ref: "feat/b"}, basicLocalRefs())
-	assertSelected(t, m, "feat/b", git.RefKindLocal)
-}
-
 func TestPersistCursorAcrossPullReload(t *testing.T) {
 	m := refsCursorPersistSetup(t, basicLocalRefs(), "feat/a", git.RefKindLocal)
 	m = simulateReload(t, m, pullSucceededMsg{}, basicLocalRefs())

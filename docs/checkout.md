@@ -1,6 +1,6 @@
 # checkout
 
-Three entry points: refs `enter`, refs `p` (checkout + pull), graph `enter`. All share the dirty-tree confirm flow.
+Two entry points: refs `enter`, graph `enter`. Both share the dirty-tree confirm flow. Pull is a separate global action (`p`) — there is no cursor-bound checkout+pull chain.
 
 ## refs `enter`
 
@@ -16,20 +16,7 @@ Translates the cursor ref into a local-name argument before invoking `git checko
 - On that sentinel the TUI enters `viewModeCheckoutConfirm`. Only `a` / `esc` / `ctrl+c` work; every other key is swallowed.
 - `a` / `esc` clear `pendingCheckout` and leave the working tree alone.
 
-The modal is reused for the same-branch FF (`withFF`), cross-branch FF (`withCheckoutFF`), and checkout-with-pull (`withPull`) paths — the hint text reflects which chain the abort applies to.
-
-## refs `p` — checkout + pull
-
-Cursor-bound mirror of global `P`. Only lower-case `p` is bound on the refs pane — the global upper-case `P` (plain pull on the current branch) is unchanged. Case-pair reads as "global pull vs. cursor-bound pull".
-
-Pull eligibility decided at keypress time from the ref's `Kind` and `Upstream`:
-
-| ref state                                    | action                                                          |
-| -------------------------------------------- | --------------------------------------------------------------- |
-| Tag                                          | checkout-only · status `pull skipped: tag has no upstream`      |
-| Local branch, no upstream                    | checkout-only · status `pull skipped: local branch has no upstream` |
-| Local branch with upstream                   | checkout, then pull                                             |
-| Remote-tracking ref                          | checkout (dwim creates local tracker), then pull                |
+The modal is reused for the same-branch FF (`withFF`) and cross-branch FF (`withCheckoutFF`) paths — the hint text reflects which chain the abort applies to.
 
 ## graph `enter`
 
@@ -56,7 +43,7 @@ Fork's "Checkout & Fast-Forward" surfaces in three ways:
 
 Other invariants:
 
-- Multiple locals tracking the same upstream: cross-branch picks the alphabetically first. Picker UX is reserved for ambiguous local-chip rows. For cross-branch, the refs panel `p` is the explicit-choice escape hatch.
+- Multiple locals tracking the same upstream: cross-branch picks the alphabetically first. Picker UX is reserved for ambiguous local-chip rows; there is no explicit-choice escape hatch on the refs pane.
 - `viewModeBranchPicker`: `j` / `k` move cursor, `enter` confirms, `esc` cancels. Every other key swallowed.
 - Decision computed asynchronously via `evaluateGraphActionCmd` — model never blocks `Update` on git. `actionInFlight` swallows a second Enter while the evaluator is running. A cursor move between Enter dispatch and reply causes the reply to be dropped — re-press Enter on the new row.
 - Status surfaces are one-line: `fast-forward: main +3`, `fast-forward: develop +2 (after checkout)`, `fast-forward failed: <reason>`, `already on main`, `branch select cancelled`.

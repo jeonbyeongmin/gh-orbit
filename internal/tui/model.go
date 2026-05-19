@@ -119,20 +119,12 @@ const helpExpandedHeight = 12
 // means a refs-pane Enter (named ref) or a graph-Enter checkout to a
 // chip-bearing branch.
 //
-// withPull and skipReason carry the refs-pane `p` chain's state across
-// the dirty-tree confirm modal. Zero values mean "plain checkout" —
-// refCheckoutRequestedMsg (Enter) leaves them off. skipReason being
-// non-empty is the single signal of "pull will be skipped" (tag /
-// detached / no-upstream local refs).
-//
 // withFF / withCheckoutFF / ffHash flag the graph-Enter FF paths so the
 // modal hint can name the chain. ref carries the local-branch name;
 // ffHash carries the cursor commit MergeFFOnly should advance to.
 type pendingCheckout struct {
 	ref            string
 	detached       bool
-	withPull       bool
-	skipReason     string
 	withFF         bool
 	withCheckoutFF bool
 	ffHash         string
@@ -180,7 +172,7 @@ type Model struct {
 	// fetchInFlight gates the F key while a background fetch is running so a
 	// second F doesn't spawn a parallel git invocation.
 	fetchInFlight bool
-	// pullInFlight gates the P key. Tracked separately from fetchInFlight so
+	// pullInFlight gates the p key. Tracked separately from fetchInFlight so
 	// F + P can run in parallel; git's own .git/index.lock is the real
 	// serialization point.
 	pullInFlight bool
@@ -508,15 +500,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, cmd = m.beginCheckout(git.CheckoutTarget(msg.ref), false)
 		return m, cmd
 
-	case refCheckoutWithPullRequestedMsg:
-		// Pull eligibility is decided here, at keypress time, while we still
-		// have the full git.Ref (Kind + Upstream). The chain command itself
-		// stays dir-only; passing the decision in skipReason avoids a
-		// follow-up `git rev-parse @{upstream}` mid-chain.
-		var cmd tea.Cmd
-		m, cmd = m.beginCheckoutWithPull(git.CheckoutTarget(msg.ref), false, resolvePullEligibility(msg.ref))
-		return m, cmd
-
 	case checkoutSucceededMsg:
 		m.checkoutInFlight = false
 		m.pendingCheckout = pendingCheckout{}
@@ -541,31 +524,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "checkout failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
-
-	case checkoutThenPullSucceededMsg:
-		m.checkoutInFlight = false
-		m.pendingCheckout = pendingCheckout{}
-		if msg.pullSkipped {
-			m.status = checkoutLabel(msg.ref, msg.detached) +
-				" (pull skipped: " + msg.skipReason + ")"
-		} else {
-			m.status = checkoutLabel(msg.ref, msg.detached) + "; pull: done"
-		}
-		m.statusStyle = statusOkS
-		m.pendingHEADHash = pendingHEADSentinel
-		return m, m.reloadCmd()
-
-	case checkoutThenPullConflictMsg:
-		// checkout landed; pull tripped on a merge/rebase conflict. HEAD now
-		// sits on a half-merged commit so we still reload refs+log, but we
-		// deliberately do NOT arm pendingHEADHash — the user is mid-conflict
-		// and should resolve in their terminal before the cursor jumps.
-		m.checkoutInFlight = false
-		m.pendingCheckout = pendingCheckout{}
-		m.status = checkoutLabel(msg.ref, msg.detached) +
-			"; pull: CONFLICT — resolve in your terminal"
-		m.statusStyle = statusErrS
-		return m, m.reloadCmd()
 
 	case refSelectedMsg:
 		// Unified graph: Enter no longer reloads; it jumps the graph cursor
@@ -1118,7 +1076,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "fetching…"
 			m.statusStyle = statusBusyS
 			return m, fetchCmd(m.workdir)
-		case "P":
+		case "p":
 			if m.pullInFlight {
 				return m, nil
 			}
@@ -1416,52 +1374,6 @@ func (m Model) beginCheckout(ref string, detached bool) (Model, tea.Cmd) {
 	m.status = checkoutLabel(ref, detached) + " …"
 	m.statusStyle = statusBusyS
 	return m, checkoutCmd(m.workdir, ref, detached)
-}
-
-// resolvePullEligibility decides whether `p` should follow the checkout
-// with a pull. Returns a non-empty reason string when pull should be
-// skipped, "" when pull is eligible. Tags resolve to detached HEADs with
-// no upstream; local branches without an upstream have nowhere to pull
-// from; remote-tracking refs always become local tracking branches via
-// dwim and are pull-eligible. The decision happens at keypress time so
-// the chain command itself stays dir-only and doesn't need to re-resolve
-// refs across async steps.
-func resolvePullEligibility(ref git.Ref) (skipReason string) {
-	switch ref.Kind {
-	case git.RefKindTag:
-		return "tag has no upstream"
-	case git.RefKindLocal:
-		if ref.Upstream == "" {
-			return "local branch has no upstream"
-		}
-	}
-	return ""
-}
-
-// beginCheckoutWithPull dispatches the refs-pane `p` chain. Same gating
-// as beginCheckout (one in-flight at a time) plus pendingCheckout fields
-// that survive the dirty-tree confirm modal so its `s` branch can re-issue
-// the chain instead of falling back to the plain checkout-only flow.
-// A non-empty skipReason means pull will be skipped — that single value
-// drives both the busy-status text and the chain command's skip flag.
-func (m Model) beginCheckoutWithPull(ref string, detached bool, skipReason string) (Model, tea.Cmd) {
-	if m.checkoutInFlight {
-		return m, nil
-	}
-	m.checkoutInFlight = true
-	m.pendingCheckout = pendingCheckout{
-		ref:        ref,
-		detached:   detached,
-		withPull:   true,
-		skipReason: skipReason,
-	}
-	if skipReason != "" {
-		m.status = checkoutLabel(ref, detached) + " (pull skipped: " + skipReason + ") …"
-	} else {
-		m.status = checkoutLabel(ref, detached) + " + pull …"
-	}
-	m.statusStyle = statusBusyS
-	return m, checkoutThenPullCmd(m.workdir, ref, detached, m.pullPrefStrategy, skipReason)
 }
 
 // checkoutLabel renders the user-facing "checkout: …" prefix shared by the
@@ -1800,10 +1712,6 @@ func (m Model) renderCheckoutConfirmInner() string {
 		body = "fast-forward '" + p.ref + "'?"
 	case p.withCheckoutFF:
 		body = "checkout '" + p.ref + "' and fast-forward?"
-	case p.withPull && p.skipReason == "":
-		body = "checkout '" + p.ref + "' and pull?"
-	case p.withPull:
-		body = "checkout '" + p.ref + "' (pull skipped: " + p.skipReason + ")?"
 	default:
 		body = "checkout '" + p.ref + "'?"
 	}

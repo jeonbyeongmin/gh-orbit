@@ -494,16 +494,13 @@ func TestWorktreeModalRemoveDirtyRequiresUppercaseY(t *testing.T) {
 func TestWorktreeModalAddInputValidationAndSuccess(t *testing.T) {
 	prevList := worktreesExec
 	prevAdd := worktreeAddExec
-	prevCRF := checkRefFormatExec
 	defer func() {
 		worktreesExec = prevList
 		worktreeAddExec = prevAdd
-		checkRefFormatExec = prevCRF
 	}()
 	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
 		return []git.Worktree{{Path: "/tmp/main", Branch: "main", IsMain: true}}, nil
 	}
-	checkRefFormatExec = func(_ context.Context, _, _ string) error { return nil }
 	var seenPath, seenBranch string
 	var seenCreate bool
 	worktreeAddExec = func(_ context.Context, _, path, branch string, createBranch bool) error {

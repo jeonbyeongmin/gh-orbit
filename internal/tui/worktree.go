@@ -173,18 +173,15 @@ func deriveAddPath(activePath, branch string) string {
 	return filepath.Join(filepath.Dir(activePath), branch)
 }
 
-// worktreeAddCmd validates the branch name with check-ref-format, then
-// runs WorktreeAdd. A single cmd keeps the modal flow linear — the user
-// sees the success/failure msg with no intermediate "validating…" hop.
-// On invalid branch name the err is set to git.ErrInvalidRefName via
-// CheckRefFormat's wrapping so handlers can branch on errors.Is.
+// worktreeAddCmd runs WorktreeAdd. Invalid branch names are caught by
+// `git worktree add` itself — the wrapper surfaces git's stderr verbatim
+// via worktreeAddFailedMsg, so the inline error line reads naturally
+// ("fatal: '<x>' is not a valid branch name") without a separate
+// validation hop.
 func worktreeAddCmd(dir, path, branch string, reqID uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), worktreeDirtyTimeout)
 		defer cancel()
-		if err := checkRefFormatExec(ctx, dir, branch); err != nil {
-			return worktreeAddFailedMsg{reqID: reqID, err: err}
-		}
 		if err := worktreeAddExec(ctx, dir, path, branch, true); err != nil {
 			return worktreeAddFailedMsg{reqID: reqID, err: err}
 		}
@@ -455,7 +452,6 @@ func (m Model) switchWorktree(path string) (Model, tea.Cmd) {
 	// Drop persist state explicitly so reloadCmd's snapshot below doesn't
 	// repopulate it from the (about-to-be-replaced) refs pane.
 	m.pendingRefCursorPersist = persistedRefHandle{}
-	m.pendingRefCursorName = ""
 	m.pendingRefCursorAfterDelete = deletedRefHandle{}
 	// Reset dirty so the header doesn't flash the previous tree's marker
 	// while the new dirty fan-out is in flight.

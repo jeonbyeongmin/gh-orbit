@@ -64,27 +64,6 @@ type refCheckoutRequestedMsg struct{ ref git.Ref }
 // variant".
 type refCheckoutWithPullRequestedMsg struct{ ref git.Ref }
 
-// refCreateRequestedMsg is emitted when the user presses `n` on the refs
-// pane. The root resolves the create base (graph cursor commit / refs
-// cursor ref tip / HEAD, depending on focus) and opens the name-input
-// modal. cursorRef carries the cursor ref for refs-focus base resolution;
-// hasCursor reflects whether there was any selectable ref under the cursor.
-type refCreateRequestedMsg struct {
-	cursorRef git.Ref
-	hasCursor bool
-}
-
-// refRenameRequestedMsg is emitted when the user presses `m` on a local
-// branch row. The root opens the name-input modal in rename mode with
-// the source ref baked in. refs.go already filters non-local refs
-// (m on a tag / remote-tracking ref emits refRenameRejectedMsg instead).
-type refRenameRequestedMsg struct{ ref git.Ref }
-
-// refRenameRejectedMsg is emitted when the user presses `m` but the cursor
-// ref isn't a local branch. The root surfaces the reason on the status bar
-// so the user understands why nothing happened.
-type refRenameRejectedMsg struct{ reason string }
-
 func loadRefsCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), refLoadTimeout)
@@ -152,28 +131,6 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 				return r, func() tea.Msg { return refCheckoutWithPullRequestedMsg{ref: ref} }
 			}
 			return r, nil
-		case "n":
-			if r.onLocalChanges {
-				return r, nil
-			}
-			ref, ok := r.Selected()
-			return r, func() tea.Msg { return refCreateRequestedMsg{cursorRef: ref, hasCursor: ok} }
-		case "m":
-			if r.onLocalChanges {
-				return r, nil
-			}
-			ref, ok := r.Selected()
-			if !ok {
-				return r, func() tea.Msg {
-					return refRenameRejectedMsg{reason: "rename: no ref selected"}
-				}
-			}
-			if ref.Kind != git.RefKindLocal {
-				return r, func() tea.Msg {
-					return refRenameRejectedMsg{reason: "rename: local branch only"}
-				}
-			}
-			return r, func() tea.Msg { return refRenameRequestedMsg{ref: ref} }
 		}
 		return r.handleKey(m), nil
 	}

@@ -1768,11 +1768,13 @@ func TestOverlayCenters(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	m, _ = m.beginRefCreate(git.Ref{}, false)
+	// Branch picker is the simplest centered overlay available post-PR-2.
+	m.mode = viewModeBranchPicker
+	m.branchPicker = branchPickerState{candidates: []string{"feat/a", "feat/b"}}
 	view := m.View()
 	rows := strings.Split(view, "\n")
 
-	const headerText = "Create branch from"
+	const headerText = "[Branch select]"
 	headerRow := -1
 	for i, r := range rows {
 		if strings.Contains(ansi.Strip(r), headerText) {
@@ -1783,9 +1785,10 @@ func TestOverlayCenters(t *testing.T) {
 	if headerRow == -1 {
 		t.Fatalf("modal header %q not found in view\n--- view ---\n%s", headerText, ansi.Strip(view))
 	}
-	// Create-branch modal: 4 inner rows + 2 chrome = 6 outer. On a 30-row
-	// screen the centered top edge sits at (30-6)/2 = 12; the header is
-	// the first inner row at row 13. ±2 slack absorbs future tweaks.
+	// Branch picker modal: header + 2 candidate rows + hint = 4 inner rows.
+	// 4 inner + 2 chrome = 6 outer. On a 30-row screen the centered top
+	// edge sits around (30-6)/2 = 12; header is the first inner row near
+	// row 13. ±2 slack absorbs future tweaks.
 	const wantHeaderRow = 13
 	if headerRow < wantHeaderRow-2 || headerRow > wantHeaderRow+2 {
 		t.Errorf("modal header row = %d, want around %d", headerRow, wantHeaderRow)
@@ -1800,7 +1803,8 @@ func TestOverlayDimsBackdrop(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	m, _ = m.beginRefCreate(git.Ref{}, false)
+	m.mode = viewModeBranchPicker
+	m.branchPicker = branchPickerState{candidates: []string{"feat/a", "feat/b"}}
 	view := m.View()
 	rows := strings.Split(view, "\n")
 

@@ -36,9 +36,7 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `p`                 | refs          | checkout then pull — see [checkout.md](checkout.md)                                                                   |
 | `o`                 | refs          | jump graph cursor to ref tip                                                                                          |
 | `a`                 | refs          | unified `--all` view                                                                                                  |
-| `n`                 | refs          | new branch — see [branches.md](branches.md)                                                                           |
-| `d`                 | refs          | delete branch — see [branches.md](branches.md)                                                                        |
-| `m`                 | refs          | rename local branch — see [branches.md](branches.md)                                                                  |
+| `d`                 | refs          | delete branch (inline confirm) — see [branches.md](branches.md)                                                       |
 | `enter`             | graph         | context-aware: checkout / FF / detach — see [checkout.md](checkout.md)                                                |
 | `y`                 | Commit tab    | copy full hash to clipboard                                                                                           |
 | `d`                 | graph / tab   | open the focused commit's full patch overlay                                                                          |

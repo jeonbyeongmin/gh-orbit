@@ -196,22 +196,6 @@ func TestPersistCursorAcrossManualReload(t *testing.T) {
 	assertSelected(t, m, "feat/b", git.RefKindLocal)
 }
 
-func TestPersistDroppedWhenPendingCursorNameWins(t *testing.T) {
-	// Simulates the rename / create race: create-success arms
-	// pendingRefCursorName, the same reload sets pendingRefCursorPersist
-	// (because reloadCmd ran first). The post-reload switch must run the
-	// name branch and drop persist without applying it.
-	m := refsCursorPersistSetup(t, basicLocalRefs(), "feat/a", git.RefKindLocal)
-	m.reloadCmd() // snapshots feat/a
-	m.pendingRefCursorName = "feat/b"
-	updated, _ := m.Update(refsLoadedMsg{refs: basicLocalRefs()})
-	m = updated.(Model)
-	assertSelected(t, m, "feat/b", git.RefKindLocal)
-	if m.pendingRefCursorPersist.name != "" {
-		t.Errorf("persist not cleared after name branch fired: %+v", m.pendingRefCursorPersist)
-	}
-}
-
 func TestPersistDroppedWhenPendingDeleteWins(t *testing.T) {
 	m := refsCursorPersistSetup(t, basicLocalRefs(), "feat/a", git.RefKindLocal)
 	m.reloadCmd() // snapshots feat/a

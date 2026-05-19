@@ -242,3 +242,45 @@ func TestPersistEmptyRefSetDoesNotCrash(t *testing.T) {
 		t.Errorf("cursor=%d after no-op restore, want 0", m.refs.cursor)
 	}
 }
+
+// TestE8PersistCursorWithStickyWorktreeFrame asserts that the
+// PR #37 b14719a "cursor persist across reload" invariant survives the
+// sticky-worktree-frame refactor. The worktree section sits ABOVE the
+// ref rows in flatRows, so the cursor's "n-th selectable ref" position
+// is decoupled from any flat index that shifts when the worktree count
+// changes — but a regression in flatRows / cursorFlatRow could easily
+// reintroduce the bug, so this is the iron-rule guard.
+func TestE8PersistCursorWithStickyWorktreeFrame(t *testing.T) {
+	// Setup: refs cursor on feat/b, sidebar has two worktrees rendered
+	// above the ref rows (sticky frame).
+	m := refsCursorPersistSetup(t, basicLocalRefs(), "feat/b", git.RefKindLocal)
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+	}, "/r/main")
+
+	// Trigger a reload via a stand-in success msg, then deliver the same
+	// ref list back — sticky frame should not perturb cursor restore.
+	m = simulateReload(t, m, checkoutSucceededMsg{ref: "feat/b"}, basicLocalRefs())
+	assertSelected(t, m, "feat/b", git.RefKindLocal)
+
+	// And again with a different worktree count on the post-reload side
+	// (entries appear / vanish between snapshots) — the cursor still
+	// lands on feat/b because the persist path stores name+kind, not a
+	// flat index.
+	m = refsCursorPersistSetup(t, basicLocalRefs(), "feat/a", git.RefKindLocal)
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+	}, "/r/main")
+	m.reloadCmd()
+	// Simulate a post-reload with more worktrees (a new tree appeared
+	// during the reload window).
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+		{Path: "/r/other", Branch: "other"},
+	}, "/r/main")
+	updated, _ := m.Update(refsLoadedMsg{refs: basicLocalRefs()})
+	m = updated.(Model)
+	assertSelected(t, m, "feat/a", git.RefKindLocal)
+}

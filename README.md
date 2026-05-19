@@ -77,19 +77,22 @@ Today the build wires up:
     the tab pane is focused)
   - `ctrl+↑` / `ctrl+↓` — resize the graph / tab split (5% per press)
   - `ctrl+d` / `ctrl+u` — scroll the Changes-tab patch viewport
-  - `enter` — jump graph cursor to the focused ref tip (refs pane) /
-    open Local Changes view when on the `● Local Changes` row
-  - `d` — delete branch via inline confirm (refs pane) /
-    open patch overlay (graph / tab focus); see
-    [docs/branches.md](./docs/branches.md)
+  - `enter` — context-sensitive on refs pane: checkout cursor ref /
+    switch to cursor worktree / open Local Changes view on the
+    `● Local Changes` sticky row
+  - `d` — delete branch (refs pane, branch row) / remove worktree
+    (refs pane, worktree row) / open patch overlay (graph / tab focus);
+    see [docs/branches.md](./docs/branches.md) and
+    [docs/worktrees.md](./docs/worktrees.md)
+  - `a` — add worktree (refs pane, only on a worktree row); see
+    [docs/worktrees.md](./docs/worktrees.md)
+  - `o` — jump graph cursor to the focused ref tip (refs pane)
   - `y` — copy the focused commit's hash to the clipboard (Commit tab)
   - `F` — `git fetch --all` in the background
   - `p` — `git pull` in the background; strategy from
     `~/.config/gh-orbit/config.toml` (`[pull] strategy = "ff-only" |
     "merge" | "rebase"`), then git's `pull.rebase` / `pull.ff`,
     falling back to `--ff-only`
-  - `w` — open the worktree modal (list / switch / add / remove);
-    see [docs/worktrees.md](./docs/worktrees.md)
   - `r` — reload refs + log
   - `q` / `ctrl+c` — quit (closes the patch overlay first)
   - `R` is reserved for a future Rebase action

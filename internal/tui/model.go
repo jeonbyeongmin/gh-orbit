@@ -91,17 +91,13 @@ const (
 	// via the `,` keybind or by `enter` on the sticky `● Local Changes`
 	// row in the refs pane.
 	viewModeLocalChanges
-	// viewModeWorktreeList hosts the `w` worktree modal. Lists every entry
-	// from `git worktree list --porcelain`, with an async dirty fan-out
-	// painting `●dirty` on rows whose `git status` returned non-empty.
-	// The 3-pane layout stays visible underneath; only j/k/enter/esc/a/d
-	// are accepted while open.
-	viewModeWorktreeList
-	// viewModeWorktreeAddInput hosts the branch-name textinput for `a` on
-	// the worktree modal. The path is auto-derived (sibling directory of
-	// the active worktree's parent) so a single input clears the modal.
+	// viewModeWorktreeAddInput hosts the branch-name textinput for the
+	// add-worktree action, triggered by `a` on a worktree row in the
+	// sidebar. The path is auto-derived (sibling directory of the active
+	// worktree's parent) so a single input clears the modal.
 	viewModeWorktreeAddInput
-	// viewModeWorktreeRemoveConfirm hosts the `d` confirm prompt. Hint
+	// viewModeWorktreeRemoveConfirm hosts the remove-worktree confirm
+	// prompt, triggered by `d` on a worktree row in the sidebar. Hint
 	// matrix derives from dirty + locked: clean rows offer [y] remove,
 	// dirty/locked rows require [Y] for force.
 	viewModeWorktreeRemoveConfirm
@@ -109,9 +105,9 @@ const (
 
 // helpExpandedHeight is the row count reserved for the bottom area when
 // the `?` help panel is open. Each helpData category renders as a 1-line
-// header + 1-line entries row, so 6 categories × 2 rows = 12. paneSizes
+// header + 1-line entries row, so 5 categories × 2 rows = 10. paneSizes
 // clamps this on small terminals.
-const helpExpandedHeight = 12
+const helpExpandedHeight = 10
 
 // pendingCheckout remembers what the user was trying to check out so the
 // confirm modal's hint can name the chain it's aborting. detached=true
@@ -244,31 +240,32 @@ type Model struct {
 	// staged) to drop stale responses when the user keeps moving the
 	// cursor mid-load.
 	localChangesReqID uint64
-	// currentWorktreeDirty is the latest dirty-marker bit for m.workdir,
-	// refreshed by loadCurrentWorktreeDirtyCmd on Init / refsLoadedMsg /
-	// switchWorktreeMsg. The refs sidebar header reads it through
-	// refreshWorktreeHeader; nothing else consumes it directly.
-	currentWorktreeDirty bool
-	// worktreeModal backs viewModeWorktreeList. Modal open bumps reqID and
-	// arms loading=true; the post-load fan-out tags each entry's dirty
-	// state via worktreeDirtyResultMsg. Stale msgs (modal closed +
-	// reopened before all dirty responses landed) drop on reqID mismatch.
-	worktreeModal worktreeModalState
+	// sidebarWorktreesReqID counts every load fired by
+	// refreshSidebarWorktreesCmd. The post-load worktreesLoadedMsg + each
+	// dirty fan-out msg carry the same reqID so a switch issued mid-load
+	// drops the stale data instead of letting it overwrite the new tree's
+	// sidebar.
+	sidebarWorktreesReqID uint64
+	// worktreeAction backs the add-input / remove-confirm sub-modals
+	// triggered from a worktree row (a / d). Reset to zero on esc /
+	// success; while open the textinput owns key routing.
+	worktreeAction worktreeActionState
 }
 
 func New() Model {
 	m := Model{
-		focused:      paneGraph,
-		refs:         newRefsModel(),
-		graph:        newGraphModel(),
-		diff:         newDiffModel(),
-		changes:      newChangesModel(),
-		commitDetail: newCommitDetailModel(),
-		tabs:         newTabsModel(),
-		localChanges: newLocalChangesModel(),
-		splitRatio:   splitRatioDefault,
-		currentRefs:  []string{refsAllSentinel},
-		streamReqID:  1,
+		focused:               paneGraph,
+		refs:                  newRefsModel(),
+		graph:                 newGraphModel(),
+		diff:                  newDiffModel(),
+		changes:               newChangesModel(),
+		commitDetail:          newCommitDetailModel(),
+		tabs:                  newTabsModel(),
+		localChanges:          newLocalChangesModel(),
+		splitRatio:            splitRatioDefault,
+		currentRefs:           []string{refsAllSentinel},
+		streamReqID:           1,
+		sidebarWorktreesReqID: 1,
 	}
 	if wd, err := os.Getwd(); err == nil {
 		m.workdir = wd
@@ -296,7 +293,7 @@ func (m Model) Init() tea.Cmd {
 		loadCommitsCmd(m.workdir, m.currentRefs, m.streamReqID),
 		loadRefsCmd(m.workdir),
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
-		loadCurrentWorktreeDirtyCmd(m.workdir),
+		loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 	)
 }
 
@@ -320,97 +317,93 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := m.switchWorktree(msg.path)
 		return next, cmd
 
-	case currentWorktreeDirtyMsg:
-		// Drop stale results from a previous worktree — m.workdir may have
-		// flipped after the cmd fired but before its goroutine returned.
-		if msg.dir != m.workdir {
-			return m, nil
-		}
-		m.currentWorktreeDirty = msg.dirty
-		m.refreshWorktreeHeader()
-		return m, nil
-
 	case worktreesLoadedMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		// Drop stale loads (a switch or another reload bumped the reqID
+		// between dispatch and reply).
+		if msg.reqID != m.sidebarWorktreesReqID {
 			return m, nil
 		}
-		m.worktreeModal.loading = false
-		m.worktreeModal.entries = msg.entries
-		m.worktreeModal.loadErr = nil
-		// Seed cursor on the active worktree row so the user starts where
-		// they already are; falls through to 0 when no entry matches.
-		for i, e := range msg.entries {
-			if e.Path == m.workdir {
-				m.worktreeModal.cursor = i
-				break
-			}
-		}
+		m.refs.SetWorktrees(msg.entries, m.workdir)
 		paths := make([]string, 0, len(msg.entries))
 		for _, e := range msg.entries {
 			paths = append(paths, e.Path)
 		}
-		return m, worktreeDirtyFanoutCmd(m.worktreeModal.reqID, paths)
+		return m, worktreeDirtyFanoutCmd(m.sidebarWorktreesReqID, paths)
 
 	case worktreesLoadFailedMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.sidebarWorktreesReqID {
 			return m, nil
 		}
-		m.worktreeModal.loading = false
-		m.worktreeModal.loadErr = msg.err
+		// Soft-fail: the sidebar already shows whatever the previous load
+		// produced. Surface the error on the status bar so the user knows
+		// the inventory may be stale.
+		m.status = "worktrees: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
 		return m, nil
 
 	case worktreeDirtyResultMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.sidebarWorktreesReqID {
 			return m, nil
 		}
-		if m.worktreeModal.dirty == nil {
-			m.worktreeModal.dirty = make(map[string]bool)
-		}
-		m.worktreeModal.dirty[msg.path] = msg.dirty
+		m.refs.SetWorktreeDirty(msg.path, msg.dirty, msg.timedOut)
 		return m, nil
 
 	case worktreeAddSucceededMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.worktreeAction.reqID {
 			return m, nil
 		}
-		m.worktreeModal.actionInFlight = false
-		m.worktreeModal.addInput = textinput.Model{}
-		m.worktreeModal.addInlineErr = ""
-		m.mode = viewModeWorktreeList
+		m.worktreeAction.actionInFlight = false
+		m.worktreeAction.addInput = textinput.Model{}
+		m.worktreeAction.addInlineErr = ""
+		m.mode = viewModeNormal
 		m.status = "worktree added: " + msg.branch + " → " + filepath.Base(msg.path)
 		m.statusStyle = statusOkS
-		return m, m.reloadWorktreeModal()
+		m.sidebarWorktreesReqID++
+		return m, loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID)
 
 	case worktreeAddFailedMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.worktreeAction.reqID {
 			return m, nil
 		}
-		m.worktreeModal.actionInFlight = false
-		m.worktreeModal.pendingAddPath = ""
-		m.worktreeModal.addInlineErr = firstLine(msg.err.Error())
+		m.worktreeAction.actionInFlight = false
+		m.worktreeAction.pendingAddPath = ""
+		m.worktreeAction.addInlineErr = firstLine(msg.err.Error())
 		// Stay in viewModeWorktreeAddInput so the user can fix the input.
 		return m, nil
 
 	case worktreeRemoveSucceededMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.worktreeAction.reqID {
 			return m, nil
 		}
-		m.worktreeModal.actionInFlight = false
-		m.worktreeModal.removeTarget = git.Worktree{}
-		m.mode = viewModeWorktreeList
+		m.worktreeAction.actionInFlight = false
+		m.worktreeAction.removeTarget = git.Worktree{}
+		m.mode = viewModeNormal
 		m.status = "worktree removed: " + filepath.Base(msg.path)
 		m.statusStyle = statusOkS
-		return m, m.reloadWorktreeModal()
+		m.sidebarWorktreesReqID++
+		return m, loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID)
 
 	case worktreeRemoveFailedMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.worktreeAction.reqID {
 			return m, nil
 		}
-		m.worktreeModal.actionInFlight = false
-		m.worktreeModal.removeTarget = git.Worktree{}
-		m.mode = viewModeWorktreeList
+		m.worktreeAction.actionInFlight = false
+		m.worktreeAction.removeTarget = git.Worktree{}
+		m.mode = viewModeNormal
 		m.status = "remove: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
+		return m, nil
+
+	case refWorktreeSwitchRequestedMsg:
+		return m, func() tea.Msg { return switchWorktreeMsg(msg) }
+
+	case refWorktreeAddRequestedMsg:
+		var cmd tea.Cmd
+		m, cmd = m.beginWorktreeAdd()
+		return m, cmd
+
+	case refWorktreeRemoveRequestedMsg:
+		m = m.beginWorktreeRemove(msg.target)
 		return m, nil
 
 	case commitsStreamStartedMsg:
@@ -489,9 +482,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h := m.pendingRefCursorPersist
 			m.refs.SelectByNameKindOrNeighbor(h.name, h.kind)
 			m.pendingRefCursorPersist = persistedRefHandle{}
-		}
-		if _, ok := msg.(refsLoadedMsg); ok {
-			m.refreshWorktreeHeader()
 		}
 		return m, cmd
 
@@ -816,114 +806,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.mode == viewModeWorktreeList {
-			if m.worktreeModal.actionInFlight {
-				if msg.String() == "ctrl+c" {
-					m.cancelStream()
-					return m, tea.Quit
-				}
-				return m, nil
-			}
-			switch msg.String() {
-			case "j", "down":
-				if m.worktreeModal.cursor < len(m.worktreeModal.entries)-1 {
-					m.worktreeModal.cursor++
-				}
-				return m, nil
-			case "k", "up":
-				if m.worktreeModal.cursor > 0 {
-					m.worktreeModal.cursor--
-				}
-				return m, nil
-			case "enter":
-				if m.worktreeModal.cursor >= len(m.worktreeModal.entries) {
-					return m, nil
-				}
-				target := m.worktreeModal.entries[m.worktreeModal.cursor]
-				m.mode = viewModeNormal
-				m.worktreeModal = worktreeModalState{reqID: m.worktreeModal.reqID + 1}
-				return m, func() tea.Msg { return switchWorktreeMsg{path: target.Path} }
-			case "a":
-				m.mode = viewModeWorktreeAddInput
-				return m, m.openWorktreeAddInput()
-			case "d":
-				if m.worktreeModal.cursor >= len(m.worktreeModal.entries) {
-					return m, nil
-				}
-				target := m.worktreeModal.entries[m.worktreeModal.cursor]
-				if target.Path == m.workdir {
-					m.status = "remove: cannot remove current worktree — switch first"
-					m.statusStyle = statusErrS
-					return m, nil
-				}
-				m.worktreeModal.removeTarget = target
-				m.mode = viewModeWorktreeRemoveConfirm
-				return m, nil
-			case "esc":
-				m.mode = viewModeNormal
-				// Bump reqID so any in-flight dirty fan-out msgs are dropped
-				// instead of mutating the next modal-open's state.
-				m.worktreeModal = worktreeModalState{reqID: m.worktreeModal.reqID + 1}
-				return m, nil
-			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
-			}
-			return m, nil
-		}
 		if m.mode == viewModeWorktreeAddInput {
 			switch msg.String() {
 			case "esc":
-				m.mode = viewModeWorktreeList
-				m.worktreeModal.addInput = textinput.Model{}
-				m.worktreeModal.addInlineErr = ""
+				m.mode = viewModeNormal
+				m.worktreeAction.addInput = textinput.Model{}
+				m.worktreeAction.addInlineErr = ""
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
 				return m, tea.Quit
 			case "enter":
-				if m.worktreeModal.actionInFlight {
+				if m.worktreeAction.actionInFlight {
 					return m, nil
 				}
-				branch := strings.TrimSpace(m.worktreeModal.addInput.Value())
+				branch := strings.TrimSpace(m.worktreeAction.addInput.Value())
 				if branch == "" {
-					m.worktreeModal.addInlineErr = "branch name is empty"
+					m.worktreeAction.addInlineErr = "branch name is empty"
 					return m, nil
 				}
 				path := deriveAddPath(m.workdir, branch)
-				m.worktreeModal.actionInFlight = true
-				m.worktreeModal.pendingAddPath = path
-				m.worktreeModal.addInlineErr = ""
-				return m, worktreeAddCmd(m.workdir, path, branch, m.worktreeModal.reqID)
+				m.worktreeAction.actionInFlight = true
+				m.worktreeAction.pendingAddPath = path
+				m.worktreeAction.addInlineErr = ""
+				return m, worktreeAddCmd(m.workdir, path, branch, m.worktreeAction.reqID)
 			}
 			var cmd tea.Cmd
-			m.worktreeModal.addInput, cmd = m.worktreeModal.addInput.Update(msg)
+			m.worktreeAction.addInput, cmd = m.worktreeAction.addInput.Update(msg)
 			return m, cmd
 		}
 		if m.mode == viewModeWorktreeRemoveConfirm {
-			if m.worktreeModal.actionInFlight {
+			if m.worktreeAction.actionInFlight {
 				if msg.String() == "ctrl+c" {
 					m.cancelStream()
 					return m, tea.Quit
 				}
 				return m, nil
 			}
-			t := m.worktreeModal.removeTarget
-			isDirty := m.worktreeModal.dirty[t.Path]
+			t := m.worktreeAction.removeTarget
+			isDirty := m.refs.WorktreeDirty(t.Path)
 			isLocked := t.Locked
 			needsForce := isDirty || isLocked
 			switch msg.String() {
 			case "esc":
-				m.mode = viewModeWorktreeList
-				m.worktreeModal.removeTarget = git.Worktree{}
+				m.mode = viewModeNormal
+				m.worktreeAction.removeTarget = git.Worktree{}
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
 				return m, tea.Quit
 			case "y":
 				if needsForce {
-					m.mode = viewModeWorktreeList
-					m.worktreeModal.removeTarget = git.Worktree{}
+					m.mode = viewModeNormal
+					m.worktreeAction.removeTarget = git.Worktree{}
 					reason := "dirty"
 					if isLocked && !isDirty {
 						reason = "locked"
@@ -932,14 +867,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.statusStyle = statusOkS
 					return m, nil
 				}
-				m.worktreeModal.actionInFlight = true
-				return m, worktreeRemoveCmd(m.workdir, t.Path, false, m.worktreeModal.reqID)
+				m.worktreeAction.actionInFlight = true
+				return m, worktreeRemoveCmd(m.workdir, t.Path, false, m.worktreeAction.reqID)
 			case "Y":
 				if !needsForce {
 					return m, nil
 				}
-				m.worktreeModal.actionInFlight = true
-				return m, worktreeRemoveCmd(m.workdir, t.Path, true, m.worktreeModal.reqID)
+				m.worktreeAction.actionInFlight = true
+				return m, worktreeRemoveCmd(m.workdir, t.Path, true, m.worktreeAction.reqID)
 			}
 			return m, nil
 		}
@@ -1090,14 +1025,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.enterLocalChangesMode()
 			m.status = "local changes"
 			m.statusStyle = statusOkS
-			return m, cmd
-		case "w":
-			// Bubble Tea must own the focus during a textinput inside the
-			// refs name modal etc. — the early `if m.mode == viewMode*`
-			// branches above already swallow keys for those modes, so by
-			// the time we reach here we know the user isn't typing.
-			cmd := m.openWorktreeModal()
-			m.mode = viewModeWorktreeList
 			return m, cmd
 		case "ctrl+up":
 			m.adjustSplit(-splitRatioStep)
@@ -1386,12 +1313,21 @@ func checkoutLabel(ref string, detached bool) string {
 	return "checkout: " + ref
 }
 
-// beginRefDelete reads the cursor ref from refs and arms the inline delete
-// confirm. HEAD branches, tags, and remote-tracking refs are filtered with
-// a status-bar message instead — the cockpit doesn't manage remote refs or
-// tag lifecycle, and the current branch is never a misclick target.
+// beginRefDelete reads the cursor row from refs and routes the delete
+// intent to whichever context the cursor is in:
+//   - on a worktree row: open the worktree remove-confirm sub-modal.
+//   - on a local branch row: arm the inline branch-delete confirm.
+//   - on HEAD / tag / remote-tracking ref: status-bar rejection.
+//
+// Worktree-row delete piggybacks on `d` instead of a separate keybind so
+// the sidebar's "delete the thing under the cursor" mental model stays
+// uniform across worktrees and branches.
 func (m Model) beginRefDelete() (Model, tea.Cmd) {
 	if m.refActionInFlight {
+		return m, nil
+	}
+	if wt, ok := m.refs.SelectedWorktree(); ok {
+		m = m.beginWorktreeRemove(wt)
 		return m, nil
 	}
 	ref, ok := m.refs.Selected()
@@ -1784,8 +1720,6 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderBranchPickerInner()), m.width, m.height)
 	case viewModeCheckoutConfirm:
 		return composeOverlay(base, renderModalBox(m.renderCheckoutConfirmInner()), m.width, m.height)
-	case viewModeWorktreeList:
-		return composeOverlay(base, renderModalBox(m.renderWorktreeModalInner()), m.width, m.height)
 	case viewModeWorktreeAddInput:
 		return composeOverlay(base, renderModalBox(m.renderWorktreeAddInputInner()), m.width, m.height)
 	case viewModeWorktreeRemoveConfirm:
@@ -1834,7 +1768,7 @@ func (m Model) tabBody() string {
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
 	case viewModeBranchPicker, viewModeCheckoutConfirm,
-		viewModeWorktreeList, viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm:
+		viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm:
 		return " "
 	case viewModeRefDeleteConfirm:
 		return m.refDeleteInlineHint()

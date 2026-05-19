@@ -3,16 +3,18 @@
 Fork-style three-pane TUI. Refs sidebar, commit graph on top-right, detail tab below.
 
 ```
-┌────────┬──────────────────────────────────────┐
-│ refs   │   commit graph (full width, 60%)     │
-│        │                                      │
-│ local  │                                      │
-│ remote ├──────────────────────────────────────┤
-│ tags   │ [Commit] · Changes  (40%)            │
-│        │ author / date / parents / sign       │
-│        │ full message — or — file-list ↔ diff │
-└────────┴──────────────────────────────────────┘
+┌──────────┬──────────────────────────────────────┐
+│ wt list  │   commit graph (full width, 60%)     │
+│ ● Local  │                                      │
+│ local    │                                      │
+│ remote   ├──────────────────────────────────────┤
+│ tags     │ [Commit] · Changes  (40%)            │
+│          │ author / date / parents / sign       │
+│          │ full message — or — file-list ↔ diff │
+└──────────┴──────────────────────────────────────┘
 ```
+
+The refs sidebar's top section is the sticky worktree inventory (`Worktrees` header + one row per `git worktree list` entry, current row prefixed `▶`). See [worktrees.md](worktrees.md).
 
 - Graph/tab split is user-resizable: `ctrl+↑` / `ctrl+↓`, 5% per press, clamped to [20, 80].
 - Tab is `Commit` (full metadata: author/email, ISO 8601 dates, parent hashes, `%G?` sign-status, full body) or `Changes` (file-list cursor left, follower patch viewport right).
@@ -32,9 +34,10 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `ctrl+d` / `ctrl+u` | Changes       | scroll the patch follower viewport                                                                                    |
 | `h` / `l` / `←` / `→` | tab pane    | switch between Commit and Changes (toggle, wraps)                                                                     |
 | `ctrl+↑` / `ctrl+↓` | global        | resize graph/tab split                                                                                                |
-| `enter`             | refs          | checkout cursor ref — see [checkout.md](checkout.md)                                                                  |
+| `enter`             | refs          | checkout cursor ref / switch worktree (cursor-context) — see [checkout.md](checkout.md), [worktrees.md](worktrees.md) |
 | `o`                 | refs          | jump graph cursor to ref tip                                                                                          |
-| `d`                 | refs          | delete branch (inline confirm) — see [branches.md](branches.md)                                                       |
+| `d`                 | refs          | delete branch / remove worktree (cursor-context inline confirm) — see [branches.md](branches.md), [worktrees.md](worktrees.md) |
+| `a`                 | refs          | add worktree (only when cursor is on a worktree row) — see [worktrees.md](worktrees.md)                               |
 | `enter`             | graph         | context-aware: checkout / FF / detach — see [checkout.md](checkout.md)                                                |
 | `y`                 | Commit tab    | copy full hash to clipboard                                                                                           |
 | `d`                 | graph / tab   | open the focused commit's full patch overlay                                                                          |
@@ -44,15 +47,14 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `q` / `ctrl+c`      | global        | quit (closes patch overlay first)                                                                                     |
 | `?`                 | global        | toggle expanded help panel                                                                                            |
 | `R`                 | global        | reserved for future Rebase                                                                                            |
-| `w`                 | global        | open worktree modal (list / switch / add / remove) — see [worktrees.md](worktrees.md)                                 |
 
-Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `esc` / `q`. The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree modal (`w`) gates its own j/k/enter/a/d/y/Y/esc matrix — see [worktrees.md](worktrees.md).
+Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `esc` / `q`. The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md).
 
 `?` toggles a multi-line help panel that replaces the bottom hint with pane-grouped bindings. Reference, not modal — every shortcut keeps working. Suppressed inside the patch overlay and dirty-tree confirm; those modes keep their own single-line hint.
 
 Bottom hint is focus-aware:
 
-- refs → `enter checkout · o jump`
+- refs → `enter checkout/switch · d delete/remove · a add wt · o jump`
 - graph → `enter/d patch · C detach`
 - tab → `h/l switch · y copy`
 - every focus appends `? help · q quit`.

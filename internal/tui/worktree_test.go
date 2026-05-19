@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,29 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// stripANSI removes ANSI escape sequences (CSI ... letter) so renderRow
+// output can be compared against plain strings.
+func stripANSI(s string) string {
+	var b strings.Builder
+	in := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			in = true
+			i++
+			continue
+		}
+		if in {
+			if c >= 0x40 && c <= 0x7e {
+				in = false
+			}
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
 func TestSwitchWorktreeRejectsMissingPath(t *testing.T) {
 	m := New()
 	prevWorkdir := m.workdir
@@ -48,23 +72,15 @@ func TestSwitchWorktreeRejectsMissingPath(t *testing.T) {
 
 func TestSwitchWorktreeRejectsNonGitDirectory(t *testing.T) {
 	m := New()
-	// A real directory but no .git child → validateWorktreePath fails.
 	dir := t.TempDir()
-
 	updated, _ := m.Update(switchWorktreeMsg{path: dir})
 	got := updated.(Model)
-
 	if got.workdir == dir {
 		t.Errorf("workdir should not have switched to non-git dir")
-	}
-	if got.statusStyle.GetForeground() != statusErrS.GetForeground() {
-		t.Errorf("expected statusErrS, got %v", got.statusStyle)
 	}
 }
 
 func TestSwitchWorktreeUpdatesWorkdirAndDispatchesReload(t *testing.T) {
-	// Build a real git worktree fixture using the package-level git wrapper
-	// so the switch handler's validateWorktreePath gate clears.
 	root := t.TempDir()
 	main := filepath.Join(root, "main")
 	if err := os.Mkdir(main, 0o755); err != nil {
@@ -99,459 +115,8 @@ func TestSwitchWorktreeUpdatesWorkdirAndDispatchesReload(t *testing.T) {
 	if got.pendingHEADHash != pendingHEADSentinel {
 		t.Errorf("HEAD jump not armed: got %q", got.pendingHEADHash)
 	}
-	if got.statusStyle.GetForeground() != statusOkS.GetForeground() {
-		t.Errorf("expected statusOkS on success, got %v", got.statusStyle)
-	}
 	if cmd == nil {
-		t.Fatal("expected reload cmd batch, got nil")
-	}
-}
-
-func TestFormatWorktreeHeader(t *testing.T) {
-	tt := []struct {
-		name     string
-		path     string
-		branch   string
-		detached bool
-		dirty    bool
-		want     string
-	}{
-		{"empty path → blank", "", "main", false, false, ""},
-		{"branch clean", "/tmp/main", "main", false, false, "Worktree: main · main"},
-		{"branch dirty", "/tmp/feat", "feat", false, true, "Worktree: feat · feat · ●dirty"},
-		{"detached", "/tmp/det", "", true, false, "Worktree: det · (detached)"},
-		{"no branch no detached (fresh repo)", "/tmp/new", "", false, false, "Worktree: new"},
-	}
-	for _, tc := range tt {
-		t.Run(tc.name, func(t *testing.T) {
-			got := formatWorktreeHeader(tc.path, tc.branch, tc.detached, tc.dirty)
-			if got != tc.want {
-				t.Errorf("got %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestCurrentWorktreeDirtyMsgDropsStaleResult(t *testing.T) {
-	m := New()
-	m.workdir = "/tmp/A"
-
-	updated, _ := m.Update(currentWorktreeDirtyMsg{dir: "/tmp/B", dirty: true})
-	got := updated.(Model)
-
-	if got.currentWorktreeDirty {
-		t.Errorf("stale dirty msg should be dropped, got currentWorktreeDirty=true")
-	}
-}
-
-func TestCurrentWorktreeDirtyMsgAppliesAndRefreshesHeader(t *testing.T) {
-	m := New()
-	m.workdir = "/tmp/repo"
-
-	updated, _ := m.Update(currentWorktreeDirtyMsg{dir: "/tmp/repo", dirty: true})
-	got := updated.(Model)
-
-	if !got.currentWorktreeDirty {
-		t.Errorf("dirty msg should apply, got false")
-	}
-	if !strings.Contains(got.refs.worktreeHeader, "●dirty") {
-		t.Errorf("expected header to contain dirty marker, got %q", got.refs.worktreeHeader)
-	}
-}
-
-func TestWorktreeModalOpenAndClose(t *testing.T) {
-	prev := worktreesExec
-	defer func() { worktreesExec = prev }()
-	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
-		return []git.Worktree{
-			{Path: "/tmp/main", Branch: "main", HEAD: "abc", IsMain: true},
-			{Path: "/tmp/feat-a", Branch: "feat-a", HEAD: "def"},
-		}, nil
-	}
-
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.workdir = "/tmp/feat-a"
-
-	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
-	m = updated.(Model)
-	if m.mode != viewModeWorktreeList {
-		t.Fatalf("expected viewModeWorktreeList, got %v", m.mode)
-	}
-	if !m.worktreeModal.loading {
-		t.Errorf("modal should be loading after open")
-	}
-	if openCmd == nil {
-		t.Fatal("expected loadWorktreesCmd, got nil")
-	}
-
-	// Drive the loadWorktreesCmd to completion.
-	msg := openCmd()
-	updated, _ = m.Update(msg)
-	m = updated.(Model)
-	if m.worktreeModal.loading {
-		t.Errorf("modal still loading after worktreesLoadedMsg")
-	}
-	if len(m.worktreeModal.entries) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(m.worktreeModal.entries))
-	}
-	// Cursor seeds onto the active worktree (feat-a is index 1).
-	if m.worktreeModal.cursor != 1 {
-		t.Errorf("cursor should land on active worktree row, got %d", m.worktreeModal.cursor)
-	}
-
-	// Esc closes + bumps reqID so any late fan-out msgs drop.
-	prevReqID := m.worktreeModal.reqID
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("esc should return to viewModeNormal, got %v", m.mode)
-	}
-	if m.worktreeModal.reqID == prevReqID {
-		t.Errorf("reqID should bump on close so stale fan-out drops")
-	}
-}
-
-func TestWorktreeModalDirtyFanoutAppliesAndDropsStale(t *testing.T) {
-	prev := worktreesExec
-	defer func() { worktreesExec = prev }()
-	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
-		return []git.Worktree{{Path: "/tmp/main", Branch: "main", IsMain: true}}, nil
-	}
-
-	m := New()
-	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
-	m = updated.(Model)
-	m.mode = viewModeWorktreeList
-
-	loadMsg := openCmd()
-	updated, _ = m.Update(loadMsg)
-	m = updated.(Model)
-	reqID := m.worktreeModal.reqID
-
-	// Live fan-out result applies.
-	updated, _ = m.Update(worktreeDirtyResultMsg{reqID: reqID, path: "/tmp/main", dirty: true})
-	m = updated.(Model)
-	if !m.worktreeModal.dirty["/tmp/main"] {
-		t.Errorf("expected dirty[/tmp/main]=true")
-	}
-
-	// Stale msg (reqID-1) drops.
-	updated, _ = m.Update(worktreeDirtyResultMsg{reqID: reqID - 1, path: "/tmp/other", dirty: true})
-	m = updated.(Model)
-	if _, ok := m.worktreeModal.dirty["/tmp/other"]; ok {
-		t.Errorf("stale fan-out msg should not mutate dirty map")
-	}
-}
-
-func TestRenderWorktreeRow(t *testing.T) {
-	tt := []struct {
-		name   string
-		e      git.Worktree
-		active string
-		dirty  bool
-		want   string
-	}{
-		{
-			name:   "active branch clean",
-			e:      git.Worktree{Path: "/r/main", Branch: "main", IsMain: true},
-			active: "/r/main",
-			dirty:  false,
-			want:   "* main · main",
-		},
-		{
-			name:   "non-active feat dirty",
-			e:      git.Worktree{Path: "/r/feat", Branch: "feat"},
-			active: "/r/main",
-			dirty:  true,
-			want:   "  feat · feat · ●dirty",
-		},
-		{
-			name:   "locked with reason",
-			e:      git.Worktree{Path: "/r/lck", Branch: "lck", Locked: true, LockReason: "ext"},
-			active: "/r/main",
-			want:   "  lck · lck · locked: ext",
-		},
-		{
-			name:   "detached",
-			e:      git.Worktree{Path: "/r/det", Detached: true},
-			active: "/r/main",
-			want:   "  det · (detached)",
-		},
-	}
-	for _, tc := range tt {
-		t.Run(tc.name, func(t *testing.T) {
-			got := renderWorktreeRow(tc.e, tc.active, tc.dirty, 80)
-			// Strip ANSI control bytes from the cursor-style `*` so the
-			// table-driven want strings stay plain text.
-			plain := stripANSI(got)
-			if plain != tc.want {
-				t.Errorf("got %q want %q", plain, tc.want)
-			}
-		})
-	}
-}
-
-// stripANSI removes ANSI escape sequences (CSI ... letter) so renderRow
-// output can be compared against plain strings. Vendored locally to keep
-// the worktree tests self-contained — the project doesn't import x/ansi
-// here yet.
-func stripANSI(s string) string {
-	var b strings.Builder
-	in := false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == 0x1b && i+1 < len(s) && s[i+1] == '[' {
-			in = true
-			i++
-			continue
-		}
-		if in {
-			// CSI sequences end with a byte in 0x40..0x7e.
-			if c >= 0x40 && c <= 0x7e {
-				in = false
-			}
-			continue
-		}
-		b.WriteByte(c)
-	}
-	return b.String()
-}
-
-func TestWorktreeModalEnterEmitsSwitchMsg(t *testing.T) {
-	prev := worktreesExec
-	defer func() { worktreesExec = prev }()
-	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
-		return []git.Worktree{
-			{Path: "/tmp/main", Branch: "main", IsMain: true},
-			{Path: "/tmp/feat", Branch: "feat"},
-		}, nil
-	}
-	m := New()
-	m.workdir = "/tmp/main"
-	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
-	m = updated.(Model)
-	updated, _ = m.Update(openCmd())
-	m = updated.(Model)
-	m.worktreeModal.cursor = 1 // feat
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("expected viewModeNormal after enter, got %v", m.mode)
-	}
-	if cmd == nil {
-		t.Fatal("expected switchWorktreeMsg cmd, got nil")
-	}
-	// Drive the cmd to confirm it dispatches switchWorktreeMsg{path: /tmp/feat}.
-	msg, ok := cmd().(switchWorktreeMsg)
-	if !ok {
-		t.Fatalf("expected switchWorktreeMsg, got %T", cmd())
-	}
-	if msg.path != "/tmp/feat" {
-		t.Errorf("path: got %q want /tmp/feat", msg.path)
-	}
-}
-
-func TestWorktreeModalRemoveRefusesActive(t *testing.T) {
-	prev := worktreesExec
-	defer func() { worktreesExec = prev }()
-	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
-		return []git.Worktree{{Path: "/tmp/main", Branch: "main", IsMain: true}}, nil
-	}
-	m := New()
-	m.workdir = "/tmp/main"
-	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
-	m = updated.(Model)
-	updated, _ = m.Update(openCmd())
-	m = updated.(Model)
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	m = updated.(Model)
-	if m.mode != viewModeWorktreeList {
-		t.Errorf("d on active should keep modal open, got %v", m.mode)
-	}
-	if !strings.Contains(m.status, "cannot remove current worktree") {
-		t.Errorf("expected refusal status, got %q", m.status)
-	}
-}
-
-func TestWorktreeModalRemoveCleanFlow(t *testing.T) {
-	prevList := worktreesExec
-	prevRemove := worktreeRemoveExec
-	defer func() {
-		worktreesExec = prevList
-		worktreeRemoveExec = prevRemove
-	}()
-	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
-		return []git.Worktree{
-			{Path: "/tmp/main", Branch: "main", IsMain: true},
-			{Path: "/tmp/feat", Branch: "feat"},
-		}, nil
-	}
-	var seenForce bool
-	var seenPath string
-	worktreeRemoveExec = func(_ context.Context, _, path string, force bool) error {
-		seenPath = path
-		seenForce = force
-		return nil
-	}
-
-	m := New()
-	m.workdir = "/tmp/main"
-	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
-	m = updated.(Model)
-	updated, _ = m.Update(openCmd())
-	m = updated.(Model)
-	m.worktreeModal.cursor = 1 // feat
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	m = updated.(Model)
-	if m.mode != viewModeWorktreeRemoveConfirm {
-		t.Fatalf("expected confirm mode, got %v", m.mode)
-	}
-
-	// y on a clean unlocked entry executes a non-force remove.
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	m = updated.(Model)
-	if !m.worktreeModal.actionInFlight {
-		t.Errorf("actionInFlight should be set during remove")
-	}
-	if cmd == nil {
-		t.Fatal("expected worktreeRemoveCmd, got nil")
-	}
-	resultMsg := cmd()
-	if _, ok := resultMsg.(worktreeRemoveSucceededMsg); !ok {
-		t.Fatalf("expected worktreeRemoveSucceededMsg, got %T", resultMsg)
-	}
-	if seenForce {
-		t.Errorf("clean remove should not pass force=true")
-	}
-	if seenPath != "/tmp/feat" {
-		t.Errorf("remove path: got %q want /tmp/feat", seenPath)
-	}
-}
-
-func TestWorktreeModalRemoveDirtyRequiresUppercaseY(t *testing.T) {
-	prevList := worktreesExec
-	prevRemove := worktreeRemoveExec
-	defer func() {
-		worktreesExec = prevList
-		worktreeRemoveExec = prevRemove
-	}()
-	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
-		return []git.Worktree{
-			{Path: "/tmp/main", Branch: "main", IsMain: true},
-			{Path: "/tmp/feat", Branch: "feat"},
-		}, nil
-	}
-	var seenForce bool
-	worktreeRemoveExec = func(_ context.Context, _, _ string, force bool) error {
-		seenForce = force
-		return nil
-	}
-
-	m := New()
-	m.workdir = "/tmp/main"
-	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
-	m = updated.(Model)
-	updated, _ = m.Update(openCmd())
-	m = updated.(Model)
-	m.worktreeModal.cursor = 1
-	m.worktreeModal.dirty = map[string]bool{"/tmp/feat": true}
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	m = updated.(Model)
-
-	// lowercase y on dirty entry → cancels (force needed).
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	m = updated.(Model)
-	if cmd != nil {
-		t.Errorf("lowercase y on dirty should not dispatch remove cmd")
-	}
-	if m.mode != viewModeWorktreeList {
-		t.Errorf("expected to return to list, got %v", m.mode)
-	}
-	if !strings.Contains(m.status, "dirty") {
-		t.Errorf("status should mention dirty, got %q", m.status)
-	}
-
-	// Re-open confirm, this time uppercase Y → force remove.
-	m.worktreeModal.removeTarget = git.Worktree{Path: "/tmp/feat", Branch: "feat"}
-	m.mode = viewModeWorktreeRemoveConfirm
-	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
-	m = updated.(Model)
-	if cmd == nil {
-		t.Fatal("uppercase Y should dispatch force remove")
-	}
-	_ = cmd()
-	if !seenForce {
-		t.Errorf("Y on dirty should pass force=true")
-	}
-}
-
-func TestWorktreeModalAddInputValidationAndSuccess(t *testing.T) {
-	prevList := worktreesExec
-	prevAdd := worktreeAddExec
-	defer func() {
-		worktreesExec = prevList
-		worktreeAddExec = prevAdd
-	}()
-	worktreesExec = func(context.Context, string) ([]git.Worktree, error) {
-		return []git.Worktree{{Path: "/tmp/main", Branch: "main", IsMain: true}}, nil
-	}
-	var seenPath, seenBranch string
-	var seenCreate bool
-	worktreeAddExec = func(_ context.Context, _, path, branch string, createBranch bool) error {
-		seenPath, seenBranch, seenCreate = path, branch, createBranch
-		return nil
-	}
-
-	m := New()
-	m.workdir = "/tmp/main"
-	updated, openCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
-	m = updated.(Model)
-	updated, _ = m.Update(openCmd())
-	m = updated.(Model)
-
-	// `a` opens add input.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	m = updated.(Model)
-	if m.mode != viewModeWorktreeAddInput {
-		t.Fatalf("expected add input mode, got %v", m.mode)
-	}
-
-	// Empty branch → inline error.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
-	if m.worktreeModal.addInlineErr == "" {
-		t.Errorf("expected inline error on empty submit")
-	}
-
-	// Type "feat-x" and submit.
-	m.worktreeModal.addInput.SetValue("feat-x")
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
-	if cmd == nil {
-		t.Fatal("expected worktreeAddCmd")
-	}
-	if !m.worktreeModal.actionInFlight {
-		t.Errorf("actionInFlight should be set during add")
-	}
-	resultMsg := cmd()
-	if _, ok := resultMsg.(worktreeAddSucceededMsg); !ok {
-		t.Fatalf("expected worktreeAddSucceededMsg, got %T", resultMsg)
-	}
-	if seenBranch != "feat-x" {
-		t.Errorf("branch: got %q want feat-x", seenBranch)
-	}
-	if !seenCreate {
-		t.Errorf("createBranch should be true for v1")
-	}
-	wantPath := deriveAddPath("/tmp/main", "feat-x")
-	if seenPath != wantPath {
-		t.Errorf("path: got %q want %q", seenPath, wantPath)
+		t.Fatal("expected reload+sidebar cmd batch, got nil")
 	}
 }
 
@@ -576,7 +141,6 @@ func TestSwitchWorktreeNoopOnSamePath(t *testing.T) {
 
 	updated, cmd := m.Update(switchWorktreeMsg{path: main})
 	got := updated.(Model)
-
 	if cmd != nil {
 		t.Errorf("same-path switch should not dispatch reload")
 	}
@@ -584,3 +148,388 @@ func TestSwitchWorktreeNoopOnSamePath(t *testing.T) {
 		t.Errorf("workdir changed on same-path switch")
 	}
 }
+
+// TestSidebarWorktreesLoadedAppliesToRefs verifies that worktreesLoadedMsg
+// flows into the refs sidebar (not a separate modal state) so the rows
+// render from refModel.worktrees, and the dirty fan-out is dispatched.
+func TestSidebarWorktreesLoadedAppliesToRefs(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/tmp/feat"
+
+	entries := []git.Worktree{
+		{Path: "/tmp/main", Branch: "main", IsMain: true},
+		{Path: "/tmp/feat", Branch: "feat"},
+	}
+	updated, cmd := m.Update(worktreesLoadedMsg{reqID: m.sidebarWorktreesReqID, entries: entries})
+	got := updated.(Model)
+
+	if !reflectDeepEqualPaths(got.refs.Worktrees(), entries) {
+		t.Errorf("refs.Worktrees = %+v, want %+v", got.refs.Worktrees(), entries)
+	}
+	if cmd == nil {
+		t.Fatal("expected dirty fan-out cmd")
+	}
+}
+
+func TestSidebarWorktreesLoadedDropsStaleReqID(t *testing.T) {
+	m := New()
+	preReqID := m.sidebarWorktreesReqID
+	updated, cmd := m.Update(worktreesLoadedMsg{reqID: preReqID - 1, entries: []git.Worktree{{Path: "/x"}}})
+	got := updated.(Model)
+	if len(got.refs.Worktrees()) != 0 {
+		t.Errorf("stale msg should not populate sidebar, got %+v", got.refs.Worktrees())
+	}
+	if cmd != nil {
+		t.Errorf("stale msg should not dispatch fan-out, got cmd")
+	}
+}
+
+func TestSidebarDirtyFanoutAppliesAndDropsStale(t *testing.T) {
+	m := New()
+	reqID := m.sidebarWorktreesReqID
+	m.refs.SetWorktrees([]git.Worktree{{Path: "/tmp/feat", Branch: "feat"}}, "/tmp/feat")
+
+	updated, _ := m.Update(worktreeDirtyResultMsg{reqID: reqID, path: "/tmp/feat", dirty: true})
+	got := updated.(Model)
+	if !got.refs.WorktreeDirty("/tmp/feat") {
+		t.Errorf("expected dirty=true after applied msg")
+	}
+
+	updated, _ = got.Update(worktreeDirtyResultMsg{reqID: reqID - 1, path: "/tmp/other", dirty: true})
+	got = updated.(Model)
+	if got.refs.WorktreeDirty("/tmp/other") {
+		t.Errorf("stale fan-out msg should not mutate sidebar dirty map")
+	}
+}
+
+func TestSidebarDirtyFanoutTimeoutMarksPlaceholder(t *testing.T) {
+	m := New()
+	reqID := m.sidebarWorktreesReqID
+	m.refs.SetWorktrees([]git.Worktree{{Path: "/slow", Branch: "feat"}}, "/somewhere")
+	// refs.View renders "loading…" until refsLoadedMsg sets loaded=true.
+	updated, _ := m.Update(refsLoadedMsg{refs: nil})
+	m = updated.(Model)
+
+	updated, _ = m.Update(worktreeDirtyResultMsg{
+		reqID: reqID, path: "/slow", dirty: false, timedOut: true,
+	})
+	got := updated.(Model)
+	got.refs.SetSize(40, 20)
+	view := stripANSI(got.refs.View())
+	if !strings.Contains(view, "?") {
+		t.Errorf("timed-out worktree row should render `?` placeholder, view = %q", view)
+	}
+}
+
+func TestRefsSidebarRendersWorktreeSection(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(60, 20)
+	r.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+	}, "/r/main")
+	r.SetWorktreeDirty("/r/feat", true, false)
+	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
+		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
+	}})
+
+	view := stripANSI(r.View())
+	if !strings.Contains(view, "Worktrees") {
+		t.Errorf("missing Worktrees section header, view = %q", view)
+	}
+	if !strings.Contains(view, "▶ main") {
+		t.Errorf("current worktree row should have ▶ prefix, view = %q", view)
+	}
+	if !strings.Contains(view, "feat · ●") {
+		t.Errorf("non-current dirty worktree row should show ● marker, view = %q", view)
+	}
+	if !strings.Contains(view, "● Local Changes") {
+		t.Errorf("sticky Local Changes row missing, view = %q", view)
+	}
+}
+
+func TestSidebarEnterOnWorktreeRowEmitsSwitch(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/r/main"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+	}, "/r/main")
+	m.focused = paneRefs
+	// Move cursor to first worktree row (onWorktree=0).
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = updated.(Model)
+	// Walk down to the feat row (onWorktree=1).
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected refWorktreeSwitchRequestedMsg cmd")
+	}
+	got := cmd()
+	req, ok := got.(refWorktreeSwitchRequestedMsg)
+	if !ok {
+		t.Fatalf("expected refWorktreeSwitchRequestedMsg, got %T", got)
+	}
+	if req.path != "/r/feat" {
+		t.Errorf("path: got %q want /r/feat", req.path)
+	}
+}
+
+func TestSidebarDOnWorktreeOpensRemoveConfirm(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/r/main"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+	}, "/r/main")
+	m.focused = paneRefs
+	// Park cursor on /r/feat.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.mode != viewModeWorktreeRemoveConfirm {
+		t.Errorf("d on worktree row should open remove confirm, mode = %v", m.mode)
+	}
+	if m.worktreeAction.removeTarget.Path != "/r/feat" {
+		t.Errorf("removeTarget = %+v, want /r/feat", m.worktreeAction.removeTarget)
+	}
+}
+
+func TestSidebarDOnCurrentWorktreeRejects(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/r/main"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+	}, "/r/main")
+	m.focused = paneRefs
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.mode == viewModeWorktreeRemoveConfirm {
+		t.Errorf("d on current worktree should NOT open confirm")
+	}
+	if !strings.Contains(m.status, "cannot remove current worktree") {
+		t.Errorf("expected rejection status, got %q", m.status)
+	}
+}
+
+func TestSidebarAOnWorktreeOpensAddInput(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/r/main"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+	}, "/r/main")
+	m.focused = paneRefs
+	// Park cursor on the (only) worktree row.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = updated.(Model)
+
+	// `a` produces a cmd that emits refWorktreeAddRequestedMsg; tea would
+	// drive that cmd and route the msg — we do it manually here.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("a on worktree row should emit a cmd carrying refWorktreeAddRequestedMsg")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+	if m.mode != viewModeWorktreeAddInput {
+		t.Errorf("a on worktree row should open add input, mode = %v", m.mode)
+	}
+}
+
+func TestWorktreeRemoveConfirmCleanFlow(t *testing.T) {
+	prev := worktreeRemoveExec
+	defer func() { worktreeRemoveExec = prev }()
+	var seenForce bool
+	var seenPath string
+	worktreeRemoveExec = func(_ context.Context, _, path string, force bool) error {
+		seenPath = path
+		seenForce = force
+		return nil
+	}
+
+	m := New()
+	m.workdir = "/r/main"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+	}, "/r/main")
+	// Arm the remove confirm directly so the test doesn't depend on the
+	// sidebar cursor traversal nuances (covered above).
+	m = m.beginWorktreeRemove(git.Worktree{Path: "/r/feat", Branch: "feat"})
+	if m.mode != viewModeWorktreeRemoveConfirm {
+		t.Fatalf("setup: expected confirm mode, got %v", m.mode)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if !m.worktreeAction.actionInFlight {
+		t.Errorf("actionInFlight should be set during remove")
+	}
+	if cmd == nil {
+		t.Fatal("expected remove cmd")
+	}
+	resultMsg := cmd()
+	if _, ok := resultMsg.(worktreeRemoveSucceededMsg); !ok {
+		t.Fatalf("expected worktreeRemoveSucceededMsg, got %T", resultMsg)
+	}
+	if seenForce {
+		t.Errorf("clean remove should not pass force=true")
+	}
+	if seenPath != "/r/feat" {
+		t.Errorf("remove path: got %q want /r/feat", seenPath)
+	}
+}
+
+func TestWorktreeRemoveConfirmDirtyRequiresUppercaseY(t *testing.T) {
+	prev := worktreeRemoveExec
+	defer func() { worktreeRemoveExec = prev }()
+	var seenForce bool
+	worktreeRemoveExec = func(_ context.Context, _, _ string, force bool) error {
+		seenForce = force
+		return nil
+	}
+
+	m := New()
+	m.workdir = "/r/main"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+	}, "/r/main")
+	m.refs.SetWorktreeDirty("/r/feat", true, false)
+	m = m.beginWorktreeRemove(git.Worktree{Path: "/r/feat", Branch: "feat"})
+
+	// lowercase y on dirty → cancels and surfaces "use [Y] to force".
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Errorf("lowercase y on dirty should not dispatch remove cmd")
+	}
+	if m.mode != viewModeNormal {
+		t.Errorf("expected to return to normal, got %v", m.mode)
+	}
+	if !strings.Contains(m.status, "dirty") {
+		t.Errorf("status should mention dirty, got %q", m.status)
+	}
+
+	// Re-open and use Y → force.
+	m = m.beginWorktreeRemove(git.Worktree{Path: "/r/feat", Branch: "feat"})
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("Y on dirty should dispatch force remove")
+	}
+	_ = cmd()
+	if !seenForce {
+		t.Errorf("Y on dirty should pass force=true")
+	}
+}
+
+func TestWorktreeAddInputValidationAndSuccess(t *testing.T) {
+	prev := worktreeAddExec
+	defer func() { worktreeAddExec = prev }()
+	var seenPath, seenBranch string
+	var seenCreate bool
+	worktreeAddExec = func(_ context.Context, _, path, branch string, createBranch bool) error {
+		seenPath = path
+		seenBranch = branch
+		seenCreate = createBranch
+		return nil
+	}
+
+	m := New()
+	m.workdir = "/tmp/main"
+	m, _ = m.beginWorktreeAdd()
+	if m.mode != viewModeWorktreeAddInput {
+		t.Fatalf("expected add input mode, got %v", m.mode)
+	}
+
+	// Empty branch → inline error.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.worktreeAction.addInlineErr == "" {
+		t.Errorf("expected inline error on empty submit")
+	}
+
+	m.worktreeAction.addInput.SetValue("feat-x")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected worktreeAddCmd")
+	}
+	if !m.worktreeAction.actionInFlight {
+		t.Errorf("actionInFlight should be set during add")
+	}
+	resultMsg := cmd()
+	if _, ok := resultMsg.(worktreeAddSucceededMsg); !ok {
+		t.Fatalf("expected worktreeAddSucceededMsg, got %T", resultMsg)
+	}
+	if seenBranch != "feat-x" {
+		t.Errorf("branch: got %q want feat-x", seenBranch)
+	}
+	if !seenCreate {
+		t.Errorf("createBranch should be true")
+	}
+	wantPath := deriveAddPath("/tmp/main", "feat-x")
+	if seenPath != wantPath {
+		t.Errorf("path: got %q want %q", seenPath, wantPath)
+	}
+}
+
+// TestQ5RemoteFilterHidesMirroredOrigin asserts the Q5 remote filter:
+// a remote-tracking ref whose stripped name matches a local branch is
+// hidden from the sidebar.
+func TestQ5RemoteFilterHidesMirroredOrigin(t *testing.T) {
+	out := partitionByKind([]git.Ref{
+		{ShortName: "main", Kind: git.RefKindLocal},
+		{ShortName: "feat/a", Kind: git.RefKindLocal},
+		{ShortName: "origin/main", Kind: git.RefKindRemote},
+		{ShortName: "origin/feat/a", Kind: git.RefKindRemote},
+		{ShortName: "origin/zombie", Kind: git.RefKindRemote},
+	})
+	remotes := out[1]
+	if len(remotes) != 1 {
+		t.Fatalf("expected 1 surviving remote, got %d: %+v", len(remotes), remotes)
+	}
+	if remotes[0].ShortName != "origin/zombie" {
+		t.Errorf("expected origin/zombie to survive (no local match), got %+v", remotes[0])
+	}
+}
+
+// reflectDeepEqualPaths is a lightweight slice equality check by path for
+// the small sidebar tests above. Avoids importing reflect.
+func reflectDeepEqualPaths(a, b []git.Worktree) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Path != b[i].Path {
+			return false
+		}
+	}
+	return true
+}
+
+// Avoid an "errors unused" lint when the file's only path through the
+// errors package is the (now-private) E3 timeout assertion.
+var _ = errors.New

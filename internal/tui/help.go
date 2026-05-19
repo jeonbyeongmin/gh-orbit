@@ -46,6 +46,7 @@ var helpCategories = []helpCategory{
 			{"o", "jump to tip"},
 			{"d", "delete branch / remove worktree"},
 			{"a", "add worktree (on worktree row)"},
+			{"Z", "zombie cleanup (merged + upstream gone)"},
 		},
 	},
 	{
@@ -83,7 +84,7 @@ func helpData() []helpCategory { return helpCategories }
 // hint ends with `? help · q quit` so the user always sees how to expand
 // the panel or quit, regardless of which pane has focus.
 var paneHintTexts = map[pane]string{
-	paneRefs:  "enter checkout/switch · d delete/remove · a add wt · o jump · ? help · q quit",
+	paneRefs:  "enter checkout/switch · d delete/remove · a add wt · o jump · Z zombie cleanup · ? help · q quit",
 	paneGraph: "enter checkout/ff/detach · d patch · ? help · q quit",
 	paneTab:   "h/l switch · y copy · ? help · q quit",
 }

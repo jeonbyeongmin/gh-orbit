@@ -832,7 +832,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusOkS
 			return m, nil
 		}
-		m.zombieCleanup = zombieCleanupState{baseline: msg.baseline, branches: msg.branches}
+		m.zombieCleanup = zombieCleanupState(msg)
 		m.mode = viewModeZombieCleanupConfirm
 		m.status = ""
 		return m, nil

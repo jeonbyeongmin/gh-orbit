@@ -17,7 +17,7 @@ const zombieCmdTimeout = 30 * time.Second
 // Package-level seams over git.* — tests stub these so the cleanup flow
 // stays hermetic.
 var (
-	zombieDetectExec  = git.DetectZombieBranches
+	zombieDetectExec   = git.DetectZombieBranches
 	zombieBaselineExec = git.ResolveDefaultBranch
 )
 

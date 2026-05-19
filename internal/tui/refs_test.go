@@ -197,26 +197,20 @@ func TestRefModelEnterAndOOnEmptyDoNothing(t *testing.T) {
 	}
 }
 
-func TestRefModelLowerPEmitsCheckoutWithPullRequestedMsg(t *testing.T) {
+// TestRefModelLowerPNotHandled locks in Q13 cut: after subtract-checkout-
+// extras, `p` on the refs pane no longer emits a cursor-bound checkout+pull
+// msg. The handler falls through to handleKey (j/k cursor movement is the
+// only other handler that takes single-rune keys), which is a no-op for
+// `p`, so the cmd return is nil.
+func TestRefModelLowerPNotHandled(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 10)
 	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
 		{ShortName: "main", FullName: "refs/heads/main", Kind: git.RefKindLocal, IsHead: true, Upstream: "origin/main"},
 	}})
 	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
-	if cmd == nil {
-		t.Fatal("'p' on a ref should return a non-nil cmd (checkout+pull)")
-	}
-	msg := cmd()
-	sel, ok := msg.(refCheckoutWithPullRequestedMsg)
-	if !ok {
-		t.Fatalf("cmd produced %T, want refCheckoutWithPullRequestedMsg", msg)
-	}
-	if sel.ref.FullName != "refs/heads/main" {
-		t.Errorf("refCheckoutWithPullRequestedMsg.ref.FullName = %q, want refs/heads/main", sel.ref.FullName)
-	}
-	if sel.ref.Upstream != "origin/main" {
-		t.Errorf("ref.Upstream not preserved across the msg, got %q", sel.ref.Upstream)
+	if cmd != nil {
+		t.Errorf("'p' on refs pane should fall through (no cursor-bound checkout+pull), got cmd=%v", cmd())
 	}
 }
 

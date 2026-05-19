@@ -27,27 +27,6 @@ type checkoutNeedsCleanTreeMsg struct {
 	detached bool
 }
 
-// checkoutThenPullSucceededMsg fires when `p` (refs pane) ran the checkout
-// → pull chain to completion. pullSkipped=true plus a non-empty skipReason
-// covers the tag / detached / no-upstream cases where pull was deliberately
-// not invoked. The model uses (ref, detached) verbatim for the success
-// status and arms a HEAD jump on the post-reload stream.
-type checkoutThenPullSucceededMsg struct {
-	ref         string
-	detached    bool
-	pullSkipped bool
-	skipReason  string
-}
-
-// checkoutThenPullConflictMsg fires when checkout succeeded but pull came
-// back as ErrPullConflict. The user is mid-merge — model surfaces the
-// "resolve in your terminal" hint and refrains from arming a HEAD jump.
-type checkoutThenPullConflictMsg struct {
-	ref      string
-	detached bool
-	err      error
-}
-
 // Package-level seams over git.* so tests can stub the subprocess calls
 // without touching a real repo. Mirrors pullExec / pullResolveStrategy.
 var (
@@ -183,10 +162,10 @@ func runCheckoutExec(ctx context.Context, dir, ref string, detached bool) error 
 	return checkoutExec(ctx, dir, ref)
 }
 
-// runPullStep performs the strategy-resolve + pull-exec ladder shared by
-// pullCmd and the chain command. Returns (conflict=true, err) when the
-// failure was an ErrPullConflict, (false, err) on a generic failure,
-// (false, nil) on success.
+// runPullStep performs the strategy-resolve + pull-exec ladder used by
+// pullCmd. Returns (conflict=true, err) when the failure was an
+// ErrPullConflict, (false, err) on a generic failure, (false, nil) on
+// success.
 func runPullStep(ctx context.Context, dir, prefs string) (conflict bool, err error) {
 	strategy, err := pullResolveStrategy(ctx, dir, prefs)
 	if err != nil {
@@ -196,49 +175,4 @@ func runPullStep(ctx context.Context, dir, prefs string) (conflict bool, err err
 		return errors.Is(err, git.ErrPullConflict), err
 	}
 	return false, nil
-}
-
-// checkoutThenPullCmd runs the clean-tree variant of `p`: checkout, then
-// (unless skipReason names a reason to skip) pull. Each step gets its own
-// deadline so a slow pull can't starve checkout. A non-empty skipReason
-// is the single source of truth for "pull will not run" — the caller
-// (resolvePullEligibility) stamps it for tags / detached / no-upstream
-// locals; an empty skipReason means pull will run.
-//
-// Failures route to the existing checkoutNeedsCleanTreeMsg / checkoutFailedMsg
-// for the checkout phase; the pull phase emits checkoutThenPullConflictMsg
-// (conflict) or pullFailedMsg (generic). Success emits one
-// checkoutThenPullSucceededMsg with pullSkipped/skipReason stamped on it.
-func checkoutThenPullCmd(dir, ref string, detached bool, prefs, skipReason string) tea.Cmd {
-	return func() tea.Msg {
-		coCtx, coCancel := context.WithTimeout(context.Background(), checkoutTimeout)
-		coErr := runCheckoutExec(coCtx, dir, ref, detached)
-		coCancel()
-		if coErr != nil {
-			if errors.Is(coErr, git.ErrCheckoutNeedsCleanTree) {
-				return checkoutNeedsCleanTreeMsg{ref: ref, detached: detached}
-			}
-			return checkoutFailedMsg{err: coErr}
-		}
-
-		if skipReason != "" {
-			return checkoutThenPullSucceededMsg{
-				ref:         ref,
-				detached:    detached,
-				pullSkipped: true,
-				skipReason:  skipReason,
-			}
-		}
-
-		puCtx, puCancel := context.WithTimeout(context.Background(), pullTimeout)
-		defer puCancel()
-		conflict, err := runPullStep(puCtx, dir, prefs)
-		if err != nil {
-			if conflict {
-				return checkoutThenPullConflictMsg{ref: ref, detached: detached, err: err}
-			}
-			return pullFailedMsg{err: err}
-		}
-		return checkoutThenPullSucceededMsg{ref: ref, detached: detached}
-	}
 }

@@ -47,9 +47,10 @@ Today the build wires up:
   the top of the right column, and a tab area below it
   (`Commit` · `Changes`)
 - Local Changes view — a dedicated `● Local Changes` row at the top
-  of the refs pane; `enter` jumps into a working-tree diff view so
-  you can read what an agent (or you) hasn't committed yet without
-  leaving the TUI
+  of the refs pane, with an inline meta `N files · +X -Y · Zm ago`
+  when the working tree is dirty (numstat against HEAD); `enter`
+  jumps into a working-tree diff view so you can read what an agent
+  (or you) hasn't committed yet without leaving the TUI
 - the graph runs against the unified `--all` revision spec by default
   so every local/remote/tag is one walk; `enter` from the refs pane
   jumps the graph cursor to a ref tip without changing the base

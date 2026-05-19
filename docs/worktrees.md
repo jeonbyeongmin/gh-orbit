@@ -21,7 +21,7 @@ Worktrees        ← section header
   feat · feat · ?   ← non-current worktree (dirty fan-out timed out)
   other · other     ← non-current worktree (clean)
 
-● Local Changes  ← sticky working-tree row
+● Local Changes  3 files · +47 -12 · 2m ago   ← sticky working-tree row
 
 Local branches
   ...
@@ -30,6 +30,14 @@ Remote branches  ← Q5 filter: hides origin/X when a local X exists
 Tags
   ...
 ```
+
+The `● Local Changes` row carries an inline meta `N files · +X -Y · Zm ago`
+when the working tree is dirty (numstat against HEAD, plus the wall-clock
+timestamp of the last successful load). Empty working tree falls back to
+the bare label. The row reuses cursor-accent weight (highlight color when
+unselected, bold-highlight when selected) so it reads as a cockpit signal;
+the meta itself renders dim. Width-bound: meta truncates with `…` before
+the label is dropped — the label is the row's primary identity.
 
 The dirty marker on each worktree row:
 

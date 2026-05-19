@@ -49,6 +49,13 @@ type refModel struct {
 	currentWorktreePath string
 	worktreeDirty       map[string]bool
 	worktreeTimedOut    map[string]bool
+	// localChangesSummary feeds the inline meta on the `● Local Changes`
+	// sticky row (`N files · +X -Y · Zm ago`). Empty() == true means render
+	// the bare label; the freshness clock comes from
+	// localChangesSummaryLoadedAt so the meta stays meaningful even when the
+	// last status reload reported zero changes.
+	localChangesSummary         git.LocalChangesSummary
+	localChangesSummaryLoadedAt time.Time
 }
 
 func newRefsModel() refModel { return refModel{onWorktree: -1} }
@@ -439,6 +446,24 @@ func (r refModel) Selected() (git.Ref, bool) {
 // route enter on the refs pane into the mode-toggle path.
 func (r refModel) IsLocalChangesSelected() bool { return r.onLocalChanges }
 
+// SetLocalChangesSummary publishes the latest numstat + reload-time into the
+// sidebar so the sticky row's inline meta can render. loadedAt is the wall
+// clock of the most recent successful status reload; the row formats it as
+// "Xs/m/h ago" via humanizeAge(now-loadedAt).
+func (r *refModel) SetLocalChangesSummary(summary git.LocalChangesSummary, loadedAt time.Time) {
+	r.localChangesSummary = summary
+	r.localChangesSummaryLoadedAt = loadedAt
+}
+
+// ResetLocalChangesSummary clears the inline meta. The Model layer calls
+// this when the working tree's freshness signal is no longer trustworthy
+// (e.g. directory change), so the sidebar falls back to the bare label
+// instead of showing stale "5m ago" math.
+func (r *refModel) ResetLocalChangesSummary() {
+	r.localChangesSummary = git.LocalChangesSummary{}
+	r.localChangesSummaryLoadedAt = time.Time{}
+}
+
 // SelectedWorktree returns the worktree under the cursor, if the cursor is
 // on a worktree row. The Model uses it to dispatch enter / a / d actions
 // against the right entry.
@@ -681,11 +706,7 @@ func (r refModel) renderRow(row refRow, width int, selected bool) string {
 		}
 		return renderWorktreeSidebarRow(wt, isCurrent, selected, dirtyMark, width)
 	case refRowLocalChanges:
-		text := runewidth.Truncate("● Local Changes", width, "…")
-		if selected {
-			return selectedStyle.Render(text)
-		}
-		return text
+		return r.renderLocalChangesRow(width, selected, time.Now())
 	case refRowGap:
 		return ""
 	case refRowHeader:
@@ -697,6 +718,74 @@ func (r refModel) renderRow(row refRow, width int, selected bool) string {
 		return renderRefLine(ref, width, selected)
 	}
 	return ""
+}
+
+// renderLocalChangesRow composes the sticky `● Local Changes` row including
+// the inline meta `N files · +X -Y · Zm ago` when a summary is loaded. The
+// label always gets accent weight (cursor highlight when unselected, bold
+// + highlight when selected) so the row reads as a cockpit signal, not just
+// a button. Meta is rendered dim so it stays peripheral information.
+func (r refModel) renderLocalChangesRow(width int, selected bool, now time.Time) string {
+	label := "● Local Changes"
+	meta := r.formatLocalChangesMeta(now)
+	return composeLocalChangesRow(label, meta, width, selected)
+}
+
+// formatLocalChangesMeta builds the inline meta string. Returns "" when the
+// summary carries no signal so the sidebar falls back to a bare label
+// instead of showing `0 files · +0 -0`. "just now" (< 1m) is rendered
+// without an " ago" suffix since the phrase already reads as a moment.
+func (r refModel) formatLocalChangesMeta(now time.Time) string {
+	if r.localChangesSummary.Empty() {
+		return ""
+	}
+	s := r.localChangesSummary
+	filesWord := "files"
+	if s.FilesChanged == 1 {
+		filesWord = "file"
+	}
+	parts := []string{
+		fmt.Sprintf("%d %s", s.FilesChanged, filesWord),
+		fmt.Sprintf("+%d -%d", s.Insertions, s.Deletions),
+	}
+	if !r.localChangesSummaryLoadedAt.IsZero() {
+		age := relativeShortAt(r.localChangesSummaryLoadedAt, now)
+		if age == "just now" {
+			parts = append(parts, age)
+		} else {
+			parts = append(parts, age+" ago")
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// composeLocalChangesRow lays out label + meta against a width budget. When
+// the meta doesn't fit, it's truncated (with `…`) before the label is — the
+// label is the row's primary identity and must stay readable. Pulled out
+// of renderLocalChangesRow so tests can pin layout behavior without
+// faking `time.Now`.
+func composeLocalChangesRow(label, meta string, width int, selected bool) string {
+	labelStyle := cursorStyle
+	if selected {
+		labelStyle = selectedStyle
+	}
+	if meta == "" {
+		text := runewidth.Truncate(label, width, "…")
+		return labelStyle.Render(text)
+	}
+	const sep = "  "
+	labelW := runewidth.StringWidth(label)
+	sepW := runewidth.StringWidth(sep)
+	if labelW+sepW >= width {
+		text := runewidth.Truncate(label, width, "…")
+		return labelStyle.Render(text)
+	}
+	availForMeta := width - labelW - sepW
+	metaOut := meta
+	if runewidth.StringWidth(meta) > availForMeta {
+		metaOut = runewidth.Truncate(meta, availForMeta, "…")
+	}
+	return labelStyle.Render(label) + sep + timeStyle.Render(metaOut)
 }
 
 // renderWorktreeSidebarRow formats one worktree entry inside the sidebar

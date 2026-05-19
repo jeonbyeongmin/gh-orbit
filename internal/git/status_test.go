@@ -262,6 +262,53 @@ func TestDiffUntrackedShowsAllAdditions(t *testing.T) {
 	}
 }
 
+func TestAggregateNumstat(t *testing.T) {
+	tests := []struct {
+		name  string
+		stats []FileStat
+		want  LocalChangesSummary
+	}{
+		{name: "empty", stats: nil, want: LocalChangesSummary{}},
+		{name: "single", stats: []FileStat{{Path: "foo.go", Insertions: 3, Deletions: 1}}, want: LocalChangesSummary{FilesChanged: 1, Insertions: 3, Deletions: 1}},
+		{name: "multi", stats: []FileStat{{Path: "a", Insertions: 3, Deletions: 1}, {Path: "b", Insertions: 10, Deletions: 2}}, want: LocalChangesSummary{FilesChanged: 2, Insertions: 13, Deletions: 3}},
+		{name: "binary counts file only", stats: []FileStat{{Path: "img.png", Insertions: -1, Deletions: -1}, {Path: "new.go", Insertions: 4, Deletions: 0}}, want: LocalChangesSummary{FilesChanged: 2, Insertions: 4, Deletions: 0}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := aggregateNumstat(tt.stats)
+			if got != tt.want {
+				t.Fatalf("aggregateNumstat = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLocalChangesNumstatLive(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepoWithFile(t, "f.txt", "a\nb\nc\n")
+	mustWrite(t, dir, "f.txt", "a\nb\nc\nd\ne\n")
+	mustWrite(t, dir, "new.txt", "x\n")
+	ctx := context.Background()
+	if err := Add(ctx, dir, "new.txt"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	summary, err := LocalChangesNumstat(ctx, dir)
+	if err != nil {
+		t.Fatalf("LocalChangesNumstat: %v", err)
+	}
+	if summary.FilesChanged != 2 {
+		t.Fatalf("FilesChanged = %d, want 2", summary.FilesChanged)
+	}
+	if summary.Insertions != 3 {
+		t.Fatalf("Insertions = %d, want 3", summary.Insertions)
+	}
+	if summary.Deletions != 0 {
+		t.Fatalf("Deletions = %d, want 0", summary.Deletions)
+	}
+}
+
 func mustWrite(t *testing.T, dir, name, contents string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o644); err != nil {

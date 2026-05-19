@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -617,5 +618,80 @@ func TestRefModelStickyRowVisibleInView(t *testing.T) {
 	view := ansi.Strip(r.View())
 	if !strings.Contains(view, "● Local Changes") {
 		t.Errorf("sticky row not in view: %q", view)
+	}
+}
+
+func TestRefModelStickyRowBareLabelWhenNoSummary(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(60, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 0, 0)})
+	view := ansi.Strip(r.View())
+	if !strings.Contains(view, "● Local Changes") {
+		t.Errorf("sticky row label missing: %q", view)
+	}
+	if strings.Contains(view, "files") {
+		t.Errorf("inline meta should be absent when summary empty: %q", view)
+	}
+}
+
+func TestRefModelStickyRowRendersInlineMeta(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(60, 20)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 0, 0)})
+	now := time.Now()
+	r.SetLocalChangesSummary(git.LocalChangesSummary{FilesChanged: 3, Insertions: 47, Deletions: 12}, now.Add(-2*time.Minute))
+	view := ansi.Strip(r.View())
+	for _, want := range []string{"● Local Changes", "3 files", "+47 -12", "2m ago"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("inline meta missing %q in view: %q", want, view)
+		}
+	}
+}
+
+func TestFormatLocalChangesMetaSingularFile(t *testing.T) {
+	r := newRefsModel()
+	r.SetLocalChangesSummary(git.LocalChangesSummary{FilesChanged: 1, Insertions: 5, Deletions: 0}, time.Now())
+	got := r.formatLocalChangesMeta(time.Now())
+	if !strings.Contains(got, "1 file ·") {
+		t.Errorf("singular form expected, got %q", got)
+	}
+}
+
+func TestFormatLocalChangesMetaEmptySummary(t *testing.T) {
+	r := newRefsModel()
+	if got := r.formatLocalChangesMeta(time.Now()); got != "" {
+		t.Errorf("empty summary should yield empty meta, got %q", got)
+	}
+}
+
+func TestFormatLocalChangesMetaJustNowNoAgoSuffix(t *testing.T) {
+	r := newRefsModel()
+	now := time.Now()
+	r.SetLocalChangesSummary(git.LocalChangesSummary{FilesChanged: 1, Insertions: 1, Deletions: 0}, now)
+	got := r.formatLocalChangesMeta(now)
+	if strings.Contains(got, "just now ago") {
+		t.Errorf("'just now' should not get ' ago' suffix: %q", got)
+	}
+	if !strings.Contains(got, "just now") {
+		t.Errorf("expected 'just now' segment: %q", got)
+	}
+}
+
+func TestComposeLocalChangesRowTruncatesMetaBeforeLabel(t *testing.T) {
+	out := composeLocalChangesRow("● Local Changes", "3 files · +47 -12 · 2m ago", 22, false)
+	plain := ansi.Strip(out)
+	if !strings.Contains(plain, "● Local Changes") {
+		t.Errorf("label must survive narrow width: %q", plain)
+	}
+	if !strings.HasSuffix(plain, "…") {
+		t.Errorf("expected truncation marker on meta, got %q", plain)
+	}
+}
+
+func TestComposeLocalChangesRowBareLabelWhenTooNarrowForMeta(t *testing.T) {
+	out := composeLocalChangesRow("● Local Changes", "3 files", 15, false)
+	plain := ansi.Strip(out)
+	if strings.Contains(plain, "files") {
+		t.Errorf("meta should drop entirely when no room: %q", plain)
 	}
 }

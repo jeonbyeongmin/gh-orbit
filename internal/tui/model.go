@@ -4,7 +4,6 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -80,15 +79,11 @@ const (
 	// chips at the cursor row (graphActionPicker). The 3-pane layout stays
 	// visible underneath; only j/k/enter/esc are accepted while open.
 	viewModeBranchPicker
-	// viewModeRefNameInput hosts the create / rename name-entry modal. The
-	// 3-pane layout stays visible above; only the bottom panel takes typed
-	// keys via bubbles/textinput. Enter validates with check-ref-format and
-	// dispatches the create or rename cmd; esc cancels.
-	viewModeRefNameInput
-	// viewModeRefDeleteConfirm hosts the 4-axis delete confirm modal. The
-	// hint row's available keys depend on whether a matching local +
-	// remote pair exists for the cursor — y/Y/f/F covers the local+remote
-	// matrix; remote-only cursors show just y. esc cancels.
+	// viewModeRefDeleteConfirm gates the screen on the inline branch-delete
+	// confirm. Unlike the centered overlay modes above, this one paints its
+	// prompt into the bottom hint line — no overlay box — to match the
+	// worktree-remove pattern and keep the cursor anchored on the row being
+	// acted upon. Only y/Y/esc/ctrl+c are accepted.
 	viewModeRefDeleteConfirm
 	// viewModeLocalChanges replaces the right column (graph + tab) with a
 	// file-tree + diff layout for working-tree work. refs sidebar stays
@@ -96,17 +91,13 @@ const (
 	// via the `,` keybind or by `enter` on the sticky `● Local Changes`
 	// row in the refs pane.
 	viewModeLocalChanges
-	// viewModeWorktreeList hosts the `w` worktree modal. Lists every entry
-	// from `git worktree list --porcelain`, with an async dirty fan-out
-	// painting `●dirty` on rows whose `git status` returned non-empty.
-	// The 3-pane layout stays visible underneath; only j/k/enter/esc/a/d
-	// are accepted while open.
-	viewModeWorktreeList
-	// viewModeWorktreeAddInput hosts the branch-name textinput for `a` on
-	// the worktree modal. The path is auto-derived (sibling directory of
-	// the active worktree's parent) so a single input clears the modal.
+	// viewModeWorktreeAddInput hosts the branch-name textinput for the
+	// add-worktree action, triggered by `a` on a worktree row in the
+	// sidebar. The path is auto-derived (sibling directory of the active
+	// worktree's parent) so a single input clears the modal.
 	viewModeWorktreeAddInput
-	// viewModeWorktreeRemoveConfirm hosts the `d` confirm prompt. Hint
+	// viewModeWorktreeRemoveConfirm hosts the remove-worktree confirm
+	// prompt, triggered by `d` on a worktree row in the sidebar. Hint
 	// matrix derives from dirty + locked: clean rows offer [y] remove,
 	// dirty/locked rows require [Y] for force.
 	viewModeWorktreeRemoveConfirm
@@ -114,9 +105,9 @@ const (
 
 // helpExpandedHeight is the row count reserved for the bottom area when
 // the `?` help panel is open. Each helpData category renders as a 1-line
-// header + 1-line entries row, so 6 categories × 2 rows = 12. paneSizes
+// header + 1-line entries row, so 5 categories × 2 rows = 10. paneSizes
 // clamps this on small terminals.
-const helpExpandedHeight = 12
+const helpExpandedHeight = 10
 
 // pendingCheckout remembers what the user was trying to check out so the
 // confirm modal's hint can name the chain it's aborting. detached=true
@@ -124,20 +115,12 @@ const helpExpandedHeight = 12
 // means a refs-pane Enter (named ref) or a graph-Enter checkout to a
 // chip-bearing branch.
 //
-// withPull and skipReason carry the refs-pane `p` chain's state across
-// the dirty-tree confirm modal. Zero values mean "plain checkout" —
-// refCheckoutRequestedMsg (Enter) leaves them off. skipReason being
-// non-empty is the single signal of "pull will be skipped" (tag /
-// detached / no-upstream local refs).
-//
 // withFF / withCheckoutFF / ffHash flag the graph-Enter FF paths so the
 // modal hint can name the chain. ref carries the local-branch name;
 // ffHash carries the cursor commit MergeFFOnly should advance to.
 type pendingCheckout struct {
 	ref            string
 	detached       bool
-	withPull       bool
-	skipReason     string
 	withFF         bool
 	withCheckoutFF bool
 	ffHash         string
@@ -185,7 +168,7 @@ type Model struct {
 	// fetchInFlight gates the F key while a background fetch is running so a
 	// second F doesn't spawn a parallel git invocation.
 	fetchInFlight bool
-	// pullInFlight gates the P key. Tracked separately from fetchInFlight so
+	// pullInFlight gates the p key. Tracked separately from fetchInFlight so
 	// F + P can run in parallel; git's own .git/index.lock is the real
 	// serialization point.
 	pullInFlight bool
@@ -227,20 +210,10 @@ type Model struct {
 	// esc / enter; the picker reads candidates+cursor while open and
 	// dispatches a graph-Enter checkout on enter.
 	branchPicker branchPickerState
-	// refNameInput backs viewModeRefNameInput (create / rename modal).
-	// Reset to the zero value on esc / success; while open the textinput
-	// owns key routing for typed characters and the model handles
-	// enter / esc / validation.
-	refNameInput refNameInputState
 	// pendingRefDelete backs viewModeRefDeleteConfirm. Stamped on `d`
-	// keypress with the cursor's local/remote matching state so the modal
-	// renderer + key router can branch off the flags without re-deriving
-	// from refs.
+	// keypress with the cursor's local-branch name; the inline-confirm
+	// renderer / key router reads it without re-deriving from refs.
 	pendingRefDelete refDeleteState
-	// pendingRefCursorName carries the new ref name across a refs reload
-	// after create / rename success so the post-reload refsLoadedMsg can
-	// move the cursor onto the new row. Empty string means no jump.
-	pendingRefCursorName string
 	// pendingRefCursorAfterDelete carries the deleted ref name + section
 	// across a refs reload after delete success so the cursor lands on the
 	// next (or previous, if last) ref in the same section. Zero name means
@@ -250,12 +223,12 @@ type Model struct {
 	// reloadCmd writes just before every reload, so the post-reload
 	// refsLoadedMsg can restore the cursor onto the same ref after the
 	// refModel's cursor=0 reset. Only consumed when the higher-priority
-	// pendingRefCursorName / pendingRefCursorAfterDelete are absent. Zero
-	// value = no persist (detached HEAD / empty ref set).
+	// pendingRefCursorAfterDelete is absent. Zero value = no persist
+	// (detached HEAD / empty ref set).
 	pendingRefCursorPersist persistedRefHandle
-	// refActionInFlight gates the n / d / m keys while a branch-write cmd
-	// is running. Distinct from checkoutInFlight so a stuck refs write
-	// can't deadlock checkout / pull / FF chains.
+	// refActionInFlight gates the `d` key while a branch-delete cmd is
+	// running. Distinct from checkoutInFlight so a stuck refs write can't
+	// deadlock checkout / pull / FF chains.
 	refActionInFlight bool
 	// localChanges hosts the file-tree + diff viewport that the right
 	// column renders when mode == viewModeLocalChanges. The graph / tab
@@ -267,31 +240,32 @@ type Model struct {
 	// staged) to drop stale responses when the user keeps moving the
 	// cursor mid-load.
 	localChangesReqID uint64
-	// currentWorktreeDirty is the latest dirty-marker bit for m.workdir,
-	// refreshed by loadCurrentWorktreeDirtyCmd on Init / refsLoadedMsg /
-	// switchWorktreeMsg. The refs sidebar header reads it through
-	// refreshWorktreeHeader; nothing else consumes it directly.
-	currentWorktreeDirty bool
-	// worktreeModal backs viewModeWorktreeList. Modal open bumps reqID and
-	// arms loading=true; the post-load fan-out tags each entry's dirty
-	// state via worktreeDirtyResultMsg. Stale msgs (modal closed +
-	// reopened before all dirty responses landed) drop on reqID mismatch.
-	worktreeModal worktreeModalState
+	// sidebarWorktreesReqID counts every load fired by
+	// refreshSidebarWorktreesCmd. The post-load worktreesLoadedMsg + each
+	// dirty fan-out msg carry the same reqID so a switch issued mid-load
+	// drops the stale data instead of letting it overwrite the new tree's
+	// sidebar.
+	sidebarWorktreesReqID uint64
+	// worktreeAction backs the add-input / remove-confirm sub-modals
+	// triggered from a worktree row (a / d). Reset to zero on esc /
+	// success; while open the textinput owns key routing.
+	worktreeAction worktreeActionState
 }
 
 func New() Model {
 	m := Model{
-		focused:      paneGraph,
-		refs:         newRefsModel(),
-		graph:        newGraphModel(),
-		diff:         newDiffModel(),
-		changes:      newChangesModel(),
-		commitDetail: newCommitDetailModel(),
-		tabs:         newTabsModel(),
-		localChanges: newLocalChangesModel(),
-		splitRatio:   splitRatioDefault,
-		currentRefs:  []string{refsAllSentinel},
-		streamReqID:  1,
+		focused:               paneGraph,
+		refs:                  newRefsModel(),
+		graph:                 newGraphModel(),
+		diff:                  newDiffModel(),
+		changes:               newChangesModel(),
+		commitDetail:          newCommitDetailModel(),
+		tabs:                  newTabsModel(),
+		localChanges:          newLocalChangesModel(),
+		splitRatio:            splitRatioDefault,
+		currentRefs:           []string{refsAllSentinel},
+		streamReqID:           1,
+		sidebarWorktreesReqID: 1,
 	}
 	if wd, err := os.Getwd(); err == nil {
 		m.workdir = wd
@@ -319,7 +293,7 @@ func (m Model) Init() tea.Cmd {
 		loadCommitsCmd(m.workdir, m.currentRefs, m.streamReqID),
 		loadRefsCmd(m.workdir),
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
-		loadCurrentWorktreeDirtyCmd(m.workdir),
+		loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 	)
 }
 
@@ -343,97 +317,93 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := m.switchWorktree(msg.path)
 		return next, cmd
 
-	case currentWorktreeDirtyMsg:
-		// Drop stale results from a previous worktree — m.workdir may have
-		// flipped after the cmd fired but before its goroutine returned.
-		if msg.dir != m.workdir {
-			return m, nil
-		}
-		m.currentWorktreeDirty = msg.dirty
-		m.refreshWorktreeHeader()
-		return m, nil
-
 	case worktreesLoadedMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		// Drop stale loads (a switch or another reload bumped the reqID
+		// between dispatch and reply).
+		if msg.reqID != m.sidebarWorktreesReqID {
 			return m, nil
 		}
-		m.worktreeModal.loading = false
-		m.worktreeModal.entries = msg.entries
-		m.worktreeModal.loadErr = nil
-		// Seed cursor on the active worktree row so the user starts where
-		// they already are; falls through to 0 when no entry matches.
-		for i, e := range msg.entries {
-			if e.Path == m.workdir {
-				m.worktreeModal.cursor = i
-				break
-			}
-		}
+		m.refs.SetWorktrees(msg.entries, m.workdir)
 		paths := make([]string, 0, len(msg.entries))
 		for _, e := range msg.entries {
 			paths = append(paths, e.Path)
 		}
-		return m, worktreeDirtyFanoutCmd(m.worktreeModal.reqID, paths)
+		return m, worktreeDirtyFanoutCmd(m.sidebarWorktreesReqID, paths)
 
 	case worktreesLoadFailedMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.sidebarWorktreesReqID {
 			return m, nil
 		}
-		m.worktreeModal.loading = false
-		m.worktreeModal.loadErr = msg.err
+		// Soft-fail: the sidebar already shows whatever the previous load
+		// produced. Surface the error on the status bar so the user knows
+		// the inventory may be stale.
+		m.status = "worktrees: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
 		return m, nil
 
 	case worktreeDirtyResultMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.sidebarWorktreesReqID {
 			return m, nil
 		}
-		if m.worktreeModal.dirty == nil {
-			m.worktreeModal.dirty = make(map[string]bool)
-		}
-		m.worktreeModal.dirty[msg.path] = msg.dirty
+		m.refs.SetWorktreeDirty(msg.path, msg.dirty, msg.timedOut)
 		return m, nil
 
 	case worktreeAddSucceededMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.worktreeAction.reqID {
 			return m, nil
 		}
-		m.worktreeModal.actionInFlight = false
-		m.worktreeModal.addInput = textinput.Model{}
-		m.worktreeModal.addInlineErr = ""
-		m.mode = viewModeWorktreeList
+		m.worktreeAction.actionInFlight = false
+		m.worktreeAction.addInput = textinput.Model{}
+		m.worktreeAction.addInlineErr = ""
+		m.mode = viewModeNormal
 		m.status = "worktree added: " + msg.branch + " → " + filepath.Base(msg.path)
 		m.statusStyle = statusOkS
-		return m, m.reloadWorktreeModal()
+		m.sidebarWorktreesReqID++
+		return m, loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID)
 
 	case worktreeAddFailedMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.worktreeAction.reqID {
 			return m, nil
 		}
-		m.worktreeModal.actionInFlight = false
-		m.worktreeModal.pendingAddPath = ""
-		m.worktreeModal.addInlineErr = firstLine(msg.err.Error())
+		m.worktreeAction.actionInFlight = false
+		m.worktreeAction.pendingAddPath = ""
+		m.worktreeAction.addInlineErr = firstLine(msg.err.Error())
 		// Stay in viewModeWorktreeAddInput so the user can fix the input.
 		return m, nil
 
 	case worktreeRemoveSucceededMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.worktreeAction.reqID {
 			return m, nil
 		}
-		m.worktreeModal.actionInFlight = false
-		m.worktreeModal.removeTarget = git.Worktree{}
-		m.mode = viewModeWorktreeList
+		m.worktreeAction.actionInFlight = false
+		m.worktreeAction.removeTarget = git.Worktree{}
+		m.mode = viewModeNormal
 		m.status = "worktree removed: " + filepath.Base(msg.path)
 		m.statusStyle = statusOkS
-		return m, m.reloadWorktreeModal()
+		m.sidebarWorktreesReqID++
+		return m, loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID)
 
 	case worktreeRemoveFailedMsg:
-		if msg.reqID != m.worktreeModal.reqID {
+		if msg.reqID != m.worktreeAction.reqID {
 			return m, nil
 		}
-		m.worktreeModal.actionInFlight = false
-		m.worktreeModal.removeTarget = git.Worktree{}
-		m.mode = viewModeWorktreeList
+		m.worktreeAction.actionInFlight = false
+		m.worktreeAction.removeTarget = git.Worktree{}
+		m.mode = viewModeNormal
 		m.status = "remove: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
+		return m, nil
+
+	case refWorktreeSwitchRequestedMsg:
+		return m, func() tea.Msg { return switchWorktreeMsg(msg) }
+
+	case refWorktreeAddRequestedMsg:
+		var cmd tea.Cmd
+		m, cmd = m.beginWorktreeAdd()
+		return m, cmd
+
+	case refWorktreeRemoveRequestedMsg:
+		m = m.beginWorktreeRemove(msg.target)
 		return m, nil
 
 	case commitsStreamStartedMsg:
@@ -497,17 +467,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.refs, cmd = m.refs.Update(msg)
 		// Apply pending refs cursor jumps after the model has the new ref
-		// list. Priority: name (create / rename) > delete > persist
-		// (reload-cursor snapshot). The switch fires at most one branch and
-		// drops the persist handle whenever a higher-priority branch wins,
-		// so a name/delete-armed reload doesn't leak persist state to the
-		// next cycle. SelectByName / SelectAfterDeleted / SelectByNameKind
-		// are all no-ops on a load failure (refs.loaded stays false).
+		// list. Priority: delete > persist (reload-cursor snapshot). The
+		// switch fires at most one branch and drops the persist handle
+		// whenever delete wins, so a delete-armed reload doesn't leak
+		// persist state to the next cycle. SelectAfterDeleted /
+		// SelectByNameKindOrNeighbor are no-ops on a load failure
+		// (refs.loaded stays false).
 		switch {
-		case m.pendingRefCursorName != "":
-			m.refs.SelectByName(m.pendingRefCursorName)
-			m.pendingRefCursorName = ""
-			m.pendingRefCursorPersist = persistedRefHandle{}
 		case m.pendingRefCursorAfterDelete.name != "":
 			m.refs.SelectAfterDeleted(m.pendingRefCursorAfterDelete.name, m.pendingRefCursorAfterDelete.kind)
 			m.pendingRefCursorAfterDelete = deletedRefHandle{}
@@ -517,23 +483,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refs.SelectByNameKindOrNeighbor(h.name, h.kind)
 			m.pendingRefCursorPersist = persistedRefHandle{}
 		}
-		if _, ok := msg.(refsLoadedMsg); ok {
-			m.refreshWorktreeHeader()
-		}
 		return m, cmd
 
 	case refCheckoutRequestedMsg:
 		var cmd tea.Cmd
 		m, cmd = m.beginCheckout(git.CheckoutTarget(msg.ref), false)
-		return m, cmd
-
-	case refCheckoutWithPullRequestedMsg:
-		// Pull eligibility is decided here, at keypress time, while we still
-		// have the full git.Ref (Kind + Upstream). The chain command itself
-		// stays dir-only; passing the decision in skipReason avoids a
-		// follow-up `git rev-parse @{upstream}` mid-chain.
-		var cmd tea.Cmd
-		m, cmd = m.beginCheckoutWithPull(git.CheckoutTarget(msg.ref), false, resolvePullEligibility(msg.ref))
 		return m, cmd
 
 	case checkoutSucceededMsg:
@@ -560,31 +514,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "checkout failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
-
-	case checkoutThenPullSucceededMsg:
-		m.checkoutInFlight = false
-		m.pendingCheckout = pendingCheckout{}
-		if msg.pullSkipped {
-			m.status = checkoutLabel(msg.ref, msg.detached) +
-				" (pull skipped: " + msg.skipReason + ")"
-		} else {
-			m.status = checkoutLabel(msg.ref, msg.detached) + "; pull: done"
-		}
-		m.statusStyle = statusOkS
-		m.pendingHEADHash = pendingHEADSentinel
-		return m, m.reloadCmd()
-
-	case checkoutThenPullConflictMsg:
-		// checkout landed; pull tripped on a merge/rebase conflict. HEAD now
-		// sits on a half-merged commit so we still reload refs+log, but we
-		// deliberately do NOT arm pendingHEADHash — the user is mid-conflict
-		// and should resolve in their terminal before the cursor jumps.
-		m.checkoutInFlight = false
-		m.pendingCheckout = pendingCheckout{}
-		m.status = checkoutLabel(msg.ref, msg.detached) +
-			"; pull: CONFLICT — resolve in your terminal"
-		m.statusStyle = statusErrS
-		return m, m.reloadCmd()
 
 	case refSelectedMsg:
 		// Unified graph: Enter no longer reloads; it jumps the graph cursor
@@ -780,129 +709,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 
-	case refCreateRequestedMsg:
-		var cmd tea.Cmd
-		m, cmd = m.beginRefCreate(msg.cursorRef, msg.hasCursor)
-		return m, cmd
-
-	case refRenameRequestedMsg:
-		var cmd tea.Cmd
-		m, cmd = m.beginRefRename(msg.ref)
-		return m, cmd
-
-	case refRenameRejectedMsg:
-		m.status = msg.reason
-		m.statusStyle = statusErrS
-		return m, nil
-
-	case refNameValidatedMsg:
-		m.refNameInput.validating = false
-		if msg.err != nil {
-			m.refNameInput.inlineErr = firstLine(msg.err.Error())
-			return m, nil
-		}
-		name := strings.TrimSpace(msg.name)
-		switch m.refNameInput.mode {
-		case refNameInputCreate:
-			var cmd tea.Cmd
-			m, cmd = m.dispatchRefCreate(name)
-			return m, cmd
-		case refNameInputRename:
-			var cmd tea.Cmd
-			m, cmd = m.dispatchRefRename(name)
-			return m, cmd
-		}
-		return m, nil
-
-	case branchCreateSucceededMsg:
-		m.refActionInFlight = false
-		base := m.refNameInput.baseLabel
-		if base == "" {
-			base = "HEAD"
-		}
-		m.mode = viewModeNormal
-		m.refNameInput = refNameInputState{}
-		m.status = "created '" + msg.name + "' (from " + base + ")"
-		m.statusStyle = statusOkS
-		m.pendingRefCursorName = msg.name
-		return m, m.reloadCmd()
-
-	case branchCreateFailedMsg:
-		m.refActionInFlight = false
-		// Keep the modal open so the user can fix the typed name and retry.
-		if errors.Is(msg.err, git.ErrBranchAlreadyExists) ||
-			errors.Is(msg.err, git.ErrInvalidRefName) {
-			m.refNameInput.inlineErr = firstLine(msg.err.Error())
-			return m, nil
-		}
-		m.mode = viewModeNormal
-		m.refNameInput = refNameInputState{}
-		m.status = "create failed: " + firstLine(msg.err.Error())
-		m.statusStyle = statusErrS
-		return m, nil
-
-	case branchRenameSucceededMsg:
-		m.refActionInFlight = false
-		m.mode = viewModeNormal
-		m.refNameInput = refNameInputState{}
-		m.status = "renamed '" + msg.oldName + "' → '" + msg.newName + "'"
-		m.statusStyle = statusOkS
-		m.pendingRefCursorName = msg.newName
-		if msg.headWasOld {
-			// HEAD now points at newName; sentinel survives reload and is
-			// resolved to the post-rename HEAD hash by refsLoadedMsg.
-			m.pendingHEADHash = pendingHEADSentinel
-		}
-		return m, m.reloadCmd()
-
-	case branchRenameFailedMsg:
-		m.refActionInFlight = false
-		if errors.Is(msg.err, git.ErrBranchAlreadyExists) ||
-			errors.Is(msg.err, git.ErrInvalidRefName) {
-			m.refNameInput.inlineErr = firstLine(msg.err.Error())
-			return m, nil
-		}
-		m.mode = viewModeNormal
-		m.refNameInput = refNameInputState{}
-		m.status = "rename failed: " + firstLine(msg.err.Error())
-		m.statusStyle = statusErrS
-		return m, nil
-
 	case branchDeleteSucceededMsg:
 		m.refActionInFlight = false
 		m.mode = viewModeNormal
 		m.pendingRefDelete = refDeleteState{}
-		m.status = formatDeleteSuccess(msg.target, msg.scope, msg.localDeleted, msg.remoteDeleted)
-		m.statusStyle = statusOkS
-		// Cursor follow-up: prefer the local name when local was deleted,
-		// else the remote shortname so the cursor lands somewhere sensible
-		// in the remote section.
-		if msg.localDeleted {
-			m.pendingRefCursorAfterDelete = deletedRefHandle{
-				name: msg.target.localName,
-				kind: git.RefKindLocal,
-			}
-		} else if msg.remoteDeleted {
-			m.pendingRefCursorAfterDelete = deletedRefHandle{
-				name: msg.target.remote + "/" + msg.target.remoteBranch,
-				kind: git.RefKindRemote,
-			}
+		if msg.forced {
+			m.status = "deleted '" + msg.localName + "' (forced)"
+		} else {
+			m.status = "deleted '" + msg.localName + "'"
 		}
-		return m, m.reloadCmd()
-
-	case branchDeletePartialMsg:
-		m.refActionInFlight = false
-		m.mode = viewModeNormal
-		m.pendingRefDelete = refDeleteState{}
-		m.status = "deleted '" + msg.target.localName + "'; remote push failed: " +
-			firstLine(msg.err.Error())
-		m.statusStyle = statusErrS
-		// Local was deleted — move the cursor off it. Remote is still there.
-		if msg.localDeleted {
-			m.pendingRefCursorAfterDelete = deletedRefHandle{
-				name: msg.target.localName,
-				kind: git.RefKindLocal,
-			}
+		m.statusStyle = statusOkS
+		m.pendingRefCursorAfterDelete = deletedRefHandle{
+			name: msg.localName,
+			kind: git.RefKindLocal,
 		}
 		return m, m.reloadCmd()
 
@@ -915,11 +734,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case branchDeleteNotMergedMsg:
+		// Re-arm the inline confirm with force=true so the user can press
+		// `Y` to retry with -D. Stay in viewModeRefDeleteConfirm; the
+		// renderer swaps the hint from "[y] delete" to "[Y] force delete"
+		// off pendingRefDelete (which is still populated).
 		m.refActionInFlight = false
-		m.mode = viewModeNormal
-		m.pendingRefDelete = refDeleteState{}
-		m.status = "delete: '" + msg.target.localName +
-			"' not fully merged — press [f] or [F] to force"
+		m.status = "'" + msg.localName + "' not fully merged — press [Y] to force"
 		m.statusStyle = statusErrS
 		return m, nil
 
@@ -986,114 +806,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.mode == viewModeWorktreeList {
-			if m.worktreeModal.actionInFlight {
-				if msg.String() == "ctrl+c" {
-					m.cancelStream()
-					return m, tea.Quit
-				}
-				return m, nil
-			}
-			switch msg.String() {
-			case "j", "down":
-				if m.worktreeModal.cursor < len(m.worktreeModal.entries)-1 {
-					m.worktreeModal.cursor++
-				}
-				return m, nil
-			case "k", "up":
-				if m.worktreeModal.cursor > 0 {
-					m.worktreeModal.cursor--
-				}
-				return m, nil
-			case "enter":
-				if m.worktreeModal.cursor >= len(m.worktreeModal.entries) {
-					return m, nil
-				}
-				target := m.worktreeModal.entries[m.worktreeModal.cursor]
-				m.mode = viewModeNormal
-				m.worktreeModal = worktreeModalState{reqID: m.worktreeModal.reqID + 1}
-				return m, func() tea.Msg { return switchWorktreeMsg{path: target.Path} }
-			case "a":
-				m.mode = viewModeWorktreeAddInput
-				return m, m.openWorktreeAddInput()
-			case "d":
-				if m.worktreeModal.cursor >= len(m.worktreeModal.entries) {
-					return m, nil
-				}
-				target := m.worktreeModal.entries[m.worktreeModal.cursor]
-				if target.Path == m.workdir {
-					m.status = "remove: cannot remove current worktree — switch first"
-					m.statusStyle = statusErrS
-					return m, nil
-				}
-				m.worktreeModal.removeTarget = target
-				m.mode = viewModeWorktreeRemoveConfirm
-				return m, nil
-			case "esc":
-				m.mode = viewModeNormal
-				// Bump reqID so any in-flight dirty fan-out msgs are dropped
-				// instead of mutating the next modal-open's state.
-				m.worktreeModal = worktreeModalState{reqID: m.worktreeModal.reqID + 1}
-				return m, nil
-			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
-			}
-			return m, nil
-		}
 		if m.mode == viewModeWorktreeAddInput {
 			switch msg.String() {
 			case "esc":
-				m.mode = viewModeWorktreeList
-				m.worktreeModal.addInput = textinput.Model{}
-				m.worktreeModal.addInlineErr = ""
+				m.mode = viewModeNormal
+				m.worktreeAction.addInput = textinput.Model{}
+				m.worktreeAction.addInlineErr = ""
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
 				return m, tea.Quit
 			case "enter":
-				if m.worktreeModal.actionInFlight {
+				if m.worktreeAction.actionInFlight {
 					return m, nil
 				}
-				branch := strings.TrimSpace(m.worktreeModal.addInput.Value())
+				branch := strings.TrimSpace(m.worktreeAction.addInput.Value())
 				if branch == "" {
-					m.worktreeModal.addInlineErr = "branch name is empty"
+					m.worktreeAction.addInlineErr = "branch name is empty"
 					return m, nil
 				}
 				path := deriveAddPath(m.workdir, branch)
-				m.worktreeModal.actionInFlight = true
-				m.worktreeModal.pendingAddPath = path
-				m.worktreeModal.addInlineErr = ""
-				return m, worktreeAddCmd(m.workdir, path, branch, m.worktreeModal.reqID)
+				m.worktreeAction.actionInFlight = true
+				m.worktreeAction.pendingAddPath = path
+				m.worktreeAction.addInlineErr = ""
+				return m, worktreeAddCmd(m.workdir, path, branch, m.worktreeAction.reqID)
 			}
 			var cmd tea.Cmd
-			m.worktreeModal.addInput, cmd = m.worktreeModal.addInput.Update(msg)
+			m.worktreeAction.addInput, cmd = m.worktreeAction.addInput.Update(msg)
 			return m, cmd
 		}
 		if m.mode == viewModeWorktreeRemoveConfirm {
-			if m.worktreeModal.actionInFlight {
+			if m.worktreeAction.actionInFlight {
 				if msg.String() == "ctrl+c" {
 					m.cancelStream()
 					return m, tea.Quit
 				}
 				return m, nil
 			}
-			t := m.worktreeModal.removeTarget
-			isDirty := m.worktreeModal.dirty[t.Path]
+			t := m.worktreeAction.removeTarget
+			isDirty := m.refs.WorktreeDirty(t.Path)
 			isLocked := t.Locked
 			needsForce := isDirty || isLocked
 			switch msg.String() {
 			case "esc":
-				m.mode = viewModeWorktreeList
-				m.worktreeModal.removeTarget = git.Worktree{}
+				m.mode = viewModeNormal
+				m.worktreeAction.removeTarget = git.Worktree{}
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
 				return m, tea.Quit
 			case "y":
 				if needsForce {
-					m.mode = viewModeWorktreeList
-					m.worktreeModal.removeTarget = git.Worktree{}
+					m.mode = viewModeNormal
+					m.worktreeAction.removeTarget = git.Worktree{}
 					reason := "dirty"
 					if isLocked && !isDirty {
 						reason = "locked"
@@ -1102,14 +867,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.statusStyle = statusOkS
 					return m, nil
 				}
-				m.worktreeModal.actionInFlight = true
-				return m, worktreeRemoveCmd(m.workdir, t.Path, false, m.worktreeModal.reqID)
+				m.worktreeAction.actionInFlight = true
+				return m, worktreeRemoveCmd(m.workdir, t.Path, false, m.worktreeAction.reqID)
 			case "Y":
 				if !needsForce {
 					return m, nil
 				}
-				m.worktreeModal.actionInFlight = true
-				return m, worktreeRemoveCmd(m.workdir, t.Path, true, m.worktreeModal.reqID)
+				m.worktreeAction.actionInFlight = true
+				return m, worktreeRemoveCmd(m.workdir, t.Path, true, m.worktreeAction.reqID)
 			}
 			return m, nil
 		}
@@ -1149,34 +914,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.mode == viewModeRefNameInput {
-			switch msg.String() {
-			case "esc":
-				m.mode = viewModeNormal
-				m.refNameInput = refNameInputState{}
-				m.status = "ref input cancelled"
-				m.statusStyle = statusOkS
-				return m, nil
-			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
-			case "enter":
-				if m.refNameInput.validating {
-					return m, nil
-				}
-				name := strings.TrimSpace(m.refNameInput.input.Value())
-				if name == "" {
-					m.refNameInput.inlineErr = "name required"
-					return m, nil
-				}
-				m.refNameInput.inlineErr = ""
-				m.refNameInput.validating = true
-				return m, checkRefFormatCmd(m.workdir, name)
-			}
-			var cmd tea.Cmd
-			m.refNameInput.input, cmd = m.refNameInput.input.Update(msg)
-			return m, cmd
-		}
 		if m.mode == viewModeRefDeleteConfirm {
 			switch msg.String() {
 			case "esc":
@@ -1188,15 +925,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+c":
 				m.cancelStream()
 				return m, tea.Quit
-			case "y", "Y", "f", "F":
-				scope, ok := resolveDeleteScope(
-					msg.String(), m.pendingRefDelete.hasLocal, m.pendingRefDelete.hasRemote,
-				)
-				if !ok {
-					// Key swallowed — out-of-matrix for this target.
-					return m, nil
-				}
-				return m.dispatchRefDelete(scope)
+			case "y":
+				return m.dispatchRefDelete(false)
+			case "Y":
+				return m.dispatchRefDelete(true)
 			}
 			return m, nil
 		}
@@ -1279,7 +1011,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "fetching…"
 			m.statusStyle = statusBusyS
 			return m, fetchCmd(m.workdir)
-		case "P":
+		case "p":
 			if m.pullInFlight {
 				return m, nil
 			}
@@ -1293,14 +1025,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.enterLocalChangesMode()
 			m.status = "local changes"
 			m.statusStyle = statusOkS
-			return m, cmd
-		case "w":
-			// Bubble Tea must own the focus during a textinput inside the
-			// refs name modal etc. — the early `if m.mode == viewMode*`
-			// branches above already swallow keys for those modes, so by
-			// the time we reach here we know the user isn't typing.
-			cmd := m.openWorktreeModal()
-			m.mode = viewModeWorktreeList
 			return m, cmd
 		case "ctrl+up":
 			m.adjustSplit(-splitRatioStep)
@@ -1579,52 +1303,6 @@ func (m Model) beginCheckout(ref string, detached bool) (Model, tea.Cmd) {
 	return m, checkoutCmd(m.workdir, ref, detached)
 }
 
-// resolvePullEligibility decides whether `p` should follow the checkout
-// with a pull. Returns a non-empty reason string when pull should be
-// skipped, "" when pull is eligible. Tags resolve to detached HEADs with
-// no upstream; local branches without an upstream have nowhere to pull
-// from; remote-tracking refs always become local tracking branches via
-// dwim and are pull-eligible. The decision happens at keypress time so
-// the chain command itself stays dir-only and doesn't need to re-resolve
-// refs across async steps.
-func resolvePullEligibility(ref git.Ref) (skipReason string) {
-	switch ref.Kind {
-	case git.RefKindTag:
-		return "tag has no upstream"
-	case git.RefKindLocal:
-		if ref.Upstream == "" {
-			return "local branch has no upstream"
-		}
-	}
-	return ""
-}
-
-// beginCheckoutWithPull dispatches the refs-pane `p` chain. Same gating
-// as beginCheckout (one in-flight at a time) plus pendingCheckout fields
-// that survive the dirty-tree confirm modal so its `s` branch can re-issue
-// the chain instead of falling back to the plain checkout-only flow.
-// A non-empty skipReason means pull will be skipped — that single value
-// drives both the busy-status text and the chain command's skip flag.
-func (m Model) beginCheckoutWithPull(ref string, detached bool, skipReason string) (Model, tea.Cmd) {
-	if m.checkoutInFlight {
-		return m, nil
-	}
-	m.checkoutInFlight = true
-	m.pendingCheckout = pendingCheckout{
-		ref:        ref,
-		detached:   detached,
-		withPull:   true,
-		skipReason: skipReason,
-	}
-	if skipReason != "" {
-		m.status = checkoutLabel(ref, detached) + " (pull skipped: " + skipReason + ") …"
-	} else {
-		m.status = checkoutLabel(ref, detached) + " + pull …"
-	}
-	m.statusStyle = statusBusyS
-	return m, checkoutThenPullCmd(m.workdir, ref, detached, m.pullPrefStrategy, skipReason)
-}
-
 // checkoutLabel renders the user-facing "checkout: …" prefix shared by the
 // busy and success status lines. Detached checkouts short-hash the ref
 // since the user picked a commit, not a name.
@@ -1635,68 +1313,21 @@ func checkoutLabel(ref string, detached bool) string {
 	return "checkout: " + ref
 }
 
-// beginRefCreate opens the create modal with the base hash + label resolved
-// from the focused pane. The modal's textinput is freshly initialized each
-// time so a previous typed value doesn't leak into the next session.
-func (m Model) beginRefCreate(refsCursorRef git.Ref, refsHasCursor bool) (Model, tea.Cmd) {
-	if m.refActionInFlight {
-		return m, nil
-	}
-	graphHash := ""
-	if c, ok := m.graph.Selected(); ok {
-		graphHash = c.Hash
-	}
-	base, label := resolveCreateBase(m.focused, graphHash, refsCursorRef, refsHasCursor)
-
-	ti := textinput.New()
-	ti.Placeholder = "branch name"
-	ti.Focus()
-	ti.CharLimit = 200
-	ti.Width = 40
-
-	m.refNameInput = refNameInputState{
-		mode:      refNameInputCreate,
-		base:      base,
-		baseLabel: label,
-		input:     ti,
-	}
-	m.mode = viewModeRefNameInput
-	m.status = ""
-	return m, textinput.Blink
-}
-
-// beginRefRename opens the rename modal with the source ref baked in. The
-// textinput is pre-populated with the current name so the user can edit
-// rather than retype, but the cursor is left at the end so a single Enter
-// without edits lands on a no-op (which the validator catches as the same-
-// name case via git itself).
-func (m Model) beginRefRename(target git.Ref) (Model, tea.Cmd) {
-	if m.refActionInFlight {
-		return m, nil
-	}
-	ti := textinput.New()
-	ti.SetValue(target.ShortName)
-	ti.CursorEnd()
-	ti.Focus()
-	ti.CharLimit = 200
-	ti.Width = 40
-
-	m.refNameInput = refNameInputState{
-		mode:   refNameInputRename,
-		target: target,
-		input:  ti,
-	}
-	m.mode = viewModeRefNameInput
-	m.status = ""
-	return m, textinput.Blink
-}
-
-// beginRefDelete reads the cursor ref from refs and opens the delete modal
-// with the resolved 4-axis state. HEAD branches and tags are filtered with a
-// status-bar message instead of opening the modal — destructive intent
-// against those targets is almost always a misclick.
+// beginRefDelete reads the cursor row from refs and routes the delete
+// intent to whichever context the cursor is in:
+//   - on a worktree row: open the worktree remove-confirm sub-modal.
+//   - on a local branch row: arm the inline branch-delete confirm.
+//   - on HEAD / tag / remote-tracking ref: status-bar rejection.
+//
+// Worktree-row delete piggybacks on `d` instead of a separate keybind so
+// the sidebar's "delete the thing under the cursor" mental model stays
+// uniform across worktrees and branches.
 func (m Model) beginRefDelete() (Model, tea.Cmd) {
 	if m.refActionInFlight {
+		return m, nil
+	}
+	if wt, ok := m.refs.SelectedWorktree(); ok {
+		m = m.beginWorktreeRemove(wt)
 		return m, nil
 	}
 	ref, ok := m.refs.Selected()
@@ -1710,77 +1341,31 @@ func (m Model) beginRefDelete() (Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 	}
-	if ref.Kind == git.RefKindTag {
-		m.status = "delete: branches only (tags not supported)"
+	if ref.Kind != git.RefKindLocal {
+		m.status = "delete: local branches only"
 		m.statusStyle = statusErrS
 		return m, nil
 	}
-	st, ok := resolveDeleteState(ref, m.refs.LocalRefs(), m.refs.RemoteRefs())
-	if !ok {
-		m.status = "delete: nothing to delete on this ref"
-		m.statusStyle = statusErrS
-		return m, nil
-	}
-	m.pendingRefDelete = st
+	m.pendingRefDelete = refDeleteState{localName: ref.ShortName}
 	m.mode = viewModeRefDeleteConfirm
 	m.status = ""
 	return m, nil
 }
 
-// dispatchRefDelete fires branchDeleteCmd for the resolved scope and arms
-// the in-flight gate. The modal stays open while the cmd runs — the caller
-// closes it on the success / failed / partial msg.
-func (m Model) dispatchRefDelete(scope deleteScope) (Model, tea.Cmd) {
+// dispatchRefDelete fires branchDeleteCmd with the in-flight gate armed.
+// force=false picks `git branch -d`; force=true picks `-D`. The inline
+// prompt stays open while the cmd runs — branchDeleteSucceededMsg /
+// FailedMsg / NotMergedMsg close (or re-arm) it.
+func (m Model) dispatchRefDelete(force bool) (Model, tea.Cmd) {
 	d := m.pendingRefDelete
-	target := deleteTarget{
-		localName:    d.localName,
-		remote:       d.remote,
-		remoteBranch: d.remoteBranch,
-	}
-
 	m.refActionInFlight = true
-	m.mode = viewModeNormal
-
-	switch scope {
-	case scopeLocalSafe, scopeLocalForce:
+	if force {
+		m.status = "deleting '" + d.localName + "' (forced)…"
+	} else {
 		m.status = "deleting '" + d.localName + "'…"
-	case scopeBothSafe, scopeBothForce:
-		m.status = "deleting '" + d.localName + "' + remote '" + d.remote + "/" + d.remoteBranch + "'…"
-	case scopeRemoteOnly:
-		m.status = "deleting remote '" + d.remote + "/" + d.remoteBranch + "'…"
 	}
 	m.statusStyle = statusBusyS
-	return m, branchDeleteCmd(m.workdir, target, scope)
-}
-
-// dispatchRefCreate fires branchCreateCmd from the validated modal state
-// and arms the in-flight gate. The modal stays open while the cmd runs;
-// success / failure handlers close it.
-func (m Model) dispatchRefCreate(name string) (Model, tea.Cmd) {
-	if m.refActionInFlight {
-		return m, nil
-	}
-	m.refActionInFlight = true
-	m.refNameInput.validating = false
-	m.status = "creating '" + name + "'…"
-	m.statusStyle = statusBusyS
-	return m, branchCreateCmd(m.workdir, name, m.refNameInput.base)
-}
-
-// dispatchRefRename fires branchRenameCmd from the validated modal state.
-// headWasOld is observed before the cmd fires so the post-reload graph cursor
-// jump can follow the rename when HEAD was the source.
-func (m Model) dispatchRefRename(name string) (Model, tea.Cmd) {
-	if m.refActionInFlight {
-		return m, nil
-	}
-	m.refActionInFlight = true
-	m.refNameInput.validating = false
-	src := m.refNameInput.target
-	headWasOld := src.IsHead
-	m.status = "renaming '" + src.ShortName + "' → '" + name + "'…"
-	m.statusStyle = statusBusyS
-	return m, branchRenameCmd(m.workdir, src.ShortName, name, headWasOld)
+	return m, branchDeleteCmd(m.workdir, d.localName, force)
 }
 
 // ffLabel renders the user-facing "fast-forward: <branch> +<N>" status
@@ -1978,11 +1563,9 @@ func (m Model) helpReservedRows() int {
 	return max(want, 1)
 }
 
-// modalHeaderS is the bold style applied to the header row of the create /
-// rename / picker modals. Delete confirm reuses confirmPromptS (busy-color
-// + bold), which is its existing visual; checkout confirm uses
-// confirmPromptS too. modalHeaderS is plain-bold so create/rename/picker
-// don't read as a "warning" alongside the textinput cursor.
+// modalHeaderS is the bold style applied to the header row of the branch
+// picker modal. Checkout confirm uses confirmPromptS (busy-color + bold);
+// modalHeaderS is plain-bold so the picker doesn't read as a "warning".
 var modalHeaderS = lipgloss.NewStyle().Bold(true)
 
 // renderBranchPickerInner returns the multi-line picker content. Built
@@ -2029,76 +1612,26 @@ func (m Model) renderBranchPickerInner() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderRefNameInputInner returns the multi-line content for the create /
-// rename name-entry modal. Four rows: header (bold), textinput view,
-// inline-error or spacer (constant row count so the hint never bounces),
-// and a trailing hint.
-func (m Model) renderRefNameInputInner() string {
-	var header string
-	switch m.refNameInput.mode {
-	case refNameInputCreate:
-		base := m.refNameInput.baseLabel
-		if base == "" {
-			base = "HEAD"
-		}
-		header = "[Create branch from '" + base + "']"
-	case refNameInputRename:
-		header = "[Rename '" + m.refNameInput.target.ShortName + "' →]"
-	}
-
-	inputView := m.refNameInput.input.View()
-
-	errLine := " "
-	if m.refNameInput.inlineErr != "" {
-		errLine = statusErrS.Render(m.refNameInput.inlineErr)
-	} else if m.refNameInput.validating {
-		errLine = statusBusyS.Render("validating…")
-	}
-
-	hint := help.Render("[enter] confirm · [esc] cancel")
-
-	return strings.Join([]string{
-		modalHeaderS.Render(header),
-		inputView,
-		errLine,
-		hint,
-	}, "\n")
-}
-
-// renderRefDeleteConfirmInner returns the multi-line content for the
-// delete confirm modal. Header (confirmPromptS — bold + busy color) plus
-// optional sub-line plus hint matrix derived from hasLocal × hasRemote.
-func (m Model) renderRefDeleteConfirmInner() string {
+// refDeleteInlineHint returns the bottom-hint prompt rendered while
+// viewModeRefDeleteConfirm is active. It paints into the standard status
+// line (no centered overlay) so the cursor row stays anchored to the ref
+// being acted upon — matching the worktree-remove inline pattern.
+func (m Model) refDeleteInlineHint() string {
 	d := m.pendingRefDelete
-
-	var header, sub string
-	switch {
-	case d.hasLocal && d.hasRemote:
-		header = "Delete branch '" + d.localName + "'?"
-		sub = "(matched remote: '" + d.remote + "/" + d.remoteBranch + "')"
-	case d.hasLocal:
-		header = "Delete branch '" + d.localName + "'? (no upstream)"
-	default: // remote only
-		header = "Delete remote-tracking '" + d.remote + "/" + d.remoteBranch + "'?"
-		sub = "(no matching local — remote ref will be deleted on '" + d.remote + "')"
+	prompt := confirmPromptS.Render("delete '"+d.localName+"'?") + " " +
+		help.Render("[y] delete · [Y] force · [esc] cancel")
+	if m.status == "" {
+		return prompt
 	}
-
-	var hint string
-	switch {
-	case d.hasLocal && d.hasRemote:
-		hint = "[y] local · [Y] local+remote · [f] force local · [F] force local+remote · [esc] cancel"
-	case d.hasLocal:
-		hint = "[y] delete · [f] force delete · [esc] cancel"
-	default:
-		hint = "[y] delete remote · [esc] cancel"
+	statusRendered := m.statusStyle.Render(m.status)
+	avail := m.width - lipgloss.Width(prompt) - 1
+	if avail < 1 {
+		return prompt
 	}
-
-	lines := []string{confirmPromptS.Render(header)}
-	if sub != "" {
-		lines = append(lines, statusOkS.Render(sub))
+	if lipgloss.Width(statusRendered) > avail {
+		return prompt
 	}
-	lines = append(lines, help.Render(hint))
-	return strings.Join(lines, "\n")
+	return lipgloss.JoinHorizontal(lipgloss.Top, prompt, " ", statusRendered)
 }
 
 // renderCheckoutConfirmInner returns the 3-row content for the dirty-tree
@@ -2115,10 +1648,6 @@ func (m Model) renderCheckoutConfirmInner() string {
 		body = "fast-forward '" + p.ref + "'?"
 	case p.withCheckoutFF:
 		body = "checkout '" + p.ref + "' and fast-forward?"
-	case p.withPull && p.skipReason == "":
-		body = "checkout '" + p.ref + "' and pull?"
-	case p.withPull:
-		body = "checkout '" + p.ref + "' (pull skipped: " + p.skipReason + ")?"
 	default:
 		body = "checkout '" + p.ref + "'?"
 	}
@@ -2189,14 +1718,8 @@ func (m Model) View() string {
 	switch m.mode {
 	case viewModeBranchPicker:
 		return composeOverlay(base, renderModalBox(m.renderBranchPickerInner()), m.width, m.height)
-	case viewModeRefNameInput:
-		return composeOverlay(base, renderModalBox(m.renderRefNameInputInner()), m.width, m.height)
-	case viewModeRefDeleteConfirm:
-		return composeOverlay(base, renderModalBox(m.renderRefDeleteConfirmInner()), m.width, m.height)
 	case viewModeCheckoutConfirm:
 		return composeOverlay(base, renderModalBox(m.renderCheckoutConfirmInner()), m.width, m.height)
-	case viewModeWorktreeList:
-		return composeOverlay(base, renderModalBox(m.renderWorktreeModalInner()), m.width, m.height)
 	case viewModeWorktreeAddInput:
 		return composeOverlay(base, renderModalBox(m.renderWorktreeAddInputInner()), m.width, m.height)
 	case viewModeWorktreeRemoveConfirm:
@@ -2229,19 +1752,26 @@ func (m Model) tabBody() string {
 // terminal is too narrow to fit both, status wins — the user just triggered
 // an action and seeing its outcome matters more than the help reminder.
 //
-// Centered modal modes (branch picker / ref name input / ref delete /
-// dirty-tree checkout confirm) drop their hint here: the modal box owns
-// its own [esc] hint row, so duplicating it on the bottom line would just
-// double the prompt. A blank space keeps the row count stable across the
-// modal toggle so View()'s base frame doesn't jump in height.
+// Centered modal modes (branch picker / dirty-tree checkout confirm /
+// worktree modals) drop their hint here: the modal box owns its own [esc]
+// hint row, so duplicating it on the bottom line would just double the
+// prompt. A blank space keeps the row count stable across the modal toggle
+// so View()'s base frame doesn't jump in height.
+//
+// viewModeRefDeleteConfirm renders inline: there is no overlay box, so the
+// bottom line itself shows the `delete '<branch>'? [y] / [Y] / [esc]`
+// prompt. The cursor stays on the row being acted upon — matching the
+// worktree-remove inline pattern.
 //
 // viewModeHelp expands the bottom line into a multi-row panel so the
 // shortcut reference can fit the full key matrix.
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
-	case viewModeBranchPicker, viewModeRefNameInput, viewModeRefDeleteConfirm, viewModeCheckoutConfirm,
-		viewModeWorktreeList, viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm:
+	case viewModeBranchPicker, viewModeCheckoutConfirm,
+		viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm:
 		return " "
+	case viewModeRefDeleteConfirm:
+		return m.refDeleteInlineHint()
 	case viewModeHelp:
 		return renderHelpPanel(m.width, m.helpReservedRows())
 	}

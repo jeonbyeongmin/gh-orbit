@@ -641,22 +641,22 @@ func TestModelPKeyDispatchesPull(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("P should return a pullCmd")
+		t.Fatal("p should return a pullCmd")
 	}
 	if !m.pullInFlight {
-		t.Error("P should set pullInFlight=true")
+		t.Error("p should set pullInFlight=true")
 	}
 	if m.status != "pulling…" {
 		t.Errorf("status = %q, want pulling…", m.status)
 	}
 
-	updated, cmd2 := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	updated, cmd2 := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	m = updated.(Model)
 	if cmd2 != nil {
-		t.Error("second P should not dispatch a parallel pull")
+		t.Error("second p should not dispatch a parallel pull")
 	}
 	if m.status != "pulling…" {
 		t.Errorf("status should still be pulling…, got %q", m.status)
@@ -668,7 +668,7 @@ func TestModelPullSucceededReloadsAndJumpsHEAD(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	m = updated.(Model)
 
 	updated, cmd := m.Update(pullSucceededMsg{})
@@ -723,7 +723,7 @@ func TestModelPullConflictSurfacesMessage(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	m = updated.(Model)
 
 	updated, cmd := m.Update(pullConflictMsg{err: errors.New("git pull: pull conflict: CONFLICT (content): Merge conflict in foo.go")})
@@ -753,7 +753,7 @@ func TestModelPullFailedSurfacesError(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	m = updated.(Model)
 
 	updated, cmd := m.Update(pullFailedMsg{err: errors.New("git pull: exit status 128: could not resolve host github.com")})
@@ -779,7 +779,7 @@ func TestModelPullAndFetchConcurrent(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	m = updated.(Model)
 	if !m.fetchInFlight || !m.pullInFlight {
 		t.Fatalf("both flags should be true after F+P, got fetch=%v pull=%v", m.fetchInFlight, m.pullInFlight)
@@ -821,7 +821,7 @@ func TestModelPullPrefStrategyPropagatesToCmd(t *testing.T) {
 	m = updated.(Model)
 	m.pullPrefStrategy = "rebase"
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	_ = updated.(Model)
 	if cmd == nil {
 		t.Fatal("P should return a pullCmd")
@@ -1370,7 +1370,7 @@ func TestModelCheckoutConfirmSwallowsOtherKeys(t *testing.T) {
 		{Type: tea.KeyRunes, Runes: []rune{'j'}},
 		{Type: tea.KeyTab},
 		{Type: tea.KeyRunes, Runes: []rune{'F'}},
-		{Type: tea.KeyRunes, Runes: []rune{'P'}},
+		{Type: tea.KeyRunes, Runes: []rune{'p'}},
 		{Type: tea.KeyRunes, Runes: []rune{'d'}},
 		{Type: tea.KeyRunes, Runes: []rune{'s'}},
 		{Type: tea.KeyRunes, Runes: []rune{'Y'}},
@@ -1402,8 +1402,6 @@ func TestModelCheckoutConfirmMatrixAbortOnly(t *testing.T) {
 		p    pendingCheckout
 	}{
 		{"plain", pendingCheckout{ref: "feat"}},
-		{"withPull", pendingCheckout{ref: "feat", withPull: true}},
-		{"withPull+skip", pendingCheckout{ref: "v1.0", withPull: true, skipReason: "tag has no upstream"}},
 		{"withFF", pendingCheckout{ref: "main", withFF: true, ffHash: "abc1234"}},
 		{"withCheckoutFF", pendingCheckout{ref: "develop", withCheckoutFF: true, ffHash: "abc1234"}},
 	} {
@@ -1477,263 +1475,90 @@ func TestModelGraphCKeyRemoved(t *testing.T) {
 	}
 }
 
-func TestModelRefCheckoutWithPullDispatchesChainForLocalUpstream(t *testing.T) {
-	withChainStubs(t, chainStubs{
-		checkout:    func(context.Context, string, string) error { return nil },
-		pullResolve: noopPullResolveFFOnly,
-		pull:        func(context.Context, string, git.PullStrategy) error { return nil },
-	})
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	updated, cmd := m.Update(refCheckoutWithPullRequestedMsg{ref: git.Ref{
-		ShortName: "feat",
-		FullName:  "refs/heads/feat",
-		Kind:      git.RefKindLocal,
-		Upstream:  "origin/feat",
-	}})
-	m = updated.(Model)
-
-	if !m.checkoutInFlight {
-		t.Error("checkoutInFlight should latch on refCheckoutWithPullRequestedMsg")
-	}
-	if !m.pendingCheckout.withPull {
-		t.Errorf("pendingCheckout.withPull = false, want true; got %+v", m.pendingCheckout)
-	}
-	if m.pendingCheckout.skipReason != "" {
-		t.Errorf("local with upstream should not have skipReason; got %+v", m.pendingCheckout)
-	}
-	if cmd == nil {
-		t.Fatal("p should return a chain cmd")
-	}
-	got := cmd().(checkoutThenPullSucceededMsg)
-	if got.pullSkipped {
-		t.Error("chain should run pull (skipReason empty) for local with upstream")
-	}
-}
-
-func TestModelRefCheckoutWithPullSkipsPullForTag(t *testing.T) {
-	var puRan bool
-	withChainStubs(t, chainStubs{
-		checkout: func(context.Context, string, string) error { return nil },
-		pull: func(context.Context, string, git.PullStrategy) error {
-			puRan = true
-			return nil
+// E7 regression: after PR 1 (stash cut) + PR 3 (refs `p` cut), the
+// dirty-tree confirm-modal abort path must still return the user to the
+// graph cleanly — no leaked pendingCheckout state, no leaked in-flight
+// gate, no panic across any of the surviving variants (plain / withFF /
+// withCheckoutFF). Eng-review iron rule [PR3-CRIT-REG] called for an
+// explicit graph-return assertion so a future refactor that "forgets" to
+// drop a chain field can't silently strand the user in viewModeNormal
+// with stale state.
+func TestE7DirtyTreeAbortReturnsToGraphCleanly(t *testing.T) {
+	for _, variant := range []struct {
+		name  string
+		p     pendingCheckout
+		entry tea.Msg
+	}{
+		{
+			name:  "plain checkout dirty",
+			p:     pendingCheckout{ref: "feat"},
+			entry: checkoutNeedsCleanTreeMsg{ref: "feat"},
 		},
-	})
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	updated, cmd := m.Update(refCheckoutWithPullRequestedMsg{ref: git.Ref{
-		ShortName: "v1.0",
-		FullName:  "refs/tags/v1.0",
-		Kind:      git.RefKindTag,
-	}})
-	m = updated.(Model)
-
-	if m.pendingCheckout.skipReason == "" {
-		t.Errorf("tag should set a skipReason, got %+v", m.pendingCheckout)
-	}
-	if m.pendingCheckout.skipReason != "tag has no upstream" {
-		t.Errorf("skipReason = %q, want 'tag has no upstream'", m.pendingCheckout.skipReason)
-	}
-	if !strings.Contains(m.status, "pull skipped") {
-		t.Errorf("status %q should mention pull skipped", m.status)
-	}
-	if cmd == nil {
-		t.Fatal("p should return a chain cmd")
-	}
-	_ = cmd()
-	if puRan {
-		t.Error("pull must not run for tag refs")
-	}
-}
-
-func TestModelRefCheckoutWithPullSkipsPullForUpstreamlessLocal(t *testing.T) {
-	var puRan bool
-	withChainStubs(t, chainStubs{
-		checkout: func(context.Context, string, string) error { return nil },
-		pull: func(context.Context, string, git.PullStrategy) error {
-			puRan = true
-			return nil
+		{
+			name:  "withFF dirty",
+			p:     pendingCheckout{ref: "main", withFF: true, ffHash: "abc1234"},
+			entry: ffNeedsCleanTreeMsg{branch: "main", hash: "abc1234"},
 		},
-	})
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	updated, cmd := m.Update(refCheckoutWithPullRequestedMsg{ref: git.Ref{
-		ShortName: "wip",
-		FullName:  "refs/heads/wip",
-		Kind:      git.RefKindLocal,
-		Upstream:  "",
-	}})
-	m = updated.(Model)
-
-	if m.pendingCheckout.skipReason == "" {
-		t.Errorf("upstream-less local should set a skipReason, got %+v", m.pendingCheckout)
-	}
-	if m.pendingCheckout.skipReason != "local branch has no upstream" {
-		t.Errorf("skipReason = %q", m.pendingCheckout.skipReason)
-	}
-	if cmd == nil {
-		t.Fatal("p should return a chain cmd")
-	}
-	_ = cmd()
-	if puRan {
-		t.Error("pull must not run for upstream-less local")
-	}
-}
-
-func TestModelRefCheckoutWithPullRemoteIsEligible(t *testing.T) {
-	var puRan bool
-	withChainStubs(t, chainStubs{
-		checkout:    func(context.Context, string, string) error { return nil },
-		pullResolve: noopPullResolveFFOnly,
-		pull: func(context.Context, string, git.PullStrategy) error {
-			puRan = true
-			return nil
+		{
+			name:  "withCheckoutFF dirty",
+			p:     pendingCheckout{ref: "develop", withCheckoutFF: true, ffHash: "abc1234"},
+			entry: ffCheckoutNeedsCleanTreeMsg{branch: "develop", hash: "abc1234"},
 		},
-	})
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			m := New()
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+			m = updated.(Model)
+			m.focused = paneGraph
 
-	updated, cmd := m.Update(refCheckoutWithPullRequestedMsg{ref: git.Ref{
-		ShortName: "origin/feat",
-		FullName:  "refs/remotes/origin/feat",
-		Kind:      git.RefKindRemote,
-	}})
-	m = updated.(Model)
+			// Arm the in-flight gate the dispatch site would have set, then
+			// fire the dirty-tree entry msg. The handler must release the
+			// gate, open the confirm, and keep pendingCheckout populated.
+			switch variant.entry.(type) {
+			case checkoutNeedsCleanTreeMsg:
+				m.checkoutInFlight = true
+			default:
+				m.ffInFlight = true
+			}
+			m.pendingCheckout = variant.p
+			updated, cmd := m.Update(variant.entry)
+			m = updated.(Model)
+			if cmd != nil {
+				t.Errorf("dirty-tree entry should not dispatch a cmd, got %v", cmd)
+			}
+			if m.mode != viewModeCheckoutConfirm {
+				t.Fatalf("entry msg should open confirm modal, mode = %v", m.mode)
+			}
+			if m.checkoutInFlight || m.ffInFlight {
+				t.Errorf("in-flight gates should release when modal owns the next step (co=%v ff=%v)",
+					m.checkoutInFlight, m.ffInFlight)
+			}
 
-	// dwim: remote-tracking ref → local "feat".
-	if m.pendingCheckout.ref != "feat" {
-		t.Errorf("pendingCheckout.ref = %q, want feat (dwim)", m.pendingCheckout.ref)
-	}
-	if m.pendingCheckout.skipReason != "" {
-		t.Error("remote-tracking ref should be pull-eligible (dwim creates local with upstream)")
-	}
-	if cmd == nil {
-		t.Fatal("p should return a chain cmd")
-	}
-	_ = cmd()
-	if !puRan {
-		t.Error("pull should run after dwim checkout of a remote-tracking ref")
-	}
-}
+			// Abort via `a` — the graph view must come back without any
+			// leftover state.
+			updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+			m = updated.(Model)
+			if cmd != nil {
+				t.Errorf("[a] should not dispatch a cmd, got %v", cmd)
+			}
+			if m.mode != viewModeNormal {
+				t.Errorf("[a] should return to viewModeNormal (graph visible), mode = %v", m.mode)
+			}
+			if m.focused != paneGraph {
+				t.Errorf("[a] should preserve paneGraph focus, focused = %v", m.focused)
+			}
+			if (m.pendingCheckout != pendingCheckout{}) {
+				t.Errorf("[a] must clear pendingCheckout, got %+v", m.pendingCheckout)
+			}
+			if m.checkoutInFlight || m.ffInFlight {
+				t.Errorf("[a] must not re-arm in-flight gates (co=%v ff=%v)",
+					m.checkoutInFlight, m.ffInFlight)
+			}
 
-func TestModelCheckoutThenPullSucceededClearsPendingAndJumpsHEAD(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.checkoutInFlight = true
-	m.pendingCheckout = pendingCheckout{ref: "feat", withPull: true}
-
-	updated, cmd := m.Update(checkoutThenPullSucceededMsg{ref: "feat"})
-	m = updated.(Model)
-
-	if m.checkoutInFlight {
-		t.Error("checkoutInFlight should clear")
-	}
-	if (m.pendingCheckout != pendingCheckout{}) {
-		t.Errorf("pendingCheckout should clear, got %+v", m.pendingCheckout)
-	}
-	if !strings.Contains(m.status, "pull: done") {
-		t.Errorf("status = %q, want it to mention 'pull: done'", m.status)
-	}
-	if m.pendingHEADHash != pendingHEADSentinel {
-		t.Errorf("pendingHEADHash = %q, want sentinel", m.pendingHEADHash)
-	}
-	if cmd == nil {
-		t.Fatal("checkoutThenPullSucceededMsg should batch a reload cmd")
-	}
-}
-
-func TestModelCheckoutThenPullSucceededWithSkipShowsReason(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	updated, _ = m.Update(checkoutThenPullSucceededMsg{
-		ref:         "v1.0",
-		pullSkipped: true,
-		skipReason:  "tag has no upstream",
-	})
-	m = updated.(Model)
-	if !strings.Contains(m.status, "pull skipped") || !strings.Contains(m.status, "tag has no upstream") {
-		t.Errorf("status = %q, want skip reason surfaced", m.status)
-	}
-}
-
-func TestModelCheckoutThenPullConflictSurfacesAndReloadsWithoutJump(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.checkoutInFlight = true
-	m.pendingCheckout = pendingCheckout{ref: "feat", withPull: true}
-
-	updated, cmd := m.Update(checkoutThenPullConflictMsg{
-		ref: "feat",
-		err: errors.New("git pull: pull conflict: CONFLICT (content)"),
-	})
-	m = updated.(Model)
-
-	if m.checkoutInFlight {
-		t.Error("checkoutInFlight should clear on chain conflict")
-	}
-	if !strings.Contains(m.status, "checked out feat") && !strings.Contains(m.status, "checkout: feat") {
-		t.Errorf("status = %q, should reference the ref", m.status)
-	}
-	if !strings.Contains(m.status, "CONFLICT") {
-		t.Errorf("status = %q, should surface CONFLICT", m.status)
-	}
-	if m.pendingHEADHash != "" {
-		t.Errorf("conflict should not arm HEAD jump, got pendingHEADHash=%q", m.pendingHEADHash)
-	}
-	if cmd == nil {
-		t.Error("conflict should still reload refs+log")
-	}
-}
-
-func TestModelCheckoutConfirmModalShowsPullVariant(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.mode = viewModeCheckoutConfirm
-	m.pendingCheckout = pendingCheckout{ref: "feat", withPull: true}
-
-	got := ansi.Strip(m.View())
-	for _, want := range []string{"checkout 'feat' and pull", "[a] abort"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("modal text missing %q\n--- view ---\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "stash") {
-		t.Errorf("modal must not mention stash after subtract-stash\n--- view ---\n%s", got)
-	}
-}
-
-func TestModelCheckoutConfirmModalShowsSkipVariantWhenPullElided(t *testing.T) {
-	// withPull=true but skipReason set (tag / no-upstream) — modal must NOT
-	// promise "and pull"; the chain will silently skip the pull step.
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.mode = viewModeCheckoutConfirm
-	m.pendingCheckout = pendingCheckout{
-		ref: "v1.0", withPull: true, skipReason: "tag has no upstream",
-	}
-
-	got := ansi.Strip(m.View())
-	if strings.Contains(got, "and pull") {
-		t.Errorf("modal must not say 'and pull' when pull is skipped\n--- view ---\n%s", got)
-	}
-	for _, want := range []string{"v1.0", "pull skipped: tag has no upstream", "[a] abort"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("modal text missing %q\n--- view ---\n%s", want, got)
-		}
+			// View() must not panic — the abort path renders the normal
+			// 3-pane layout with the post-abort status.
+			_ = m.View()
+		})
 	}
 }
 
@@ -1768,11 +1593,13 @@ func TestOverlayCenters(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	m, _ = m.beginRefCreate(git.Ref{}, false)
+	// Branch picker is the simplest centered overlay available post-PR-2.
+	m.mode = viewModeBranchPicker
+	m.branchPicker = branchPickerState{candidates: []string{"feat/a", "feat/b"}}
 	view := m.View()
 	rows := strings.Split(view, "\n")
 
-	const headerText = "Create branch from"
+	const headerText = "[Branch select]"
 	headerRow := -1
 	for i, r := range rows {
 		if strings.Contains(ansi.Strip(r), headerText) {
@@ -1783,9 +1610,10 @@ func TestOverlayCenters(t *testing.T) {
 	if headerRow == -1 {
 		t.Fatalf("modal header %q not found in view\n--- view ---\n%s", headerText, ansi.Strip(view))
 	}
-	// Create-branch modal: 4 inner rows + 2 chrome = 6 outer. On a 30-row
-	// screen the centered top edge sits at (30-6)/2 = 12; the header is
-	// the first inner row at row 13. ±2 slack absorbs future tweaks.
+	// Branch picker modal: header + 2 candidate rows + hint = 4 inner rows.
+	// 4 inner + 2 chrome = 6 outer. On a 30-row screen the centered top
+	// edge sits around (30-6)/2 = 12; header is the first inner row near
+	// row 13. ±2 slack absorbs future tweaks.
 	const wantHeaderRow = 13
 	if headerRow < wantHeaderRow-2 || headerRow > wantHeaderRow+2 {
 		t.Errorf("modal header row = %d, want around %d", headerRow, wantHeaderRow)
@@ -1800,7 +1628,8 @@ func TestOverlayDimsBackdrop(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	m, _ = m.beginRefCreate(git.Ref{}, false)
+	m.mode = viewModeBranchPicker
+	m.branchPicker = branchPickerState{candidates: []string{"feat/a", "feat/b"}}
 	view := m.View()
 	rows := strings.Split(view, "\n")
 

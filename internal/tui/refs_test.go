@@ -197,97 +197,20 @@ func TestRefModelEnterAndOOnEmptyDoNothing(t *testing.T) {
 	}
 }
 
-func TestRefModelLowerPEmitsCheckoutWithPullRequestedMsg(t *testing.T) {
+// TestRefModelLowerPNotHandled locks in Q13 cut: after subtract-checkout-
+// extras, `p` on the refs pane no longer emits a cursor-bound checkout+pull
+// msg. The handler falls through to handleKey (j/k cursor movement is the
+// only other handler that takes single-rune keys), which is a no-op for
+// `p`, so the cmd return is nil.
+func TestRefModelLowerPNotHandled(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 10)
 	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
 		{ShortName: "main", FullName: "refs/heads/main", Kind: git.RefKindLocal, IsHead: true, Upstream: "origin/main"},
 	}})
 	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
-	if cmd == nil {
-		t.Fatal("'p' on a ref should return a non-nil cmd (checkout+pull)")
-	}
-	msg := cmd()
-	sel, ok := msg.(refCheckoutWithPullRequestedMsg)
-	if !ok {
-		t.Fatalf("cmd produced %T, want refCheckoutWithPullRequestedMsg", msg)
-	}
-	if sel.ref.FullName != "refs/heads/main" {
-		t.Errorf("refCheckoutWithPullRequestedMsg.ref.FullName = %q, want refs/heads/main", sel.ref.FullName)
-	}
-	if sel.ref.Upstream != "origin/main" {
-		t.Errorf("ref.Upstream not preserved across the msg, got %q", sel.ref.Upstream)
-	}
-}
-
-func TestRefModelNEmitsCreateRequestedMsg(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 10)
-	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
-		{ShortName: "main", FullName: "refs/heads/main", Kind: git.RefKindLocal, IsHead: true, ObjectName: "deadbeef"},
-	}})
-	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	if cmd == nil {
-		t.Fatal("'n' on a ref should return a non-nil cmd")
-	}
-	msg, ok := cmd().(refCreateRequestedMsg)
-	if !ok {
-		t.Fatalf("cmd produced %T, want refCreateRequestedMsg", cmd())
-	}
-	if !msg.hasCursor || msg.cursorRef.ShortName != "main" {
-		t.Errorf("create msg = %+v, want cursorRef=main hasCursor=true", msg)
-	}
-}
-
-func TestRefModelNWithEmptySelectionStillEmits(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 10)
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	if cmd == nil {
-		t.Fatal("'n' on an empty refs pane should still emit (root resolves base from focus)")
-	}
-	msg := cmd().(refCreateRequestedMsg)
-	if msg.hasCursor {
-		t.Errorf("hasCursor = true on empty selection, want false")
-	}
-}
-
-func TestRefModelMOnLocalEmitsRenameRequestedMsg(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 10)
-	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
-		{ShortName: "main", FullName: "refs/heads/main", Kind: git.RefKindLocal, IsHead: true},
-	}})
-	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
-	if cmd == nil {
-		t.Fatal("'m' on a local ref should emit a cmd")
-	}
-	msg, ok := cmd().(refRenameRequestedMsg)
-	if !ok {
-		t.Fatalf("cmd produced %T, want refRenameRequestedMsg", cmd())
-	}
-	if msg.ref.ShortName != "main" {
-		t.Errorf("rename msg ref = %q, want main", msg.ref.ShortName)
-	}
-}
-
-func TestRefModelMOnTagEmitsRejectedMsg(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 10)
-	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
-		{ShortName: "v1.0", FullName: "refs/tags/v1.0", Kind: git.RefKindTag},
-	}})
-	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
-	if cmd == nil {
-		t.Fatal("'m' on a tag should emit a rejected msg, not nil")
-	}
-	msg, ok := cmd().(refRenameRejectedMsg)
-	if !ok {
-		t.Fatalf("cmd produced %T, want refRenameRejectedMsg", cmd())
-	}
-	if !strings.Contains(msg.reason, "local branch") {
-		t.Errorf("reason = %q, want it to mention 'local branch'", msg.reason)
+	if cmd != nil {
+		t.Errorf("'p' on refs pane should fall through (no cursor-bound checkout+pull), got cmd=%v", cmd())
 	}
 }
 
@@ -674,12 +597,12 @@ func TestRefModelEnterOnStickyEmitsLocalChangesEnterRequested(t *testing.T) {
 	}
 }
 
-func TestRefModelOpnmSwallowedOnSticky(t *testing.T) {
+func TestRefModelOpSwallowedOnSticky(t *testing.T) {
 	r := newRefsModel()
 	r.SetSize(40, 20)
 	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(3, 0, 0)})
 	r = pressKey(t, r, "k") // sticky
-	for _, key := range []string{"o", "p", "n", "m"} {
+	for _, key := range []string{"o", "p"} {
 		_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
 		if cmd != nil {
 			t.Errorf("key %q on sticky should be swallowed, got cmd %v", key, cmd())

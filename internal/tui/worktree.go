@@ -15,7 +15,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -28,20 +27,15 @@ var (
 	worktreeRemoveExec = git.WorktreeRemove
 )
 
-// worktreeModalState backs viewModeWorktreeList. Modal open bumps reqID
-// and arms loading=true; entries land via worktreesLoadedMsg and the
-// dirty fan-out tags each row via worktreeDirtyResultMsg keyed by path.
-// The map is keyed by entry.Path (absolute, as git emits) so a fanout
-// goroutine's result lookup is O(1).
+// worktreeActionState backs the add-input / remove-confirm sub-modals
+// triggered from a worktree row in the sidebar. reqID survives across
+// the two sub-modals so a slow add response can't collide with a
+// subsequent remove dispatch. actionInFlight gates a/d key repeats while
+// a git wrapper is running.
 //
 // addInput / addInlineErr back viewModeWorktreeAddInput.
 // removeTarget backs viewModeWorktreeRemoveConfirm.
-type worktreeModalState struct {
-	entries        []git.Worktree
-	dirty          map[string]bool
-	cursor         int
-	loading        bool
-	loadErr        error
+type worktreeActionState struct {
 	reqID          uint64
 	actionInFlight bool
 	addInput       textinput.Model
@@ -69,12 +63,15 @@ type worktreesLoadFailedMsg struct {
 }
 
 // worktreeDirtyResultMsg carries one path's dirty-or-clean state back
-// from the fan-out. reqID matches the modal-open generation; mismatched
-// msgs are dropped by the handler.
+// from the fan-out. reqID matches the sidebar-load generation; mismatched
+// msgs are dropped by the handler. timedOut=true signals the per-row 3s
+// budget was exhausted (E3) — the row renders a `?` placeholder so the
+// sidebar never silently lies about a slow worktree.
 type worktreeDirtyResultMsg struct {
-	reqID uint64
-	path  string
-	dirty bool
+	reqID    uint64
+	path     string
+	dirty    bool
+	timedOut bool
 }
 
 // worktreeAddSucceededMsg / worktreeAddFailedMsg report the outcome of
@@ -123,16 +120,23 @@ func loadWorktreesCmd(dir string, reqID uint64) tea.Cmd {
 // worktreeDirtyResultMsg as the per-worktree `git status` returns. Using
 // tea.Batch lets Bubble Tea schedule them concurrently — the rows light
 // up incrementally instead of waiting for the slowest tree.
+//
+// Each goroutine gets a worktreeDirtyBudget deadline (3s). On timeout the
+// msg carries timedOut=true so the sidebar can render a `?` placeholder
+// instead of trusting the (effectively unknown) dirty value. Without the
+// budget, a stuck NFS / network mount could leave the sidebar visually
+// stalled — E3 eng-review iron rule.
 func worktreeDirtyFanoutCmd(reqID uint64, paths []string) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(paths))
 	for _, p := range paths {
 		path := p // capture
 		cmds = append(cmds, func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), worktreeDirtyTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), worktreeDirtyBudget)
 			defer cancel()
 			entries, err := git.Status(ctx, path)
 			if err != nil {
-				return worktreeDirtyResultMsg{reqID: reqID, path: path, dirty: false}
+				timedOut := errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded
+				return worktreeDirtyResultMsg{reqID: reqID, path: path, dirty: false, timedOut: timedOut}
 			}
 			return worktreeDirtyResultMsg{reqID: reqID, path: path, dirty: len(entries) > 0}
 		})
@@ -140,26 +144,42 @@ func worktreeDirtyFanoutCmd(reqID uint64, paths []string) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// openWorktreeModal bumps reqID, arms loading, and dispatches the porcelain
-// list. Callers (the `w` key handler) flip m.mode to viewModeWorktreeList
-// before returning the cmd this produces.
-func (m *Model) openWorktreeModal() tea.Cmd {
-	m.worktreeModal.reqID++
-	m.worktreeModal = worktreeModalState{
-		reqID:   m.worktreeModal.reqID,
-		loading: true,
-		dirty:   make(map[string]bool),
+// beginWorktreeAdd opens the add-input sub-modal triggered by `a` on a
+// worktree row in the sidebar. Bumps the action reqID so any in-flight
+// reply from an earlier add/remove drops on arrival.
+func (m Model) beginWorktreeAdd() (Model, tea.Cmd) {
+	if m.worktreeAction.actionInFlight {
+		return m, nil
 	}
-	return loadWorktreesCmd(m.workdir, m.worktreeModal.reqID)
+	m.worktreeAction.reqID++
+	ti := textinput.New()
+	ti.Placeholder = "branch name"
+	ti.CharLimit = 200
+	ti.Width = 40
+	ti.Focus()
+	m.worktreeAction.addInput = ti
+	m.worktreeAction.addInlineErr = ""
+	m.mode = viewModeWorktreeAddInput
+	return m, textinput.Blink
 }
 
-// reloadWorktreeModal re-fires the porcelain list against the current
-// reqID — used after a successful add/remove so the user sees the new
-// list shape without closing and reopening the modal.
-func (m *Model) reloadWorktreeModal() tea.Cmd {
-	m.worktreeModal.loading = true
-	m.worktreeModal.dirty = make(map[string]bool)
-	return loadWorktreesCmd(m.workdir, m.worktreeModal.reqID)
+// beginWorktreeRemove opens the remove-confirm sub-modal triggered by
+// `d` on a worktree row in the sidebar. Rejects removing the current
+// worktree (the user must switch first — git refuses anyway, but we
+// surface a friendlier message before invoking the wrapper).
+func (m Model) beginWorktreeRemove(target git.Worktree) Model {
+	if m.worktreeAction.actionInFlight {
+		return m
+	}
+	if target.Path == m.workdir {
+		m.status = "remove: cannot remove current worktree — switch first"
+		m.statusStyle = statusErrS
+		return m
+	}
+	m.worktreeAction.reqID++
+	m.worktreeAction.removeTarget = target
+	m.mode = viewModeWorktreeRemoveConfirm
+	return m
 }
 
 // deriveAddPath computes the default new-worktree path: sibling directory
@@ -173,18 +193,15 @@ func deriveAddPath(activePath, branch string) string {
 	return filepath.Join(filepath.Dir(activePath), branch)
 }
 
-// worktreeAddCmd validates the branch name with check-ref-format, then
-// runs WorktreeAdd. A single cmd keeps the modal flow linear — the user
-// sees the success/failure msg with no intermediate "validating…" hop.
-// On invalid branch name the err is set to git.ErrInvalidRefName via
-// CheckRefFormat's wrapping so handlers can branch on errors.Is.
+// worktreeAddCmd runs WorktreeAdd. Invalid branch names are caught by
+// `git worktree add` itself — the wrapper surfaces git's stderr verbatim
+// via worktreeAddFailedMsg, so the inline error line reads naturally
+// ("fatal: '<x>' is not a valid branch name") without a separate
+// validation hop.
 func worktreeAddCmd(dir, path, branch string, reqID uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), worktreeDirtyTimeout)
 		defer cancel()
-		if err := checkRefFormatExec(ctx, dir, branch); err != nil {
-			return worktreeAddFailedMsg{reqID: reqID, err: err}
-		}
 		if err := worktreeAddExec(ctx, dir, path, branch, true); err != nil {
 			return worktreeAddFailedMsg{reqID: reqID, err: err}
 		}
@@ -212,107 +229,8 @@ func worktreeRemoveCmd(dir, path string, force bool, reqID uint64) tea.Cmd {
 	}
 }
 
-// openWorktreeAddInput initializes the branch-name textinput for `a` on
-// the list modal. Caller flips m.mode to viewModeWorktreeAddInput before
-// returning the cmd.
-func (m *Model) openWorktreeAddInput() tea.Cmd {
-	ti := textinput.New()
-	ti.Placeholder = "branch name"
-	ti.CharLimit = 200
-	ti.Width = 40
-	ti.Focus()
-	m.worktreeModal.addInput = ti
-	m.worktreeModal.addInlineErr = ""
-	return textinput.Blink
-}
-
-// renderWorktreeModalInner returns the multi-line content for the
-// viewModeWorktreeList modal. Built for composeOverlay — no border /
-// hint chrome here.
-func (m Model) renderWorktreeModalInner() string {
-	header := modalHeaderS.Render("[Worktrees]")
-	hint := help.Render(helpTextWorktreeModal)
-
-	if m.worktreeModal.loading {
-		return strings.Join([]string{header, "loading…", hint}, "\n")
-	}
-	if m.worktreeModal.loadErr != nil {
-		return strings.Join([]string{
-			header,
-			statusErrS.Render("load: " + firstLine(m.worktreeModal.loadErr.Error())),
-			hint,
-		}, "\n")
-	}
-	if len(m.worktreeModal.entries) == 0 {
-		return strings.Join([]string{header, help.Render("(no worktrees)"), hint}, "\n")
-	}
-
-	width := worktreeModalRowWidth(m.width)
-	lines := []string{header}
-	for i, e := range m.worktreeModal.entries {
-		row := renderWorktreeRow(e, m.workdir, m.worktreeModal.dirty[e.Path], width)
-		if i == m.worktreeModal.cursor {
-			row = selectedStyle.Render(row)
-		}
-		lines = append(lines, row)
-	}
-	lines = append(lines, hint)
-	return strings.Join(lines, "\n")
-}
-
-// renderWorktreeRow formats one entry: "* basename · branch · locked · prunable · ●dirty".
-// `*` flags the active worktree (m.workdir match); a leading "  " keeps
-// non-active rows aligned. Width truncate uses runewidth so unicode
-// basenames don't blow up the layout.
-func renderWorktreeRow(e git.Worktree, activePath string, dirty bool, width int) string {
-	prefix := "  "
-	if e.Path == activePath {
-		prefix = cursorStyle.Render("*") + " "
-	}
-	parts := []string{filepath.Base(e.Path)}
-	switch {
-	case e.Detached:
-		parts = append(parts, "(detached)")
-	case e.Branch != "":
-		parts = append(parts, e.Branch)
-	}
-	if e.Locked {
-		if e.LockReason != "" {
-			parts = append(parts, "locked: "+e.LockReason)
-		} else {
-			parts = append(parts, "locked")
-		}
-	}
-	if e.Prunable {
-		parts = append(parts, "prunable")
-	}
-	if dirty {
-		parts = append(parts, "●dirty")
-	}
-	body := strings.Join(parts, " · ")
-	avail := width - 2 // prefix width
-	if avail < 1 {
-		return prefix
-	}
-	return prefix + runewidth.Truncate(body, avail, "…")
-}
-
-// worktreeModalRowWidth picks a body width slightly narrower than the
-// screen so the modal box's border + padding leaves the row legible.
-func worktreeModalRowWidth(screenWidth int) int {
-	w := screenWidth - 8
-	if w < 20 {
-		w = 20
-	}
-	return w
-}
-
-// helpTextWorktreeModal is the hint line painted under the list. The
-// individual key labels mirror the matrix the action handlers gate on.
-const helpTextWorktreeModal = "[enter] switch · [a] add · [d] remove · [esc] close"
-
 // helpTextWorktreeAddInput / helpTextWorktreeRemoveConfirm — hints for
-// the two sub-modals reached from the list.
+// the two action sub-modals triggered from a worktree row in the sidebar.
 const helpTextWorktreeAddInput = "[enter] add · [esc] cancel"
 const helpTextWorktreeRemoveClean = "[y] remove · [esc] cancel"
 const helpTextWorktreeRemoveDirty = "[Y] force (discards changes) · [y/esc] cancel"
@@ -320,20 +238,20 @@ const helpTextWorktreeRemoveLocked = "[Y] force (overrides lock) · [y/esc] canc
 
 // renderWorktreeAddInputInner — header, textinput row, derived-path hint,
 // inline error or spacer (constant rows so the hint never bounces), and
-// the action hint. Mirrors renderRefNameInputInner's shape.
+// the action hint.
 func (m Model) renderWorktreeAddInputInner() string {
 	header := modalHeaderS.Render("[New worktree]")
-	input := m.worktreeModal.addInput.View()
-	branch := strings.TrimSpace(m.worktreeModal.addInput.Value())
+	input := m.worktreeAction.addInput.View()
+	branch := strings.TrimSpace(m.worktreeAction.addInput.Value())
 	pathHint := " "
 	if branch != "" {
 		pathHint = help.Render("→ " + deriveAddPath(m.workdir, branch))
 	}
 	errLine := " "
 	switch {
-	case m.worktreeModal.addInlineErr != "":
-		errLine = statusErrS.Render(m.worktreeModal.addInlineErr)
-	case m.worktreeModal.actionInFlight:
+	case m.worktreeAction.addInlineErr != "":
+		errLine = statusErrS.Render(m.worktreeAction.addInlineErr)
+	case m.worktreeAction.actionInFlight:
 		errLine = statusBusyS.Render("adding…")
 	}
 	hint := help.Render(helpTextWorktreeAddInput)
@@ -345,77 +263,33 @@ func (m Model) renderWorktreeAddInputInner() string {
 // dirty entry uses one combined `[Y] force` matrix — git itself handles
 // either failure mode with --force.
 func (m Model) renderWorktreeRemoveConfirmInner() string {
-	t := m.worktreeModal.removeTarget
+	t := m.worktreeAction.removeTarget
 	header := confirmPromptS.Render("Remove worktree '" + filepath.Base(t.Path) + "'?")
 	sub := help.Render(t.Path)
 	hintText := helpTextWorktreeRemoveClean
 	switch {
 	case t.Locked:
 		hintText = helpTextWorktreeRemoveLocked
-	case m.worktreeModal.dirty[t.Path]:
+	case m.refs.WorktreeDirty(t.Path):
 		hintText = helpTextWorktreeRemoveDirty
 	}
-	if m.worktreeModal.actionInFlight {
+	if m.worktreeAction.actionInFlight {
 		hintText = "removing…"
 	}
 	hint := help.Render(hintText)
 	return strings.Join([]string{header, sub, hint}, "\n")
 }
 
-// worktreeDirtyTimeout caps how long a per-worktree `git status` call may
-// run before the dirty fan-out drops it. Long enough for cold-cache repos,
-// short enough that a stuck git invocation doesn't leave a stale modal.
+// worktreeDirtyBudget caps how long a per-worktree `git status` call may
+// run before the dirty fan-out drops it. Per E3 eng-review: 3 seconds is
+// short enough that a stuck NFS / slow network mount can't visibly stall
+// the sidebar, but long enough that a cold-cache repo still answers.
+const worktreeDirtyBudget = 3 * time.Second
+
+// worktreeDirtyTimeout caps git list / add / remove calls. These need a
+// more generous deadline (`git worktree list` can be slow on big repos);
+// the per-row fan-out uses worktreeDirtyBudget instead.
 const worktreeDirtyTimeout = 30 * time.Second
-
-// currentWorktreeDirtyMsg carries the dirty-or-clean result for the
-// CURRENT m.workdir. dir is included so the Update handler can drop a
-// stale result that arrived after a worktree switch.
-type currentWorktreeDirtyMsg struct {
-	dir   string
-	dirty bool
-}
-
-// loadCurrentWorktreeDirtyCmd runs `git status --porcelain` against `dir`
-// and folds the result into a boolean. Status (not WorktreeStatus) is
-// already async-safe and locale-locked by gitEnv; we discard the parsed
-// entries and only keep whether any are present.
-func loadCurrentWorktreeDirtyCmd(dir string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), worktreeDirtyTimeout)
-		defer cancel()
-		entries, err := git.Status(ctx, dir)
-		if err != nil {
-			// Soft-fail: header just won't show a dirty marker. The status
-			// surface for the user's manual operations still routes via the
-			// normal cmd error chain.
-			return currentWorktreeDirtyMsg{dir: dir, dirty: false}
-		}
-		return currentWorktreeDirtyMsg{dir: dir, dirty: len(entries) > 0}
-	}
-}
-
-// formatWorktreeHeader produces the one-line summary painted at the very
-// top of the refs pane: "Worktree: <name> · <branch|(detached)> · ●dirty".
-// Empty path returns "" so the header row vanishes — that's the case
-// before New()'s Getwd has run or when it fails.
-func formatWorktreeHeader(path, branch string, detached, dirty bool) string {
-	if path == "" {
-		return ""
-	}
-	name := filepath.Base(path)
-	var parts []string
-	parts = append(parts, "Worktree: "+name)
-	switch {
-	case detached:
-		parts = append(parts, "(detached)")
-	case branch != "":
-		parts = append(parts, branch)
-	}
-	if dirty {
-		parts = append(parts, "●dirty")
-	}
-	return strings.Join(parts, " · ")
-}
 
 // switchWorktreeMsg retargets the TUI at a different worktree path. The
 // handler validates the path is a real working tree before mutating any
@@ -455,15 +329,14 @@ func (m Model) switchWorktree(path string) (Model, tea.Cmd) {
 	// Drop persist state explicitly so reloadCmd's snapshot below doesn't
 	// repopulate it from the (about-to-be-replaced) refs pane.
 	m.pendingRefCursorPersist = persistedRefHandle{}
-	m.pendingRefCursorName = ""
 	m.pendingRefCursorAfterDelete = deletedRefHandle{}
-	// Reset dirty so the header doesn't flash the previous tree's marker
-	// while the new dirty fan-out is in flight.
-	m.currentWorktreeDirty = false
 	// Arm the HEAD jump so the post-reload refsLoadedMsg snaps the graph
 	// cursor onto the new tree's HEAD commit instead of position 0.
 	m.pendingHEADHash = pendingHEADSentinel
-	cmd := tea.Batch(m.reloadCmd(), loadCurrentWorktreeDirtyCmd(m.workdir))
+	// Bump the sidebar reqID so any in-flight worktree-load reply from the
+	// previous tree drops on arrival.
+	m.sidebarWorktreesReqID++
+	cmd := tea.Batch(m.reloadCmd(), loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID))
 	// Local Changes mode keeps its own status snapshot; reloadCmd doesn't
 	// touch it. Re-fire the status load so the file tree reflects the new
 	// tree immediately rather than waiting for the user to press `r`.
@@ -472,33 +345,12 @@ func (m Model) switchWorktree(path string) (Model, tea.Cmd) {
 	}
 	m.status = "worktree: " + filepath.Base(path)
 	m.statusStyle = statusOkS
-	// Show the header immediately with the data we have; the dirty fan-out
-	// will repaint when it returns.
-	m.refreshWorktreeHeader()
+	// Sidebar's current-worktree marker depends on m.workdir; nudge the
+	// existing snapshot so the ▶ row flips immediately while the fresh
+	// list (with its dirty fan-out) is in flight. The next sidebar load
+	// will overwrite this with authoritative data.
+	m.refs.SetWorktrees(m.refs.Worktrees(), m.workdir)
 	return m, cmd
-}
-
-// refreshWorktreeHeader rebuilds the refs-sidebar sticky header from the
-// model's current view of the live worktree. Branch comes from the local
-// refs section's IsHead entry; absent IsHead among non-empty locals
-// means HEAD points outside refs/heads/ (a tag, a remote, or a raw hash)
-// so the header reads as detached. An empty local-refs slice — either
-// pre-load or a fresh repo with no commits — leaves both blank so the
-// header just shows the worktree name without misleading state.
-func (m *Model) refreshWorktreeHeader() {
-	branch, detached := "", false
-	locals := m.refs.LocalRefs()
-	if len(locals) > 0 {
-		detached = true
-		for _, ref := range locals {
-			if ref.IsHead {
-				branch = ref.ShortName
-				detached = false
-				break
-			}
-		}
-	}
-	m.refs.SetWorktreeHeader(formatWorktreeHeader(m.workdir, branch, detached, m.currentWorktreeDirty))
 }
 
 // validateWorktreePath fails fast on the two cases a stale list entry can

@@ -26,20 +26,32 @@ type refModel struct {
 	yOffset int
 	loaded  bool
 	err     error
-	// onLocalChanges flags that the sticky "● Local Changes" row at the
-	// top of the pane is the current focus instead of a ref. Kept as a
-	// separate flag so cursor semantics ("n-th selectable ref") stay the
-	// same — every SelectBy* helper / persist path is unchanged.
+	// onLocalChanges flags that the sticky "● Local Changes" row is the
+	// current focus instead of a ref or worktree. Kept as a separate flag
+	// so cursor semantics ("n-th selectable ref") stay the same — every
+	// SelectBy* helper / persist path is unchanged.
 	onLocalChanges bool
-	// worktreeHeader is the preformatted one-line "Worktree: <name> ·
-	// <branch> · ●dirty" string painted at the very top of the pane. The
-	// Model layer rewrites it on every refsLoadedMsg / switchWorktreeMsg /
-	// dirty status result so the header tracks the live tree without the
-	// view layer ever computing it. Empty string hides the row entirely.
-	worktreeHeader string
+	// onWorktree is -1 when the cursor is not on a worktree row, otherwise
+	// the 0-indexed position of the selected worktree. Worktree rows are
+	// outside the n-th-ref cursor space so they get their own flag,
+	// matching the onLocalChanges pattern.
+	onWorktree int
+	// worktrees is the porcelain-list snapshot rendered at the very top
+	// of the sidebar (sticky inventory). currentWorktreePath marks which
+	// entry is the active one — rendered with a ▶ prefix + bold + selected
+	// color so the user can see at a glance which tree the rest of the
+	// sidebar describes. worktreeDirty maps each entry.Path to its dirty
+	// state from the per-tree fan-out; absent entries render without a
+	// dirty marker (still loading). worktreeTimedOut maps the paths whose
+	// dirty fan-out exceeded the per-goroutine timeout, so the row can
+	// render a `?` placeholder instead of misleadingly showing "clean".
+	worktrees           []git.Worktree
+	currentWorktreePath string
+	worktreeDirty       map[string]bool
+	worktreeTimedOut    map[string]bool
 }
 
-func newRefsModel() refModel { return refModel{} }
+func newRefsModel() refModel { return refModel{onWorktree: -1} }
 
 type refsLoadedMsg struct{ refs []git.Ref }
 type refsLoadFailedMsg struct{ err error }
@@ -55,35 +67,19 @@ type refSelectedMsg struct{ ref git.Ref }
 // branches and tags pass through verbatim.
 type refCheckoutRequestedMsg struct{ ref git.Ref }
 
-// refCheckoutWithPullRequestedMsg is emitted when the user presses `p`
-// on a ref. The root model decides pull eligibility from the ref's Kind
-// and Upstream fields (tags / detached / upstream-less local branches
-// skip pull) and dispatches the chain command. Lower-case `p` is
-// distinct from the global upper-case `P` (plain pull) — the keys form a
-// case-mirror so refs-pane `p` reads as "the global pull's cursor-bound
-// variant".
-type refCheckoutWithPullRequestedMsg struct{ ref git.Ref }
+// refWorktreeSwitchRequestedMsg is emitted when the user presses Enter on
+// a worktree row in the sidebar. The Model translates the path into a
+// switchWorktreeMsg (the existing seam shared with the legacy modal
+// switch flow).
+type refWorktreeSwitchRequestedMsg struct{ path string }
 
-// refCreateRequestedMsg is emitted when the user presses `n` on the refs
-// pane. The root resolves the create base (graph cursor commit / refs
-// cursor ref tip / HEAD, depending on focus) and opens the name-input
-// modal. cursorRef carries the cursor ref for refs-focus base resolution;
-// hasCursor reflects whether there was any selectable ref under the cursor.
-type refCreateRequestedMsg struct {
-	cursorRef git.Ref
-	hasCursor bool
-}
-
-// refRenameRequestedMsg is emitted when the user presses `m` on a local
-// branch row. The root opens the name-input modal in rename mode with
-// the source ref baked in. refs.go already filters non-local refs
-// (m on a tag / remote-tracking ref emits refRenameRejectedMsg instead).
-type refRenameRequestedMsg struct{ ref git.Ref }
-
-// refRenameRejectedMsg is emitted when the user presses `m` but the cursor
-// ref isn't a local branch. The root surfaces the reason on the status bar
-// so the user understands why nothing happened.
-type refRenameRejectedMsg struct{ reason string }
+// refWorktreeAddRequestedMsg / refWorktreeRemoveRequestedMsg fire when
+// the user presses `a` / `d` on a worktree row. The Model opens the
+// matching action sub-modal (add input / remove confirm) — the row's
+// cursor context already names the target for remove; add derives its
+// path from m.workdir's parent.
+type refWorktreeAddRequestedMsg struct{}
+type refWorktreeRemoveRequestedMsg struct{ target git.Worktree }
 
 func loadRefsCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
@@ -129,6 +125,9 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch m.String() {
 		case "enter":
+			if wt, ok := r.SelectedWorktree(); ok {
+				return r, func() tea.Msg { return refWorktreeSwitchRequestedMsg{path: wt.Path} }
+			}
 			if r.onLocalChanges {
 				return r, func() tea.Msg { return localChangesEnterRequestedMsg{} }
 			}
@@ -137,43 +136,21 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 			}
 			return r, nil
 		case "o":
-			if r.onLocalChanges {
+			if r.onLocalChanges || r.onWorktree != -1 {
 				return r, nil
 			}
 			if ref, ok := r.Selected(); ok {
 				return r, func() tea.Msg { return refSelectedMsg{ref: ref} }
 			}
 			return r, nil
-		case "p":
-			if r.onLocalChanges {
-				return r, nil
-			}
-			if ref, ok := r.Selected(); ok {
-				return r, func() tea.Msg { return refCheckoutWithPullRequestedMsg{ref: ref} }
+		case "a":
+			// Worktree-row context only: 'a' triggers add-worktree. On any
+			// other row, swallow (refs panes used to have an `a` "all refs"
+			// label but the handler was always a no-op; PR 4 cut the label).
+			if r.onWorktree != -1 {
+				return r, func() tea.Msg { return refWorktreeAddRequestedMsg{} }
 			}
 			return r, nil
-		case "n":
-			if r.onLocalChanges {
-				return r, nil
-			}
-			ref, ok := r.Selected()
-			return r, func() tea.Msg { return refCreateRequestedMsg{cursorRef: ref, hasCursor: ok} }
-		case "m":
-			if r.onLocalChanges {
-				return r, nil
-			}
-			ref, ok := r.Selected()
-			if !ok {
-				return r, func() tea.Msg {
-					return refRenameRejectedMsg{reason: "rename: no ref selected"}
-				}
-			}
-			if ref.Kind != git.RefKindLocal {
-				return r, func() tea.Msg {
-					return refRenameRejectedMsg{reason: "rename: local branch only"}
-				}
-			}
-			return r, func() tea.Msg { return refRenameRequestedMsg{ref: ref} }
 		}
 		return r.handleKey(m), nil
 	}
@@ -182,15 +159,29 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 
 func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 	total := r.selectableCount()
+	wtCount := len(r.worktrees)
 	switch msg.String() {
 	case "j", "down":
+		if r.onWorktree != -1 {
+			// Walk to the next worktree row, or fall through to Local
+			// Changes when leaving the worktree section.
+			if r.onWorktree < wtCount-1 {
+				r.onWorktree++
+				r = r.scrollCursorIntoView()
+				return r
+			}
+			r.onWorktree = -1
+			r.onLocalChanges = true
+			r = r.scrollCursorIntoView()
+			return r
+		}
 		if r.onLocalChanges {
 			// Leaving the sticky row downward → land on the first
-			// selectable ref. yOffset=0 keeps the sticky in view as the
-			// user begins scrolling.
+			// selectable ref. scrollCursorIntoView keeps the sticky in
+			// view as the user begins scrolling.
 			r.onLocalChanges = false
 			r.cursor = 0
-			r.yOffset = 0
+			r = r.scrollCursorIntoView()
 			return r
 		}
 		if r.cursor < total-1 {
@@ -198,23 +189,47 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 			r = r.scrollCursorIntoView()
 		}
 	case "k", "up":
+		if r.onWorktree != -1 {
+			if r.onWorktree == 0 {
+				// At the very top of the worktree section — nowhere to go.
+				return r
+			}
+			r.onWorktree--
+			r = r.scrollCursorIntoView()
+			return r
+		}
 		if r.onLocalChanges {
+			// Step up into the worktree section if any entries exist.
+			if wtCount > 0 {
+				r.onLocalChanges = false
+				r.onWorktree = wtCount - 1
+				r = r.scrollCursorIntoView()
+			}
 			return r
 		}
 		if r.cursor == 0 {
 			r.onLocalChanges = true
-			r.yOffset = 0
+			r = r.scrollCursorIntoView()
 			return r
 		}
 		r.cursor--
 		r = r.scrollCursorIntoView()
 	case "g":
-		r.onLocalChanges = true
+		// Jump to the top of the visible inventory: first worktree if any,
+		// otherwise the Local Changes sticky row.
+		if wtCount > 0 {
+			r.onLocalChanges = false
+			r.onWorktree = 0
+		} else {
+			r.onLocalChanges = true
+			r.onWorktree = -1
+		}
 		r.cursor = 0
-		r.yOffset = 0
+		r = r.scrollCursorIntoView()
 	case "G":
 		if total > 0 {
 			r.onLocalChanges = false
+			r.onWorktree = -1
 			r.cursor = total - 1
 			r = r.scrollCursorIntoView()
 		}
@@ -229,7 +244,7 @@ func (r refModel) handleKey(msg tea.KeyMsg) refModel {
 // which section they're in — but only if header+cursor still fit in height.
 func (r refModel) scrollCursorIntoView() refModel {
 	rows := r.flatRows()
-	cursorRow, ok := r.cursorFlatRow(rows)
+	cursorRow, ok := r.activeFlatRow(rows)
 	if !ok {
 		return r
 	}
@@ -424,9 +439,80 @@ func (r refModel) Selected() (git.Ref, bool) {
 // route enter on the refs pane into the mode-toggle path.
 func (r refModel) IsLocalChangesSelected() bool { return r.onLocalChanges }
 
-// SetWorktreeHeader rewrites the sticky one-line worktree summary at the
-// very top of the pane. Empty string hides the row.
-func (r *refModel) SetWorktreeHeader(s string) { r.worktreeHeader = s }
+// SelectedWorktree returns the worktree under the cursor, if the cursor is
+// on a worktree row. The Model uses it to dispatch enter / a / d actions
+// against the right entry.
+func (r refModel) SelectedWorktree() (git.Worktree, bool) {
+	if r.onWorktree < 0 || r.onWorktree >= len(r.worktrees) {
+		return git.Worktree{}, false
+	}
+	return r.worktrees[r.onWorktree], true
+}
+
+// SetWorktrees rewrites the sidebar's worktree section. currentPath marks
+// which entry to render with the ▶ + bold cursor highlight (the active
+// worktree the rest of the sidebar describes). worktreeDirty/timedOut
+// state is preserved across calls — only paths that disappear are pruned.
+func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
+	r.worktrees = entries
+	r.currentWorktreePath = currentPath
+	if r.worktreeDirty == nil {
+		r.worktreeDirty = make(map[string]bool)
+	}
+	if r.worktreeTimedOut == nil {
+		r.worktreeTimedOut = make(map[string]bool)
+	}
+	// Prune stale entries.
+	live := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		live[e.Path] = struct{}{}
+	}
+	for p := range r.worktreeDirty {
+		if _, ok := live[p]; !ok {
+			delete(r.worktreeDirty, p)
+		}
+	}
+	for p := range r.worktreeTimedOut {
+		if _, ok := live[p]; !ok {
+			delete(r.worktreeTimedOut, p)
+		}
+	}
+	// Cursor may have been on an entry that just disappeared.
+	if r.onWorktree >= len(entries) {
+		r.onWorktree = -1
+	}
+}
+
+// SetWorktreeDirty records the dirty state for one path from the per-tree
+// fan-out. timedOut=true means the per-goroutine 3s budget was exhausted;
+// the row renders a `?` placeholder instead of trusting the (likely zero)
+// dirty value.
+func (r *refModel) SetWorktreeDirty(path string, dirty, timedOut bool) {
+	if r.worktreeDirty == nil {
+		r.worktreeDirty = make(map[string]bool)
+	}
+	if r.worktreeTimedOut == nil {
+		r.worktreeTimedOut = make(map[string]bool)
+	}
+	r.worktreeDirty[path] = dirty
+	if timedOut {
+		r.worktreeTimedOut[path] = true
+	} else {
+		delete(r.worktreeTimedOut, path)
+	}
+}
+
+// Worktrees returns the current sidebar snapshot. Model uses it to drive
+// the post-load dirty fan-out without exposing the field directly.
+func (r refModel) Worktrees() []git.Worktree { return r.worktrees }
+
+// WorktreeDirty reports whether path is currently marked dirty in the
+// sidebar's fan-out result map. False covers both "clean" and "not yet
+// loaded"; the remove-confirm modal uses it to decide whether the force
+// path is needed.
+func (r refModel) WorktreeDirty(path string) bool {
+	return r.worktreeDirty[path]
+}
 
 func (r refModel) selectableCount() int {
 	total := 0
@@ -436,13 +522,33 @@ func (r refModel) selectableCount() int {
 	return total
 }
 
+// partitionByKind sorts refs into the [local, remote, tag] section slots,
+// applying the Q5 remote filter: a remote-tracking ref whose stripped
+// name matches a local branch is hidden. Solo-dev workflow has ~99% of
+// remotes mirrored by a local, so the sidebar reads as a clean list of
+// "what's only on the remote" — zombie / cross-machine branches still
+// surface, but the redundant mirror noise is gone.
 func partitionByKind(refs []git.Ref) [3][]git.Ref {
+	// Collect local names first so the remote-filter walk has the set
+	// ready in one pass.
+	localNames := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		if ref.Kind == git.RefKindLocal {
+			localNames[ref.ShortName] = struct{}{}
+		}
+	}
 	var out [3][]git.Ref
 	for i, sec := range refSections {
 		for _, ref := range refs {
-			if ref.Kind == sec.kind {
-				out[i] = append(out[i], ref)
+			if ref.Kind != sec.kind {
+				continue
 			}
+			if sec.kind == git.RefKindRemote {
+				if _, mirrored := localNames[git.CheckoutTarget(ref)]; mirrored {
+					continue
+				}
+			}
+			out[i] = append(out[i], ref)
 		}
 	}
 	return out
@@ -474,26 +580,34 @@ const (
 	// (not r.cursor), so the normal cursorFlatRow lookup keeps its
 	// "n-th ref" semantics.
 	refRowLocalChanges
-	// refRowWorktreeHeader is the one-line summary of the current
-	// worktree, painted above refRowLocalChanges when the Model layer has
-	// set worktreeHeader. Never selectable.
+	// refRowWorktreeHeader marks the "Worktrees" section label rendered
+	// at the very top of the pane (above the worktree rows).
 	refRowWorktreeHeader
+	// refRowWorktree is one worktree entry inside the sticky inventory
+	// section. Selected state is driven by onWorktree (the entry index),
+	// so the normal n-th-ref cursor still indexes refs only.
+	refRowWorktree
 )
 
 type refRow struct {
 	kind       refRowKind
 	sectionIdx int
 	refIdx     int // valid only for refRowRef
+	wtIdx      int // valid only for refRowWorktree
 }
 
 // flatRows expands the sections into a flat row list in render order:
-// optional worktree header → sticky Local Changes → gap → section header
-// → empty/refs. This is the index space visible-window slicing and scroll
-// math share.
+// Worktrees header → worktree rows (sticky inventory) → gap → sticky
+// Local Changes → gap → ref-section header → empty/refs. This is the
+// index space visible-window slicing and scroll math share.
 func (r refModel) flatRows() []refRow {
 	var rows []refRow
-	if r.worktreeHeader != "" {
+	if len(r.worktrees) > 0 {
 		rows = append(rows, refRow{kind: refRowWorktreeHeader})
+		for i := range r.worktrees {
+			rows = append(rows, refRow{kind: refRowWorktree, wtIdx: i})
+		}
+		rows = append(rows, refRow{kind: refRowGap})
 	}
 	rows = append(rows, refRow{kind: refRowLocalChanges})
 	for i := range refSections {
@@ -527,10 +641,45 @@ func (r refModel) cursorFlatRow(rows []refRow) (int, bool) {
 	return -1, false
 }
 
+// activeFlatRow returns the flat index of whichever row currently owns
+// the visual cursor — worktree row, Local Changes sticky, or n-th ref —
+// depending on the onWorktree / onLocalChanges flags. scroll math and
+// View() use this single source so they stay in sync across the three
+// cursor regions.
+func (r refModel) activeFlatRow(rows []refRow) (int, bool) {
+	switch {
+	case r.onWorktree != -1:
+		for i, row := range rows {
+			if row.kind == refRowWorktree && row.wtIdx == r.onWorktree {
+				return i, true
+			}
+		}
+		return -1, false
+	case r.onLocalChanges:
+		for i, row := range rows {
+			if row.kind == refRowLocalChanges {
+				return i, true
+			}
+		}
+		return -1, false
+	}
+	return r.cursorFlatRow(rows)
+}
+
 func (r refModel) renderRow(row refRow, width int, selected bool) string {
 	switch row.kind {
 	case refRowWorktreeHeader:
-		return refHeaderStyle.Render(runewidth.Truncate(r.worktreeHeader, width, "…"))
+		return refHeaderStyle.Render(runewidth.Truncate("Worktrees", width, "…"))
+	case refRowWorktree:
+		wt := r.worktrees[row.wtIdx]
+		isCurrent := wt.Path == r.currentWorktreePath
+		dirtyMark := ""
+		if r.worktreeTimedOut[wt.Path] {
+			dirtyMark = "?"
+		} else if r.worktreeDirty[wt.Path] {
+			dirtyMark = "●"
+		}
+		return renderWorktreeSidebarRow(wt, isCurrent, selected, dirtyMark, width)
 	case refRowLocalChanges:
 		text := runewidth.Truncate("● Local Changes", width, "…")
 		if selected {
@@ -550,6 +699,47 @@ func (r refModel) renderRow(row refRow, width int, selected bool) string {
 	return ""
 }
 
+// renderWorktreeSidebarRow formats one worktree entry inside the sidebar
+// inventory. Current worktree (the one m.workdir lives in) is prefixed
+// with `▶` and bolded; others get a 2-col indent so the rows line up. The
+// dirtyMark (`●` clean-fail, `?` for fan-out timeout, "" for clean / not
+// yet loaded) sits after the branch label. Truncate via runewidth so a
+// long worktree name doesn't blow up the layout.
+func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMark string, width int) string {
+	const prefixWidth = 2
+	prefix := "  "
+	if isCurrent {
+		prefix = cursorStyle.Render("▶") + " "
+	}
+	name := wt.Path
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	parts := []string{name}
+	switch {
+	case wt.Detached:
+		parts = append(parts, "(detached)")
+	case wt.Branch != "":
+		parts = append(parts, wt.Branch)
+	}
+	if dirtyMark != "" {
+		parts = append(parts, dirtyMark)
+	}
+	body := strings.Join(parts, " · ")
+	avail := width - prefixWidth
+	if avail < 1 {
+		return prefix
+	}
+	body = runewidth.Truncate(body, avail, "…")
+	switch {
+	case selected:
+		body = selectedStyle.Render(body)
+	case isCurrent:
+		body = cursorStyle.Render(body)
+	}
+	return prefix + body
+}
+
 func (r refModel) View() string {
 	if !r.loaded {
 		return "loading…"
@@ -563,18 +753,7 @@ func (r refModel) View() string {
 	}
 
 	rows := r.flatRows()
-	cursorRow, _ := r.cursorFlatRow(rows)
-	if r.onLocalChanges {
-		// Highlight the sticky row instead of any ref. With the optional
-		// worktree-header row above it, the sticky's flat index isn't
-		// constant anymore — scan for it.
-		for i, row := range rows {
-			if row.kind == refRowLocalChanges {
-				cursorRow = i
-				break
-			}
-		}
-	}
+	cursorRow, _ := r.activeFlatRow(rows)
 
 	start, end := 0, len(rows)
 	if r.height > 0 {

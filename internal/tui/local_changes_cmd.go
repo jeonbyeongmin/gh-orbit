@@ -19,6 +19,7 @@ const localChangesCmdTimeout = 60 * time.Second
 // hermetic (no real subprocess in unit tests).
 var (
 	statusExec        = git.Status
+	numstatExec       = git.LocalChangesNumstat
 	diffFileExec      = git.DiffFile
 	diffUntrackedExec = git.DiffUntracked
 	addExec           = git.Add
@@ -73,6 +74,19 @@ type localChangesRestoreFailedMsg struct {
 // first status load.
 type localChangesEnterRequestedMsg struct{}
 
+// Sidebar summary (numstat) — feeds the inline meta on the `● Local Changes`
+// sticky row. Independent of the status-load round trip used by
+// viewModeLocalChanges so the sidebar can keep its meta fresh without
+// triggering a diff dispatch.
+type localChangesSummaryLoadedMsg struct {
+	summary  git.LocalChangesSummary
+	loadedAt time.Time
+}
+
+type localChangesSummaryFailedMsg struct {
+	err error
+}
+
 // loadStatusCmd dispatches a fresh `git status --porcelain=v2` snapshot.
 func loadStatusCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
@@ -83,6 +97,21 @@ func loadStatusCmd(dir string) tea.Cmd {
 			return localChangesStatusFailedMsg{err: err}
 		}
 		return localChangesStatusLoadedMsg{entries: entries}
+	}
+}
+
+// loadLocalChangesSummaryCmd dispatches `git diff --numstat HEAD` for the
+// sidebar's inline meta. loadedAt is stamped on success so the row can show
+// "Xm ago" without round-tripping a separate timestamp source.
+func loadLocalChangesSummaryCmd(dir string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), localChangesCmdTimeout)
+		defer cancel()
+		summary, err := numstatExec(ctx, dir)
+		if err != nil {
+			return localChangesSummaryFailedMsg{err: err}
+		}
+		return localChangesSummaryLoadedMsg{summary: summary, loadedAt: time.Now()}
 	}
 }
 

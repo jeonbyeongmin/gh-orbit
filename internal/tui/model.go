@@ -294,6 +294,7 @@ func (m Model) Init() tea.Cmd {
 		loadRefsCmd(m.workdir),
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 		loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
+		loadLocalChangesSummaryCmd(m.workdir),
 	)
 }
 
@@ -772,7 +773,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localChangesAddSucceededMsg:
 		m.status = "staged " + msg.path
 		m.statusStyle = statusOkS
-		return m, loadStatusCmd(m.workdir)
+		return m, tea.Batch(loadStatusCmd(m.workdir), loadLocalChangesSummaryCmd(m.workdir))
 
 	case localChangesAddFailedMsg:
 		m.status = "stage " + msg.path + ": " + firstLine(msg.err.Error())
@@ -782,11 +783,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localChangesRestoreSucceededMsg:
 		m.status = "unstaged " + msg.path
 		m.statusStyle = statusOkS
-		return m, loadStatusCmd(m.workdir)
+		return m, tea.Batch(loadStatusCmd(m.workdir), loadLocalChangesSummaryCmd(m.workdir))
 
 	case localChangesRestoreFailedMsg:
 		m.status = "unstage " + msg.path + ": " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
+		return m, nil
+
+	case localChangesSummaryLoadedMsg:
+		m.refs.SetLocalChangesSummary(msg.summary, msg.loadedAt)
+		return m, nil
+
+	case localChangesSummaryFailedMsg:
+		// Sidebar inline meta is a nice-to-have — a failed numstat (rare
+		// outside detached HEAD without a HEAD ref) should not noise up
+		// status; the bare label still renders.
+		m.refs.ResetLocalChangesSummary()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -1155,7 +1167,7 @@ func (m *Model) enterLocalChangesMode() tea.Cmd {
 	m.focused = paneGraph
 	m.localChanges.SetFocus(paneLCTree)
 	m.applyPaneSizes()
-	return loadStatusCmd(m.workdir)
+	return tea.Batch(loadStatusCmd(m.workdir), loadLocalChangesSummaryCmd(m.workdir))
 }
 
 // exitLocalChangesMode flips back to the normal layout. Entries / cursor

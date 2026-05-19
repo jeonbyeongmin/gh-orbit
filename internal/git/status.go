@@ -250,6 +250,57 @@ func DiffFile(ctx context.Context, dir, path string, staged bool) (string, error
 	return stdout.String(), nil
 }
 
+// LocalChangesSummary aggregates the staged + unstaged diff against HEAD —
+// the sidebar's `● Local Changes` row uses it to render an inline meta like
+// `3 files · +47 -12`. Counts cover tracked files only; untracked files (which
+// `git diff HEAD` ignores) surface separately inside Local Changes mode.
+type LocalChangesSummary struct {
+	FilesChanged int
+	Insertions   int
+	Deletions    int
+}
+
+// Empty reports whether the summary carries no signal (nothing to render).
+// The sidebar checks this before composing the inline meta so a clean
+// working tree falls back to the bare `● Local Changes` label.
+func (s LocalChangesSummary) Empty() bool {
+	return s.FilesChanged == 0 && s.Insertions == 0 && s.Deletions == 0
+}
+
+// LocalChangesNumstat aggregates `git diff --numstat HEAD` into a single
+// summary. Binary files (numstat row `-\t-\t<path>`) contribute to
+// FilesChanged but not Insertions / Deletions. Renames (`<ins>\t<del>\t<old>
+// => <new>`) count as a single changed file like git itself reports.
+func LocalChangesNumstat(ctx context.Context, dir string) (LocalChangesSummary, error) {
+	cmd := exec.CommandContext(ctx, "git", "diff", "--numstat", "HEAD")
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return LocalChangesSummary{}, wrapGitErr("git diff --numstat HEAD", err, stderr.String())
+	}
+	stats, err := parseNumstat(stdout.String())
+	if err != nil {
+		return LocalChangesSummary{}, err
+	}
+	return aggregateNumstat(stats), nil
+}
+
+func aggregateNumstat(stats []FileStat) LocalChangesSummary {
+	var out LocalChangesSummary
+	for _, s := range stats {
+		out.FilesChanged++
+		if s.Insertions < 0 || s.Deletions < 0 {
+			continue
+		}
+		out.Insertions += s.Insertions
+		out.Deletions += s.Deletions
+	}
+	return out
+}
+
 // DiffUntracked renders an untracked file as a full-addition diff via
 // `git diff --no-index /dev/null <path>`. Exit code 1 means "files differ"
 // (always the case for untracked files) and is treated as success; only

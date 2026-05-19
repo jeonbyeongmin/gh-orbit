@@ -45,7 +45,6 @@ var helpCategories = []helpCategory{
 		entries: []helpEntry{
 			{"enter", "checkout"},
 			{"o", "jump to tip"},
-			{"a", "all refs"},
 			{"d", "delete branch"},
 		},
 	},

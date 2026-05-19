@@ -88,6 +88,10 @@ Today the build wires up:
   - `a` — add worktree (refs pane, only on a worktree row); see
     [docs/worktrees.md](./docs/worktrees.md)
   - `o` — jump graph cursor to the focused ref tip (refs pane)
+  - `Z` — bulk-clean zombie branches (refs pane): every local branch
+    merged into the default branch with `upstream:track [gone]` and
+    not checked out anywhere is offered for delete in a single confirm
+    modal; see [docs/branches.md](./docs/branches.md)
   - `y` — copy the focused commit's hash to the clipboard (Commit tab)
   - `F` — `git fetch --all` in the background
   - `p` — `git pull` in the background; strategy from

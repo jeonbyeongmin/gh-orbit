@@ -101,6 +101,13 @@ const (
 	// matrix derives from dirty + locked: clean rows offer [y] remove,
 	// dirty/locked rows require [Y] for force.
 	viewModeWorktreeRemoveConfirm
+	// viewModeZombieCleanupConfirm hosts the bulk zombie-branch cleanup
+	// confirm. Triggered by `Z` on the refs pane; the modal lists every
+	// local branch that satisfies the 3-condition guard (merged + upstream
+	// gone + not checked out) and lets the user accept-all (y/Y) or abort
+	// (esc). post-delete summary lands on the bottom status line with the
+	// `git reflog` recovery hint.
+	viewModeZombieCleanupConfirm
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
@@ -118,6 +125,15 @@ const helpExpandedHeight = 10
 // withFF / withCheckoutFF / ffHash flag the graph-Enter FF paths so the
 // modal hint can name the chain. ref carries the local-branch name;
 // ffHash carries the cursor commit MergeFFOnly should advance to.
+// zombieCleanupState is the snapshot the confirm modal renders. baseline
+// is the default branch that detect ran against (named in the modal so
+// the user knows which "merged" was tested); branches is the candidate
+// list — non-empty whenever the modal is open.
+type zombieCleanupState struct {
+	baseline string
+	branches []git.ZombieBranch
+}
+
 type pendingCheckout struct {
 	ref            string
 	detached       bool
@@ -230,6 +246,14 @@ type Model struct {
 	// running. Distinct from checkoutInFlight so a stuck refs write can't
 	// deadlock checkout / pull / FF chains.
 	refActionInFlight bool
+	// zombieCleanup backs viewModeZombieCleanupConfirm. Populated when the
+	// detect dispatch returns a non-empty list; the modal renderer + key
+	// router both read it without re-running the detection.
+	zombieCleanup zombieCleanupState
+	// zombieInFlight gates the `Z` key + the confirm's y/Y while a
+	// detect-or-delete cmd is running so a second press can't fork a
+	// parallel scan or double-delete the same list.
+	zombieInFlight bool
 	// localChanges hosts the file-tree + diff viewport that the right
 	// column renders when mode == viewModeLocalChanges. The graph / tab
 	// models are left untouched across the toggle so exiting the mode
@@ -801,6 +825,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refs.ResetLocalChangesSummary()
 		return m, nil
 
+	case zombieDetectedMsg:
+		m.zombieInFlight = false
+		if len(msg.branches) == 0 {
+			m.status = fmt.Sprintf("no zombie branches (merged into %s, upstream gone, not checked out)", msg.baseline)
+			m.statusStyle = statusOkS
+			return m, nil
+		}
+		m.zombieCleanup = zombieCleanupState(msg)
+		m.mode = viewModeZombieCleanupConfirm
+		m.status = ""
+		return m, nil
+
+	case zombieDetectFailedMsg:
+		m.zombieInFlight = false
+		m.status = "zombie scan: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case zombieDeletedMsg:
+		m.zombieInFlight = false
+		m.mode = viewModeNormal
+		m.zombieCleanup = zombieCleanupState{}
+		m.status, m.statusStyle = formatZombieSummary(msg.deleted, msg.failed)
+		return m, m.reloadCmd()
+
 	case tea.KeyMsg:
 		// The viewMode guard runs before the global ctrl+c/q quit branch so
 		// `q` inside the overlay closes the overlay instead of killing the app.
@@ -944,6 +993,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.mode == viewModeZombieCleanupConfirm {
+			// While the bulk-delete cmd is in flight, only ctrl+c (quit)
+			// is honored so a second y/Y can't fork a parallel sweep.
+			if m.zombieInFlight {
+				if msg.String() == "ctrl+c" {
+					m.cancelStream()
+					return m, tea.Quit
+				}
+				return m, nil
+			}
+			switch msg.String() {
+			case "esc":
+				m.mode = viewModeNormal
+				m.zombieCleanup = zombieCleanupState{}
+				m.status = "zombie cleanup: aborted"
+				m.statusStyle = statusOkS
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			case "y", "Y":
+				m.zombieInFlight = true
+				m.status = fmt.Sprintf("deleting %d zombie branches…", len(m.zombieCleanup.branches))
+				m.statusStyle = statusBusyS
+				return m, deleteZombieBranchesCmd(m.workdir, m.zombieCleanup.branches)
+			}
+			return m, nil
+		}
 		if m.mode == viewModeLocalChanges {
 			switch msg.String() {
 			case "ctrl+c", "q":
@@ -1051,6 +1128,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Swallow so capital R doesn't fall through to the focused
 			// sub-model. Reserved for a future Rebase action.
 			return m, nil
+		case "Z":
+			// Zombie-branch cleanup: only meaningful when the refs pane is
+			// the focus context. Other panes swallow Z so it doesn't leak
+			// into the focused sub-model.
+			if m.focused != paneRefs {
+				return m, nil
+			}
+			if m.zombieInFlight {
+				return m, nil
+			}
+			m.zombieInFlight = true
+			m.status = "scanning for zombie branches…"
+			m.statusStyle = statusBusyS
+			return m, detectZombieBranchesCmd(m.workdir)
 		case "enter":
 			// Graph focus only — refs pane has its own enter handler
 			// (refs.go: refCheckoutRequestedMsg). On other panes, fall
@@ -1736,6 +1827,8 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderWorktreeAddInputInner()), m.width, m.height)
 	case viewModeWorktreeRemoveConfirm:
 		return composeOverlay(base, renderModalBox(m.renderWorktreeRemoveConfirmInner()), m.width, m.height)
+	case viewModeZombieCleanupConfirm:
+		return composeOverlay(base, renderModalBox(m.renderZombieCleanupConfirmInner()), m.width, m.height)
 	}
 	return base
 }
@@ -1780,7 +1873,8 @@ func (m Model) tabBody() string {
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
 	case viewModeBranchPicker, viewModeCheckoutConfirm,
-		viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm:
+		viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm,
+		viewModeZombieCleanupConfirm:
 		return " "
 	case viewModeRefDeleteConfirm:
 		return m.refDeleteInlineHint()

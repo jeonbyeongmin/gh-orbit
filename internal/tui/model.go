@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -18,6 +19,13 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/config"
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
+
+// focusFetchThrottle caps how often a `tea.FocusMsg` re-triggers a
+// background fetch. Terminals + window managers burst FocusMsg on every
+// alt-tab / desktop swap; a 60s floor keeps the cockpit's refs view fresh
+// without turning the user's `git fetch` cadence into the WM's cadence.
+// Hard-coded per CEO plan D5 (no config surface — HOLD SCOPE).
+const focusFetchThrottle = 60 * time.Second
 
 // clipboardWrite is the package-level seam for OS clipboard writes. Tests
 // swap it with an in-memory buffer; production code defaults to atotto's
@@ -184,6 +192,13 @@ type Model struct {
 	// fetchInFlight gates the F key while a background fetch is running so a
 	// second F doesn't spawn a parallel git invocation.
 	fetchInFlight bool
+	// lastFetchAt is the wall-clock of the most recent fetch *attempt* (F key
+	// or focus-fetch). Two roles: (1) drives the 60s focus-fetch throttle so
+	// a window manager that bursts FocusMsg on every alt-tab doesn't flood
+	// `git fetch`; (2) feeds the sidebar footer's "fetched Xm ago" so the
+	// user can tell whether the refs view is stale. Zero value = "never
+	// fetched"; the footer stays blank until the first attempt.
+	lastFetchAt time.Time
 	// pullInFlight gates the p key. Tracked separately from fetchInFlight so
 	// F + P can run in parallel; git's own .git/index.lock is the real
 	// serialization point.
@@ -603,6 +618,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case diffPatchFailedMsg:
 		m.diff.ApplyPatchFailed(msg.reqID, msg.hash, msg.err)
 		return m, nil
+
+	case tea.FocusMsg:
+		// xterm mode 1004 / TTY focus event: refresh the refs view in the
+		// background so the cockpit sees PRs / merges that landed while the
+		// window was inactive. fetchInFlight gate avoids piling on a manual
+		// `F`; the throttle gate keeps an alt-tab burst from saturating the
+		// network.
+		if m.fetchInFlight {
+			return m, nil
+		}
+		if !m.lastFetchAt.IsZero() && time.Since(m.lastFetchAt) < focusFetchThrottle {
+			return m, nil
+		}
+		m.fetchInFlight = true
+		m.lastFetchAt = time.Now()
+		m.refs.SetLastFetchAt(m.lastFetchAt)
+		return m, fetchCmd(m.workdir)
 
 	case fetchSucceededMsg:
 		m.fetchInFlight = false
@@ -1097,6 +1129,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.fetchInFlight = true
+			m.lastFetchAt = time.Now()
+			m.refs.SetLastFetchAt(m.lastFetchAt)
 			m.status = "fetching…"
 			m.statusStyle = statusBusyS
 			return m, fetchCmd(m.workdir)

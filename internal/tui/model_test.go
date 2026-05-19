@@ -1620,6 +1620,84 @@ func TestOverlayCenters(t *testing.T) {
 	}
 }
 
+func TestModelFocusMsgDispatchesFetch(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.FocusMsg{})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("FocusMsg should return a fetchCmd on first focus")
+	}
+	if !m.fetchInFlight {
+		t.Error("FocusMsg should set fetchInFlight=true")
+	}
+	if m.lastFetchAt.IsZero() {
+		t.Error("FocusMsg should stamp lastFetchAt")
+	}
+}
+
+func TestModelFocusMsgThrottledWithinWindow(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	// Simulate a recent fetch attempt that just succeeded (so fetchInFlight
+	// is reset but the throttle clock is fresh).
+	m.lastFetchAt = time.Now().Add(-10 * time.Second)
+
+	updated, cmd := m.Update(tea.FocusMsg{})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Errorf("FocusMsg within %v should be throttled, got cmd=%v", focusFetchThrottle, cmd())
+	}
+	if m.fetchInFlight {
+		t.Error("throttled focus must not flip fetchInFlight")
+	}
+}
+
+func TestModelFocusMsgPassesThrottleAfterWindow(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	m.lastFetchAt = time.Now().Add(-(focusFetchThrottle + 5*time.Second))
+
+	updated, cmd := m.Update(tea.FocusMsg{})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("FocusMsg past the throttle window should re-dispatch fetch")
+	}
+	if !m.fetchInFlight {
+		t.Error("FocusMsg past the window should flip fetchInFlight=true")
+	}
+}
+
+func TestModelFocusMsgSuppressedWhileFetchInFlight(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.fetchInFlight = true
+
+	_, cmd := m.Update(tea.FocusMsg{})
+	if cmd != nil {
+		t.Errorf("FocusMsg should be suppressed while fetch is in flight, got cmd=%v", cmd())
+	}
+}
+
+func TestModelFKeyStampsLastFetchAt(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	m = updated.(Model)
+	if m.lastFetchAt.IsZero() {
+		t.Error("F key should stamp lastFetchAt for the footer + throttle")
+	}
+}
+
 // TestOverlayDimsBackdrop checks that backdrop rows around the modal
 // carry the dim 256-color SGR. Without the dim wrap the focused-modal UX
 // breaks: the background still reads as the active surface.

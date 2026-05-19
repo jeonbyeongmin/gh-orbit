@@ -695,3 +695,49 @@ func TestComposeLocalChangesRowBareLabelWhenTooNarrowForMeta(t *testing.T) {
 		t.Errorf("meta should drop entirely when no room: %q", plain)
 	}
 }
+
+func TestFormatFetchFooterEmptyWhenNever(t *testing.T) {
+	r := newRefsModel()
+	if got := r.formatFetchFooter(time.Now(), 40); got != "" {
+		t.Errorf("expected empty footer when lastFetchAt is zero, got %q", got)
+	}
+}
+
+func TestFormatFetchFooterRendersAge(t *testing.T) {
+	r := newRefsModel()
+	now := time.Now()
+	r.SetLastFetchAt(now.Add(-3 * time.Minute))
+	got := ansi.Strip(r.formatFetchFooter(now, 40))
+	if !strings.Contains(got, "fetched 3m ago") {
+		t.Errorf("expected 'fetched 3m ago', got %q", got)
+	}
+}
+
+func TestFormatFetchFooterJustNowNoAgoSuffix(t *testing.T) {
+	r := newRefsModel()
+	now := time.Now()
+	r.SetLastFetchAt(now)
+	got := ansi.Strip(r.formatFetchFooter(now, 40))
+	if !strings.Contains(got, "fetched just now") {
+		t.Errorf("expected 'fetched just now', got %q", got)
+	}
+	if strings.Contains(got, "just now ago") {
+		t.Errorf("'just now' should not get ' ago' suffix, got %q", got)
+	}
+}
+
+func TestRefModelFooterReservesLastRow(t *testing.T) {
+	r := newRefsModel()
+	r.SetSize(40, 10)
+	r, _ = r.Update(refsLoadedMsg{refs: makeRefs(20, 0, 0)})
+	// Without lastFetchAt, the view uses all 10 rows for refs.
+	noFooter := strings.Count(r.View(), "\n") + 1
+	r.SetLastFetchAt(time.Now())
+	withFooter := strings.Count(r.View(), "\n") + 1
+	if noFooter != withFooter {
+		t.Errorf("line count should stay equal (footer reserves a row), no-footer=%d with-footer=%d", noFooter, withFooter)
+	}
+	if !strings.Contains(ansi.Strip(r.View()), "fetched") {
+		t.Errorf("footer line should appear in View when lastFetchAt set: %q", r.View())
+	}
+}

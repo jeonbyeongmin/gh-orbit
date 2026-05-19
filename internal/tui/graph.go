@@ -102,6 +102,12 @@ type commitDelegate struct {
 	graphWidth    int
 	headRowIndex  int
 	headAncestors map[string]struct{}
+	// coAuthorCache is read at render time so the row's AI chip can either
+	// resolve to a cyan vendor label, a dim-dot placeholder, or nothing —
+	// see chips.go's aiChipState. nil cache reads as "always cache miss",
+	// which keeps every row painting a dim dot until the first
+	// loadCoAuthorChipCmd lands; the chip wiring stays well-formed.
+	coAuthorCache *coAuthorCache
 }
 
 func (commitDelegate) Height() int                             { return 2 }
@@ -139,7 +145,7 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 
 	dim := d.shouldDim(index, ci.c.Hash)
 	connectorLine := renderConnectorLine(connectorPrefix, connectorWidth, connectorColW, width, dim)
-	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, commitColW, width, selected, dim)
+	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, commitColW, width, selected, dim, d.lookupAIChip(ci.c.Hash))
 
 	_, _ = fmt.Fprint(w, connectorLine+"\n"+commitLine)
 }
@@ -214,7 +220,23 @@ func shortHash(h string) string {
 // priority: chips → author → subject truncates to a single cell → if
 // even that won't fit, the message segment disappears and only hash (then
 // hash + time) remain to the right of the graph.
-func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColWidth, width int, selected, dim bool) string {
+// lookupAIChip turns the cache result into the rendering state for one
+// row. nil cache reports "fetched, no AI" so the AI chip is invisible
+// when the delegate is constructed without wiring (unit tests, etc.).
+// A wired cache reports actual miss/hit so the cockpit's dim dot →
+// chip transition happens at runtime.
+func (d commitDelegate) lookupAIChip(hash string) aiChipState {
+	if d.coAuthorCache == nil {
+		return aiChipState{fetched: true}
+	}
+	vendors, ok := d.coAuthorCache.Lookup(hash)
+	if !ok {
+		return aiChipState{}
+	}
+	return aiChipState{fetched: true, vendors: vendors}
+}
+
+func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColWidth, width int, selected, dim bool, ai aiChipState) string {
 	hash := shortHash(c.Hash)
 	rel := relativeShort(c.AuthorTime)
 
@@ -284,7 +306,7 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	// Chip cluster, attached to the front of the subject in the message
 	// column. Dropped wholesale rather than partially when there isn't
 	// room for both chip and subject.
-	chipText, chipW := buildChips(c.RefNames, selected, dim)
+	chipText, chipW := buildChips(c.RefNames, selected, dim, ai)
 	chipSeg := ""
 	chipSegW := 0
 	if chipW > 0 {
@@ -388,6 +410,16 @@ type graphModel struct {
 	headRowIndex  int
 	headAncestors map[string]struct{}
 	headDimDirty  bool
+}
+
+// SetCoAuthorCache injects the AI-vendor cache. Model.New() calls this
+// once after constructing both itself and graphModel so the delegate's
+// lookupAIChip can resolve cache entries without an extra reqID hop. The
+// cache pointer is invariant for the process lifetime; this is a one-shot
+// wiring call, not a per-update mutation.
+func (g *graphModel) SetCoAuthorCache(c *coAuthorCache) {
+	g.delegate.coAuthorCache = c
+	g.list.SetDelegate(g.delegate)
 }
 
 func newGraphModel() graphModel {
@@ -805,6 +837,28 @@ func (g graphModel) Selected() (git.Commit, bool) {
 		return git.Commit{}, false
 	}
 	return item.c, true
+}
+
+// FirstHashes returns up to n loaded commit hashes from the top of the
+// graph. Model uses it to prefetch the AI-vendor chip cache for the
+// initial viewport so the cyan chips appear without the user having to
+// scroll first. Cap-not-min — fewer than n loaded commits returns
+// whatever's there.
+func (g graphModel) FirstHashes(n int) []string {
+	if n <= 0 {
+		return nil
+	}
+	items := g.list.Items()
+	if n > len(items) {
+		n = len(items)
+	}
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		if ci, ok := items[i].(commitItem); ok {
+			out = append(out, ci.c.Hash)
+		}
+	}
+	return out
 }
 
 // JumpToHash moves the cursor to the row whose commit hash equals the given

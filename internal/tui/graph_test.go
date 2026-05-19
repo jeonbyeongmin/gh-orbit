@@ -26,7 +26,7 @@ func TestRenderCommitLineTruncatesLongSubject(t *testing.T) {
 		Subject:    "이것은 너비 검증을 위해 일부러 길게 적은 한국어 제목입니다",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "", 0, 0, 40, false, false)
+	line := renderCommitLine(c, "", 0, 0, 40, false, false, aiChipState{fetched: true})
 	if !strings.Contains(line, "…") {
 		t.Errorf("expected ellipsis when subject overflows, got %q", line)
 	}
@@ -39,7 +39,7 @@ func TestRenderCommitLineHidesSubjectWhenTooNarrow(t *testing.T) {
 		AuthorTime: time.Now(),
 	}
 	// Width less than cursor(2)+hash(7)+space(1)+time(8)+space(1) = 19.
-	line := renderCommitLine(c, "", 0, 0, 10, false, false)
+	line := renderCommitLine(c, "", 0, 0, 10, false, false, aiChipState{fetched: true})
 	if strings.Contains(line, "should-not-appear") {
 		t.Errorf("subject should be hidden at narrow width, got %q", line)
 	}
@@ -55,11 +55,11 @@ func TestRenderCommitLineSelectedHasCursor(t *testing.T) {
 		Subject:    "selected commit",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "", 0, 0, 80, true, false)
+	line := renderCommitLine(c, "", 0, 0, 80, true, false, aiChipState{fetched: true})
 	if !strings.Contains(line, "›") {
 		t.Errorf("selected line should contain cursor marker, got %q", line)
 	}
-	unselected := renderCommitLine(c, "", 0, 0, 80, false, false)
+	unselected := renderCommitLine(c, "", 0, 0, 80, false, false, aiChipState{fetched: true})
 	if strings.Contains(unselected, "›") {
 		t.Errorf("unselected line should not contain cursor marker, got %q", unselected)
 	}
@@ -71,7 +71,7 @@ func TestRenderCommitLineOrderingGraphSubjectHash(t *testing.T) {
 		Subject:    "graph layout",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	starIdx := strings.Index(stripped, "*")
 	subjectIdx := strings.Index(stripped, "graph layout")
@@ -95,7 +95,7 @@ func TestRenderCommitLineHashAnchoredToRightEdge(t *testing.T) {
 		Subject:    "right edge",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	// The visible width must still equal the requested width.
 	if w := len(stripped); w != 80 {
@@ -126,7 +126,7 @@ func TestRenderCommitLinePadsShortGraphPrefix(t *testing.T) {
 	// graphPrefix "*" is 1 column wide but graphColWidth=4 — the cell must
 	// be left-aligned and padded out to the full 4-column width so columns
 	// line up across rows.
-	line := renderCommitLine(c, "*", 1, 4, 80, false, false)
+	line := renderCommitLine(c, "*", 1, 4, 80, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	// cursor 2 + graph 4 = 6.
 	if got := stripped[2:6]; got != "*   " {
@@ -140,7 +140,7 @@ func TestRenderCommitLineNoChipAreaWhenNoRefs(t *testing.T) {
 		Subject:    "no refs",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	// With no refs, no chip cluster appears. The substring " no refs" should
 	// follow the time column directly with one separator space.
@@ -156,7 +156,7 @@ func TestRenderCommitLineWithLocalChip(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"main"},
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	// Chip "main" attaches to the front of the subject in the message
 	// column — both sit between the graph and the hash.
@@ -179,7 +179,7 @@ func TestRenderCommitLineWithPairedChip(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"HEAD -> main", "origin/main"},
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	if strings.Count(stripped, "main") != 1 {
 		t.Errorf("paired chip should render 'main' exactly once, got %q", stripped)
@@ -202,7 +202,7 @@ func TestRenderCommitLineWithDetachedHead(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"HEAD"},
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	if strings.Contains(stripped, "HEAD") {
 		t.Errorf("detached HEAD must NOT render a chip — boundary lives on the graph dim pass, got %q", stripped)
@@ -219,7 +219,7 @@ func TestRenderCommitLineWithTagChipStripsPrefix(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"tag: v0.0.1"},
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	if !strings.Contains(stripped, "v0.0.1") {
 		t.Errorf("tag chip should display version, got %q", stripped)
@@ -236,7 +236,7 @@ func TestRenderCommitLineChipOverflowShowsPlusN(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"a", "b", "c", "d", "e"},
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 100, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 100, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	if !strings.Contains(stripped, "+3") {
 		t.Errorf("overflow indicator '+3' missing from %q", stripped)
@@ -253,7 +253,7 @@ func TestRenderCommitLineChipDroppedWhenSubjectWouldStarve(t *testing.T) {
 		RefNames: []string{"this-is-a-very-long-branch-name-that-cannot-fit"},
 	}
 	// width = cursor 2 + graph 2 + hash 7 + space 1 + time 8 + space 1 + subject 2 = 23
-	line := renderCommitLine(c, "* ", 2, 2, 23, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 23, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	if strings.Contains(stripped, "this-is-a-very-long") {
 		t.Errorf("chip should be dropped when subject can't fit alongside it, got %q", stripped)
@@ -270,8 +270,8 @@ func TestRenderCommitLineSelectedRecolorsChipBackground(t *testing.T) {
 		AuthorTime: time.Now(),
 		RefNames:   []string{"main"},
 	}
-	unselected := renderCommitLine(c, "* ", 2, 2, 80, false, false)
-	selected := renderCommitLine(c, "* ", 2, 2, 80, true, false)
+	unselected := renderCommitLine(c, "* ", 2, 2, 80, false, false, aiChipState{fetched: true})
+	selected := renderCommitLine(c, "* ", 2, 2, 80, true, false, aiChipState{fetched: true})
 	if unselected == selected {
 		t.Fatalf("selected line should differ from unselected")
 	}
@@ -290,7 +290,7 @@ func TestRenderCommitLineWithAuthorName(t *testing.T) {
 		AuthorName: "Byeongmin Jeon",
 		AuthorTime: time.Now(),
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	subjectIdx := strings.Index(stripped, "subj")
 	authorIdx := strings.Index(stripped, "Byeongmin")
@@ -314,7 +314,7 @@ func TestRenderCommitLineEmptyAuthorOmitsColumn(t *testing.T) {
 		AuthorTime: time.Now(),
 		// AuthorName left empty.
 	}
-	line := renderCommitLine(c, "* ", 2, 2, 80, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 80, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	if w := len(stripped); w != 80 {
 		t.Errorf("rendered width = %d, want 80", w)
@@ -342,7 +342,7 @@ func TestRenderCommitLineDropsAuthorWhenNarrow(t *testing.T) {
 		AuthorTime: time.Now(),
 	}
 	// width = cursor 2 + graph 2 + subject 2 + sep 1 + hash 7 + sep 1 + rel 8 = 23
-	line := renderCommitLine(c, "* ", 2, 2, 23, false, false)
+	line := renderCommitLine(c, "* ", 2, 2, 23, false, false, aiChipState{fetched: true})
 	stripped := ansi.Strip(line)
 	if strings.Contains(stripped, "alice") {
 		t.Errorf("author should be dropped at narrow width, got %q", stripped)
@@ -362,7 +362,7 @@ func TestRenderCommitLineGraphTruncatedAtNarrowWidth(t *testing.T) {
 		AuthorTime: time.Now(),
 	}
 	// width 10, cursor 2 + hash 7 = 9 → at most 1 column for graph.
-	line := renderCommitLine(c, "| | * ", 6, 6, 10, false, false)
+	line := renderCommitLine(c, "| | * ", 6, 6, 10, false, false, aiChipState{fetched: true})
 	if !strings.Contains(line, "abcdef1") {
 		t.Errorf("hash must remain visible even when graph is wider than budget, got %q", line)
 	}

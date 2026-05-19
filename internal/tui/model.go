@@ -289,6 +289,16 @@ type Model struct {
 	// triggered from a worktree row (a / d). Reset to zero on esc /
 	// success; while open the textinput owns key routing.
 	worktreeAction worktreeActionState
+	// coAuthorCache feeds the AI-vendor chip on each graph row. Lookup
+	// at render time; lazy fetch on miss; LRU-capped at 5000 (CEO D7) so
+	// long sessions on huge repos don't grow unbounded. The cache also
+	// stores negative entries ("fetched, no AI") so the same commit isn't
+	// re-fetched every time it scrolls back into view.
+	coAuthorCache *coAuthorCache
+	// coAuthorInFlight gates a hash while its lazy fetch is mid-flight so
+	// rapid scroll over a cache-miss commit can't queue parallel git
+	// invocations against the same hash.
+	coAuthorInFlight map[string]struct{}
 }
 
 func New() Model {
@@ -305,7 +315,10 @@ func New() Model {
 		currentRefs:           []string{refsAllSentinel},
 		streamReqID:           1,
 		sidebarWorktreesReqID: 1,
+		coAuthorCache:         newCoAuthorCache(),
+		coAuthorInFlight:      make(map[string]struct{}),
 	}
+	m.graph.SetCoAuthorCache(m.coAuthorCache)
 	if wd, err := os.Getwd(); err == nil {
 		m.workdir = wd
 	} else {
@@ -476,6 +489,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.graph, cmd = m.graph.Update(msg)
 		m = m.tryHEADJump()
+		// Prefetch the initial viewport's AI-vendor chips so the cockpit
+		// reads as "AI-attribution surface" the moment the graph paints,
+		// rather than asking the user to scroll through every row to wake
+		// chips up one cursor move at a time. Cap-30 keeps the burst of
+		// `git show -s` invocations bounded; remaining rows fall back to
+		// the dim-dot placeholder until the user navigates to them and
+		// the commitDetail piggyback fills the cache.
+		if prefetch := m.coAuthorPrefetchCmds(coAuthorPrefetchCount); prefetch != nil {
+			cmd = tea.Batch(cmd, prefetch)
+		}
 		return m, cmd
 
 	case headAncestorsLoadedMsg:
@@ -608,9 +631,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case commitDetailLoadedMsg:
 		m.commitDetail.ApplyDetailLoaded(msg.reqID, msg.hash, msg.detail)
+		// Piggyback on the detail fetch the Commit tab already runs: the
+		// body it returns is exactly what the AI-vendor parser needs, so a
+		// second `git show` on the same hash would be pure waste.
+		m.coAuthorCache.Put(msg.hash, git.CommitAIVendors(msg.detail.Body))
+		delete(m.coAuthorInFlight, msg.hash)
 		return m, nil
 	case commitDetailFailedMsg:
 		m.commitDetail.ApplyDetailFailed(msg.reqID, msg.hash, msg.err)
+		return m, nil
+
+	case coAuthorChipLoadedMsg:
+		m.coAuthorCache.Put(msg.hash, msg.vendors)
+		delete(m.coAuthorInFlight, msg.hash)
+		return m, nil
+	case coAuthorChipFailedMsg:
+		// Negative-cache the hash so a transient git failure doesn't put
+		// the row into a perpetual dim-dot loop. Manual `r` reload clears
+		// the in-flight set; the LRU eviction churn handles the rest.
+		m.coAuthorCache.Put(msg.hash, nil)
+		delete(m.coAuthorInFlight, msg.hash)
 		return m, nil
 	case diffPatchLoadedMsg:
 		m.diff.ApplyPatchLoaded(msg.reqID, msg.hash, msg.text)

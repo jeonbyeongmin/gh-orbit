@@ -6,21 +6,23 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
+
+	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
 func TestBuildChipsEmpty(t *testing.T) {
-	s, w := buildChips(nil, false, false)
+	s, w := buildChips(nil, false, false, aiChipState{fetched: true})
 	if s != "" || w != 0 {
 		t.Errorf("nil: got (%q, %d), want (\"\", 0)", s, w)
 	}
-	s, w = buildChips([]string{}, false, false)
+	s, w = buildChips([]string{}, false, false, aiChipState{fetched: true})
 	if s != "" || w != 0 {
 		t.Errorf("empty: got (%q, %d), want (\"\", 0)", s, w)
 	}
 }
 
 func TestBuildChipsLocalOnly(t *testing.T) {
-	s, w := buildChips([]string{"main"}, false, false)
+	s, w := buildChips([]string{"main"}, false, false, aiChipState{fetched: true})
 	if s == "" || w == 0 {
 		t.Fatalf("got empty result for [main]")
 	}
@@ -30,7 +32,7 @@ func TestBuildChipsLocalOnly(t *testing.T) {
 }
 
 func TestBuildChipsLocalRemotePairCollapses(t *testing.T) {
-	s, _ := buildChips([]string{"HEAD -> main", "origin/main"}, false, false)
+	s, _ := buildChips([]string{"HEAD -> main", "origin/main"}, false, false, aiChipState{fetched: true})
 	plain := ansi.Strip(s)
 	// paired-main chip 만 — HEAD 는 더 이상 chip 으로 그리지 않는다.
 	// "main" 은 한 번만 — pair merging 이 안 됐으면 두 번 등장한다.
@@ -55,8 +57,8 @@ func TestBuildChipsPairedChipPreservesWidth(t *testing.T) {
 	// totalW 가 실제 visible runewidth 와 일치해야 한다 — paired chip 은
 	// chipDisplay 가 이름 앞에 `☁ ` (2 cells) 를 붙이므로 plain 대비 +2 cell
 	// 늘어나고, 그 차이가 totalW 계산에 정확히 반영되어야 한다.
-	pairedRendered, pairedW := buildChips([]string{"main", "origin/main"}, false, false)
-	plainRendered, plainW := buildChips([]string{"feature/x"}, false, false)
+	pairedRendered, pairedW := buildChips([]string{"main", "origin/main"}, false, false, aiChipState{fetched: true})
+	plainRendered, plainW := buildChips([]string{"feature/x"}, false, false, aiChipState{fetched: true})
 
 	if pairedW != runewidth.StringWidth(ansi.Strip(pairedRendered)) {
 		t.Errorf("paired chip totalW (%d) != visible runewidth of stripped output (%q -> %d)",
@@ -76,7 +78,7 @@ func TestBuildChipsPairedChipPreservesWidth(t *testing.T) {
 }
 
 func TestBuildChipsTagStripsPrefix(t *testing.T) {
-	s, _ := buildChips([]string{"tag: v0.0.1"}, false, false)
+	s, _ := buildChips([]string{"tag: v0.0.1"}, false, false, aiChipState{fetched: true})
 	plain := ansi.Strip(s)
 	if !strings.Contains(plain, "v0.0.1") {
 		t.Errorf("plain=%q must contain v0.0.1", plain)
@@ -89,7 +91,7 @@ func TestBuildChipsTagStripsPrefix(t *testing.T) {
 func TestBuildChipsDetachedHeadEmitsNothing(t *testing.T) {
 	// Detached HEAD has only the bare `HEAD` token and no other refs.
 	// HEAD-as-dim-boundary supersedes the chip — buildChips returns nothing.
-	s, w := buildChips([]string{"HEAD"}, false, false)
+	s, w := buildChips([]string{"HEAD"}, false, false, aiChipState{fetched: true})
 	if s != "" || w != 0 {
 		t.Errorf("detached HEAD alone should render no chip; got (%q, %d)", s, w)
 	}
@@ -98,7 +100,7 @@ func TestBuildChipsDetachedHeadEmitsNothing(t *testing.T) {
 func TestBuildChipsHeadArrowSuppressesHEADToken(t *testing.T) {
 	// `HEAD -> main` produces only a `main` chip — the HEAD prefix no longer
 	// emits its own chip slot.
-	s, _ := buildChips([]string{"HEAD -> main"}, false, false)
+	s, _ := buildChips([]string{"HEAD -> main"}, false, false, aiChipState{fetched: true})
 	plain := ansi.Strip(s)
 	if strings.Contains(plain, "HEAD") {
 		t.Errorf("plain=%q must NOT contain HEAD chip", plain)
@@ -109,7 +111,7 @@ func TestBuildChipsHeadArrowSuppressesHEADToken(t *testing.T) {
 }
 
 func TestBuildChipsTruncatesAfterTwoWithoutHead(t *testing.T) {
-	s, _ := buildChips([]string{"a", "b", "c", "d", "e"}, false, false)
+	s, _ := buildChips([]string{"a", "b", "c", "d", "e"}, false, false, aiChipState{fetched: true})
 	plain := ansi.Strip(s)
 	// 첫 두 개 + +3 == 3개 chip. "d" / "e" 는 안 보여야 함.
 	if !strings.Contains(plain, "+3") {
@@ -124,7 +126,7 @@ func TestBuildChipsTruncatesAfterTwoWithoutHead(t *testing.T) {
 }
 
 func TestBuildChipsTruncatesAfterTwoEvenWithHeadInput(t *testing.T) {
-	s, _ := buildChips([]string{"HEAD -> main", "tag: v1", "tag: v2", "tag: v3"}, false, false)
+	s, _ := buildChips([]string{"HEAD -> main", "tag: v1", "tag: v2", "tag: v3"}, false, false, aiChipState{fetched: true})
 	plain := ansi.Strip(s)
 	// HEAD 칩 제거 후 bodyCap=2: main + v1 가 보이고 v2, v3 가 +2 overflow 로 합쳐진다.
 	if strings.Contains(plain, "HEAD") {
@@ -145,7 +147,7 @@ func TestBuildChipsTruncatesAfterTwoEvenWithHeadInput(t *testing.T) {
 }
 
 func TestBuildChipsDropsSymbolicRemoteHead(t *testing.T) {
-	s, _ := buildChips([]string{"HEAD -> develop", "origin/develop", "origin/HEAD"}, false, false)
+	s, _ := buildChips([]string{"HEAD -> develop", "origin/develop", "origin/HEAD"}, false, false, aiChipState{fetched: true})
 	plain := ansi.Strip(s)
 	if strings.Contains(plain, "origin/HEAD") {
 		t.Errorf("origin/HEAD must be dropped; plain=%q", plain)
@@ -154,7 +156,7 @@ func TestBuildChipsDropsSymbolicRemoteHead(t *testing.T) {
 
 func TestBuildChipsTruncatesLongBranchName(t *testing.T) {
 	long := strings.Repeat("a", maxChipTextWidth+10)
-	s, _ := buildChips([]string{long}, false, false)
+	s, _ := buildChips([]string{long}, false, false, aiChipState{fetched: true})
 	plain := ansi.Strip(s)
 	if !strings.Contains(plain, "…") {
 		t.Errorf("long branch name should be truncated with ellipsis; got %q", plain)
@@ -167,7 +169,7 @@ func TestBuildChipsTruncatesLongBranchName(t *testing.T) {
 func TestBuildChipsTruncatedNamePreservesPairPrefix(t *testing.T) {
 	long := strings.Repeat("a", maxChipTextWidth+5)
 	// pair: HEAD -> <long>, origin/<long>
-	s, _ := buildChips([]string{"HEAD -> " + long, "origin/" + long}, false, false)
+	s, _ := buildChips([]string{"HEAD -> " + long, "origin/" + long}, false, false, aiChipState{fetched: true})
 	plain := ansi.Strip(s)
 	// 이름 truncation 은 maxChipTextWidth 한도에서 "…" 로 그대로 동작해야 하고,
 	// paired prefix `☁ ` 는 truncate 와 무관하게 정확히 한 번 등장해야 한다.
@@ -183,13 +185,58 @@ func TestBuildChipsTruncatedNamePreservesPairPrefix(t *testing.T) {
 }
 
 func TestBuildChipsSelectedOverridesBackground(t *testing.T) {
-	unselected, _ := buildChips([]string{"main"}, false, false)
-	selected, _ := buildChips([]string{"main"}, true, false)
+	unselected, _ := buildChips([]string{"main"}, false, false, aiChipState{fetched: true})
+	selected, _ := buildChips([]string{"main"}, true, false, aiChipState{fetched: true})
 	if unselected == selected {
 		t.Errorf("selected output should differ from unselected; both = %q", unselected)
 	}
 	// selected 출력은 colorSelected (205) 배경 ANSI 코드를 포함해야 한다.
 	if !strings.Contains(selected, "48;5;205") {
 		t.Errorf("selected output should set background 205, got %q", selected)
+	}
+}
+
+func TestBuildChipsAIVendorAppendsCyanChip(t *testing.T) {
+	rendered, w := buildChips(nil, false, false, aiChipState{fetched: true, vendors: []git.AIVendor{git.VendorAnthropic}})
+	if w == 0 {
+		t.Fatalf("AI-only row should produce a chip, got width 0")
+	}
+	plain := ansi.Strip(rendered)
+	if !strings.Contains(plain, "anthropic") {
+		t.Errorf("expected vendor label, got %q", plain)
+	}
+	if !strings.Contains(rendered, "48;5;51") {
+		t.Errorf("expected cyan (color 51) background ANSI, got %q", rendered)
+	}
+}
+
+func TestBuildChipsAIPlaceholderEmitsDimDot(t *testing.T) {
+	rendered, w := buildChips(nil, false, false, aiChipState{}) // fetched=false
+	if w != 1 {
+		t.Errorf("placeholder width should be 1 cell, got %d", w)
+	}
+	plain := ansi.Strip(rendered)
+	if plain != "·" {
+		t.Errorf("placeholder should be a single dim dot, got %q", plain)
+	}
+}
+
+func TestBuildChipsAIFetchedNoVendorEmitsNothing(t *testing.T) {
+	rendered, w := buildChips(nil, false, false, aiChipState{fetched: true})
+	if rendered != "" || w != 0 {
+		t.Errorf("fetched + no AI should yield nothing, got (%q, %d)", rendered, w)
+	}
+}
+
+func TestBuildChipsAIChipFollowsRefChips(t *testing.T) {
+	rendered, _ := buildChips([]string{"main"}, false, false, aiChipState{fetched: true, vendors: []git.AIVendor{git.VendorOpenAI}})
+	plain := ansi.Strip(rendered)
+	mainIdx := strings.Index(plain, "main")
+	aiIdx := strings.Index(plain, "openai")
+	if mainIdx < 0 || aiIdx < 0 {
+		t.Fatalf("expected both labels in %q", plain)
+	}
+	if mainIdx > aiIdx {
+		t.Errorf("ref chip must precede AI chip; got main@%d ai@%d in %q", mainIdx, aiIdx, plain)
 	}
 }

@@ -61,6 +61,12 @@ Today the build wires up:
 - ref decoration (`%D`) is parsed into typed branch/tag entries and
   rendered as chips attached to the front of the subject in the message
   column
+- AI-vendor chip — when a commit body's `Co-Authored-By:` trailer matches
+  the 4-vendor whitelist (`anthropic.com` / `openai.com` / `cursor.sh` /
+  `google.com`), the row sprouts a cyan chip with the vendor name so a
+  reviewer can spot AI-authored commits in the graph at a glance;
+  lazy-fetched via a 5000-entry LRU cache, dim-dot placeholder while the
+  fetch is in flight
 - ref pane: lazy auto-scroll on j/k/g/G with overflow clipping (no fold
   or sticky-header — those were tried and removed)
 - `Commit` tab: author/email, ISO 8601 dates, parent hashes, `%G?`

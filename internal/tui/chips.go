@@ -18,6 +18,11 @@ const (
 	colorChipRemote = "207"
 	colorChipTag    = "220"
 	colorChipFG     = "232"
+	// colorChipAI is the cyan slot for the AI-vendor chip rendered next
+	// to ref chips. CEO Q24 D14 — picked so the chip reads as a peer of
+	// the local/remote/tag palette but distinct enough that the eye
+	// catches "this commit was co-authored by an AI" at a glance.
+	colorChipAI = "51"
 	// colorChipMore aliases colorDim — both the "+N" overflow chip and
 	// the dim-band chip share the same neutral grey. Keeping one source
 	// of truth so the palette can't drift.
@@ -40,10 +45,25 @@ var (
 	chipLocalStyle    = newChipStyle(colorChipLocal, colorChipFG)
 	chipRemoteStyle   = newChipStyle(colorChipRemote, colorChipFG)
 	chipTagStyle      = newChipStyle(colorChipTag, colorChipFG)
+	chipAIStyle       = newChipStyle(colorChipAI, colorChipFG)
 	chipMoreStyle     = newChipStyle(colorChipMore, colorChipFG)
 	chipSelectedStyle = newChipStyle(colorSelected, colorChipFG)
 	chipDimStyle      = newChipStyle(colorDim, colorChipFG)
+	// aiChipPlaceholderStyle paints the dim-dot fetch placeholder. No
+	// padding — the dot sits exactly where the chip will land so the row
+	// doesn't reflow when the lazy fetch completes.
+	aiChipPlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorDim))
 )
+
+// aiChipState carries the AI-vendor cache result for one row. fetched=false
+// means "not yet in cache — render dim dot"; fetched=true with empty
+// vendors means "fetched, no AI vendor — render nothing"; fetched=true
+// with vendors renders one chip per vendor. Pulled out of buildChips so
+// the cockpit's three render states stay enumerable in one spot.
+type aiChipState struct {
+	fetched bool
+	vendors []git.AIVendor
+}
 
 // pairedPrefix is rendered inside the paired-local chip text, just before the
 // branch name — the same shape Fork uses (icon-then-chip), expressed as a
@@ -55,16 +75,14 @@ const pairedPrefix = "☁ "
 // buildChips renders the chip cluster for one commit row. Returns ("", 0)
 // when there's nothing to draw.
 //
-// Layout: up to 2 body chips + optional "+M" overflow chip. selected
-// paints every chip with the cursor color; dim swaps every kind to a
-// neutral grey so above-HEAD rows still show chip silhouettes. selected
-// wins when both apply.
-func buildChips(refNames []string, selected, dim bool) (string, int) {
+// Layout (left to right): ref body chips (up to 2) → optional "+M" overflow
+// chip → AI-vendor chip (cyan) if known → dim-dot placeholder if AI status
+// is still being fetched. selected paints every chip with the cursor color;
+// dim swaps every kind to a neutral grey so above-HEAD rows still show
+// chip silhouettes. selected wins when both apply.
+func buildChips(refNames []string, selected, dim bool, ai aiChipState) (string, int) {
 	refs, _ := git.ParseDecoration(refNames)
 	chips := git.MergeLocalRemotePairs(refs)
-	if len(chips) == 0 {
-		return "", 0
-	}
 
 	const bodyCap = 2
 	overflow := 0
@@ -102,6 +120,29 @@ func buildChips(refNames []string, selected, dim bool) (string, int) {
 	}
 	if overflow > 0 {
 		add(fmt.Sprintf("+%d", overflow), chipMoreStyle)
+	}
+
+	// AI chip cluster — appended after ref chips so the eye reads "what
+	// is this commit identified by" left to right (ref labels first, AI
+	// attribution second). selected/dim still override per the existing
+	// rules.
+	switch {
+	case ai.fetched && len(ai.vendors) > 0:
+		for _, v := range ai.vendors {
+			add(string(v), chipAIStyle)
+		}
+	case ai.fetched:
+		// fetched + no AI: render nothing. The cockpit's signal is
+		// "either this row is AI-authored, or it isn't worth a chip" —
+		// reserving a permanent spacer would dilute the cyan as the
+		// "AI here" flag.
+	default:
+		// not fetched yet — dim dot placeholder. 1 cell wide so the
+		// surrounding subject doesn't shift when the real chip lands.
+		// The placeholder has no Padding so the visual width is exactly
+		// runewidth(`·`) == 1; account for it manually.
+		b.WriteString(aiChipPlaceholderStyle.Render("·"))
+		totalW++
 	}
 
 	if totalW == 0 {

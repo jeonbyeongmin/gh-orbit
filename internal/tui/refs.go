@@ -56,6 +56,10 @@ type refModel struct {
 	// last status reload reported zero changes.
 	localChangesSummary         git.LocalChangesSummary
 	localChangesSummaryLoadedAt time.Time
+	// lastFetchAt feeds the sidebar footer's `fetched Xm ago`. Zero value
+	// = never fetched (footer stays blank); set on every fetch attempt by
+	// the Model layer so a failed fetch still updates the "I tried" clock.
+	lastFetchAt time.Time
 }
 
 func newRefsModel() refModel { return refModel{onWorktree: -1} }
@@ -255,20 +259,33 @@ func (r refModel) scrollCursorIntoView() refModel {
 	if !ok {
 		return r
 	}
-	if r.height <= 0 {
+	bodyH := r.bodyHeight()
+	if bodyH <= 0 {
 		return r
 	}
 	if cursorRow < r.yOffset {
 		start := sectionStartRow(rows, cursorRow)
-		if cursorRow-start < r.height {
+		if cursorRow-start < bodyH {
 			r.yOffset = start
 		} else {
 			r.yOffset = cursorRow
 		}
-	} else if cursorRow >= r.yOffset+r.height {
-		r.yOffset = cursorRow - r.height + 1
+	} else if cursorRow >= r.yOffset+bodyH {
+		r.yOffset = cursorRow - bodyH + 1
 	}
-	return r.clampOffset(len(rows), r.height)
+	return r.clampOffset(len(rows), bodyH)
+}
+
+// bodyHeight is the row count available to ref rows after reserving one
+// line for the sidebar footer (`fetched Xm ago`). Footer-less state (no
+// fetch attempt yet, or zero width) keeps the full height. Sub-1 heights
+// pass through unchanged — the View / scroll guards already short-circuit
+// there.
+func (r refModel) bodyHeight() int {
+	if r.lastFetchAt.IsZero() || r.width < 1 || r.height <= 1 {
+		return r.height
+	}
+	return r.height - 1
 }
 
 // sectionStartRow walks up from cursorRow to find the nearest header row.
@@ -463,6 +480,11 @@ func (r *refModel) ResetLocalChangesSummary() {
 	r.localChangesSummary = git.LocalChangesSummary{}
 	r.localChangesSummaryLoadedAt = time.Time{}
 }
+
+// SetLastFetchAt records the wall-clock of the most recent fetch attempt.
+// The sidebar footer formats it as "fetched Xm ago" so the user can read
+// the cockpit's freshness without leaving the TUI for `git log`.
+func (r *refModel) SetLastFetchAt(t time.Time) { r.lastFetchAt = t }
 
 // SelectedWorktree returns the worktree under the cursor, if the cursor is
 // on a worktree row. The Model uses it to dispatch enter / a / d actions
@@ -841,11 +863,14 @@ func (r refModel) View() string {
 		width = 1
 	}
 
+	footer := r.formatFetchFooter(time.Now(), width)
+	bodyH := r.bodyHeight()
+
 	rows := r.flatRows()
 	cursorRow, _ := r.activeFlatRow(rows)
 
 	start, end := 0, len(rows)
-	if r.height > 0 {
+	if bodyH > 0 {
 		start = r.yOffset
 		if start < 0 {
 			start = 0
@@ -853,7 +878,7 @@ func (r refModel) View() string {
 		if start > end {
 			start = end
 		}
-		if bodyEnd := start + r.height; bodyEnd < end {
+		if bodyEnd := start + bodyH; bodyEnd < end {
 			end = bodyEnd
 		}
 	}
@@ -865,7 +890,33 @@ func (r refModel) View() string {
 		}
 		b.WriteString(r.renderRow(rows[i], width, i == cursorRow))
 	}
+	if footer != "" {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(footer)
+	}
 	return b.String()
+}
+
+// formatFetchFooter renders the sidebar's bottom footer. Returns "" when
+// no fetch has been attempted yet so the body section keeps the full
+// height. Reuses relativeShortAt for "Xm" / "Xh" / "just now" parity with
+// the Local Changes inline meta — same visual vocabulary for two
+// freshness signals on the same pane.
+func (r refModel) formatFetchFooter(now time.Time, width int) string {
+	if r.lastFetchAt.IsZero() || width < 1 {
+		return ""
+	}
+	age := relativeShortAt(r.lastFetchAt, now)
+	var text string
+	if age == "just now" {
+		text = "fetched " + age
+	} else {
+		text = "fetched " + age + " ago"
+	}
+	text = runewidth.Truncate(text, width, "…")
+	return timeStyle.Render(text)
 }
 
 func renderRefLine(ref git.Ref, width int, selected bool) string {

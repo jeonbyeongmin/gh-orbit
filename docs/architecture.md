@@ -14,7 +14,7 @@ Fork-style three-pane TUI. Refs sidebar, commit graph on top-right, detail tab b
 └──────────┴──────────────────────────────────────┘
 ```
 
-The refs sidebar's top section is the sticky worktree inventory (`Worktrees` header + one row per `git worktree list` entry, current row prefixed `▶`). See [worktrees.md](worktrees.md).
+The refs sidebar's top section is the sticky worktree inventory (`Worktrees` header + one row per `git worktree list` entry, current row prefixed `▶`). See [worktrees.md](worktrees.md). The sidebar's bottom row is reserved for a dim `fetched Xm ago` footer — the freshness clock for the refs view, driven by terminal focus events with a 60s throttle so an alt-tab burst can't saturate `git fetch`.
 
 - Graph/tab split is user-resizable: `ctrl+↑` / `ctrl+↓`, 5% per press, clamped to [20, 80].
 - Tab is `Commit` (full metadata: author/email, ISO 8601 dates, parent hashes, `%G?` sign-status, full body) or `Changes` (file-list cursor left, follower patch viewport right).

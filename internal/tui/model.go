@@ -176,6 +176,12 @@ type Model struct {
 	// splitRatio is the percentage of the right-column height allocated to the
 	// graph; the tab area takes the remainder. Bounded by splitRatioMin/Max.
 	splitRatio int
+	// topDashboard mirrors the GH_ORBIT_TOP_DASHBOARD=1 env var. When true,
+	// View renders the top dashboard (worktrees inventory + Local Changes
+	// meta + fetch freshness) above the graph pane, while the sidebar keeps
+	// rendering the same data — both surfaces coexist this cycle (PR B1).
+	// PR B2 will retire the sidebar half and remove this flag.
+	topDashboard bool
 	// diffReqID counts every diff dispatch (cursor change, `d` press). Stale
 	// in-flight git show responses compare their reqID against this and drop
 	// themselves if they no longer match.
@@ -301,6 +307,7 @@ func New() Model {
 		currentRefs:           []string{refsAllSentinel},
 		streamReqID:           1,
 		sidebarWorktreesReqID: 1,
+		topDashboard:          os.Getenv("GH_ORBIT_TOP_DASHBOARD") == "1",
 	}
 	if wd, err := os.Getwd(); err == nil {
 		m.workdir = wd
@@ -1529,6 +1536,7 @@ func (m *Model) reloadCmd() tea.Cmd {
 // full-height left sidebar.
 type paneSizes struct {
 	refsW, refsH   int
+	dashW, dashH   int // non-zero only when Model.topDashboard is true
 	graphW, graphH int
 	tabW, tabH     int
 	// lcTreeW/H, lcDiffW/H carry the right-column split when mode ==
@@ -1577,16 +1585,42 @@ func (m Model) paneSizes() paneSizes {
 		s.refsH = 1
 	}
 
-	// Right column: vertical split between graph (top) and tab (bottom). Each
-	// has its own bordered box, so subtract 2 rows per box for borders.
-	graphOuterH := mainH * m.splitRatio / 100
+	// Right column: dashboard (top, when on) + graph + tab. Dashboard size
+	// is data-driven (header + N worktree rows + separator + 2 border rows);
+	// graph + tab split the remainder by splitRatio.
+	var dashOuterH int
+	if m.topDashboard {
+		inner := dashboardLines(m)
+		if inner > 0 {
+			dashOuterH = inner + 2 // 2 rows for the border chrome
+			if dashOuterH > mainH-6 {
+				// Never starve graph + tab; cap dashboard at mainH-6 so each
+				// of graph/tab gets ≥3 outer rows.
+				dashOuterH = mainH - 6
+				if dashOuterH < 0 {
+					dashOuterH = 0
+				}
+			}
+		}
+	}
+	rightRemain := mainH - dashOuterH
+	graphOuterH := rightRemain * m.splitRatio / 100
 	if graphOuterH < 3 {
 		graphOuterH = 3
 	}
-	if graphOuterH > mainH-3 {
-		graphOuterH = mainH - 3
+	if graphOuterH > rightRemain-3 {
+		graphOuterH = rightRemain - 3
 	}
-	tabOuterH := mainH - graphOuterH
+	tabOuterH := rightRemain - graphOuterH
+
+	s.dashW = rightOuterW - 2
+	s.dashH = dashOuterH - 2
+	if s.dashW < 1 {
+		s.dashW = 1
+	}
+	if s.dashH < 0 {
+		s.dashH = 0
+	}
 
 	s.graphW = rightOuterW - 2
 	s.tabW = rightOuterW - 2
@@ -1797,7 +1831,12 @@ func (m Model) View() string {
 	} else {
 		graphBox := boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
 		tabBox := boxStyle(m.focused == paneTab).Width(s.tabW).Height(s.tabH).Render(m.tabBody())
-		rightCol = lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
+		if m.topDashboard && s.dashH > 0 {
+			dashBox := boxStyle(false).Width(s.dashW).Height(s.dashH).Render(renderTopDashboard(m, s.dashW))
+			rightCol = lipgloss.JoinVertical(lipgloss.Left, dashBox, graphBox, tabBox)
+		} else {
+			rightCol = lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
+		}
 	}
 	main := lipgloss.JoinHorizontal(lipgloss.Top, refsBox, rightCol)
 	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())

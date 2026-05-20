@@ -65,7 +65,7 @@ func TestRenderHelpPanelLineCount(t *testing.T) {
 	if got > helpExpandedHeight {
 		t.Errorf("renderHelpPanel emitted %d lines, want ≤ %d", got, helpExpandedHeight)
 	}
-	for _, want := range []string{"[Global]", "[Refs]", "[Graph]", "[Tab]"} {
+	for _, want := range []string{"[Global]", "[Graph]", "[Tab]", "[Local Changes]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("renderHelpPanel missing category header %q\n--- panel ---\n%s", want, out)
 		}

@@ -204,53 +204,26 @@ func TestSidebarDirtyFanoutAppliesAndDropsStale(t *testing.T) {
 	}
 }
 
-func TestSidebarDirtyFanoutTimeoutMarksPlaceholder(t *testing.T) {
+func TestDirtyFanoutTimeoutMarksWorktreeMap(t *testing.T) {
+	// Post-PR-B2 there is no sidebar render to assert against. The
+	// timedOut signal is observable on the storage map; the dashboard
+	// renders `?` from there (covered in dashboard_test.go).
 	m := New()
 	reqID := m.sidebarWorktreesReqID
 	m.refs.SetWorktrees([]git.Worktree{{Path: "/slow", Branch: "feat"}}, "/somewhere")
-	// refs.View renders "loading…" until refsLoadedMsg sets loaded=true.
-	updated, _ := m.Update(refsLoadedMsg{refs: nil})
-	m = updated.(Model)
-
-	updated, _ = m.Update(worktreeDirtyResultMsg{
+	updated, _ := m.Update(worktreeDirtyResultMsg{
 		reqID: reqID, path: "/slow", dirty: false, timedOut: true,
 	})
 	got := updated.(Model)
-	got.refs.SetSize(40, 20)
-	view := stripANSI(got.refs.View())
-	if !strings.Contains(view, "?") {
-		t.Errorf("timed-out worktree row should render `?` placeholder, view = %q", view)
+	if !got.refs.worktreeTimedOut["/slow"] {
+		t.Error("timedOut should be recorded on the worktreeTimedOut map")
 	}
 }
 
-func TestRefsSidebarRendersWorktreeSection(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(60, 20)
-	r.SetWorktrees([]git.Worktree{
-		{Path: "/r/main", Branch: "main", IsMain: true},
-		{Path: "/r/feat", Branch: "feat"},
-	}, "/r/main")
-	r.SetWorktreeDirty("/r/feat", true, false)
-	r, _ = r.Update(refsLoadedMsg{refs: []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
-	}})
-
-	view := stripANSI(r.View())
-	if !strings.Contains(view, "Worktrees") {
-		t.Errorf("missing Worktrees section header, view = %q", view)
-	}
-	if !strings.Contains(view, "▶ main") {
-		t.Errorf("current worktree row should have ▶ prefix, view = %q", view)
-	}
-	if !strings.Contains(view, "feat · ●") {
-		t.Errorf("non-current dirty worktree row should show ● marker, view = %q", view)
-	}
-	if !strings.Contains(view, "● Local Changes") {
-		t.Errorf("sticky Local Changes row missing, view = %q", view)
-	}
-}
-
-func TestSidebarEnterOnWorktreeRowEmitsSwitch(t *testing.T) {
+// TestWorktreesModalEnterDispatchesSwitch verifies the post-PR-B2 entry:
+// `w` opens the worktrees modal, j moves to a non-current entry, enter
+// emits switchWorktreeMsg.
+func TestWorktreesModalEnterDispatchesSwitch(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -259,30 +232,35 @@ func TestSidebarEnterOnWorktreeRowEmitsSwitch(t *testing.T) {
 		{Path: "/r/main", Branch: "main", IsMain: true},
 		{Path: "/r/feat", Branch: "feat"},
 	}, "/r/main")
-	m.focused = paneRefs
-	// Move cursor to first worktree row (onWorktree=0).
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+
+	// `w` → modal opens with cursor on the current worktree (/r/main).
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
 	m = updated.(Model)
-	// Walk down to the feat row (onWorktree=1).
+	if m.mode != viewModeWorktreesModal {
+		t.Fatalf("w should open viewModeWorktreesModal, mode = %v", m.mode)
+	}
+	// j → cursor to /r/feat.
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m = updated.(Model)
-
+	// enter → emits switchWorktreeMsg for /r/feat.
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	_ = updated.(Model)
 	if cmd == nil {
-		t.Fatal("expected refWorktreeSwitchRequestedMsg cmd")
+		t.Fatal("enter should dispatch switchWorktreeMsg")
 	}
-	got := cmd()
-	req, ok := got.(refWorktreeSwitchRequestedMsg)
+	msg := cmd()
+	sw, ok := msg.(switchWorktreeMsg)
 	if !ok {
-		t.Fatalf("expected refWorktreeSwitchRequestedMsg, got %T", got)
+		t.Fatalf("expected switchWorktreeMsg, got %T", msg)
 	}
-	if req.path != "/r/feat" {
-		t.Errorf("path: got %q want /r/feat", req.path)
+	if sw.path != "/r/feat" {
+		t.Errorf("path = %q, want /r/feat", sw.path)
 	}
 }
 
-func TestSidebarDOnWorktreeOpensRemoveConfirm(t *testing.T) {
+// TestWorktreesModalDOpensRemoveConfirm — d on a non-current cursor entry
+// inside the modal arms viewModeWorktreeRemoveConfirm for that path.
+func TestWorktreesModalDOpensRemoveConfirm(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -291,24 +269,25 @@ func TestSidebarDOnWorktreeOpensRemoveConfirm(t *testing.T) {
 		{Path: "/r/main", Branch: "main", IsMain: true},
 		{Path: "/r/feat", Branch: "feat"},
 	}, "/r/main")
-	m.focused = paneRefs
-	// Park cursor on /r/feat.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m = updated.(Model)
-
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)
 	if m.mode != viewModeWorktreeRemoveConfirm {
-		t.Errorf("d on worktree row should open remove confirm, mode = %v", m.mode)
+		t.Errorf("d in modal on non-current entry should open remove confirm, mode = %v", m.mode)
 	}
 	if m.worktreeAction.removeTarget.Path != "/r/feat" {
 		t.Errorf("removeTarget = %+v, want /r/feat", m.worktreeAction.removeTarget)
 	}
 }
 
-func TestSidebarDOnCurrentWorktreeRejects(t *testing.T) {
+// TestWorktreesModalDOnCurrentRejects — d on the current worktree (the
+// one m.workdir lives in) is rejected with a status line; modal closes
+// (worktreesModalRemove resets state).
+func TestWorktreesModalDOnCurrentRejects(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -316,21 +295,22 @@ func TestSidebarDOnCurrentWorktreeRejects(t *testing.T) {
 	m.refs.SetWorktrees([]git.Worktree{
 		{Path: "/r/main", Branch: "main", IsMain: true},
 	}, "/r/main")
-	m.focused = paneRefs
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
-	m = updated.(Model)
 
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)
 	if m.mode == viewModeWorktreeRemoveConfirm {
-		t.Errorf("d on current worktree should NOT open confirm")
+		t.Error("d on current worktree should NOT open remove confirm")
 	}
 	if !strings.Contains(m.status, "cannot remove current worktree") {
 		t.Errorf("expected rejection status, got %q", m.status)
 	}
 }
 
-func TestSidebarAOnWorktreeOpensAddInput(t *testing.T) {
+// TestWorktreesModalAOpensAddInput — a inside the modal opens the
+// add-input sub-modal regardless of cursor position.
+func TestWorktreesModalAOpensAddInput(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -338,22 +318,16 @@ func TestSidebarAOnWorktreeOpensAddInput(t *testing.T) {
 	m.refs.SetWorktrees([]git.Worktree{
 		{Path: "/r/main", Branch: "main", IsMain: true},
 	}, "/r/main")
-	m.focused = paneRefs
-	// Park cursor on the (only) worktree row.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
-	m = updated.(Model)
 
-	// `a` produces a cmd that emits refWorktreeAddRequestedMsg; tea would
-	// drive that cmd and route the msg — we do it manually here.
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	// `w` → modal, then `a` → add-input. The modal closes (worktreesModal
+	// state resets in worktreesModalAdd) and viewModeWorktreeAddInput
+	// takes over.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
 	m = updated.(Model)
-	if cmd == nil {
-		t.Fatal("a on worktree row should emit a cmd carrying refWorktreeAddRequestedMsg")
-	}
-	updated, _ = m.Update(cmd())
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	m = updated.(Model)
 	if m.mode != viewModeWorktreeAddInput {
-		t.Errorf("a on worktree row should open add input, mode = %v", m.mode)
+		t.Errorf("a in modal should open add input, mode = %v", m.mode)
 	}
 }
 

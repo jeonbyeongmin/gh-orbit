@@ -174,22 +174,19 @@ func TestLocalChangesSelectByPathPrefersStaged(t *testing.T) {
 	}
 }
 
-func TestCycleLocalChangesFocusThreeWayCycle(t *testing.T) {
+func TestCycleLocalChangesFocusToggleTreeDiff(t *testing.T) {
+	// Sidebar focus retired in PR B2 → the 3-way refs/tree/diff cycle
+	// collapsed to a 2-way tree/diff toggle inside the right column.
 	m := New()
-	m.focused = paneRefs
 	m.localChanges.SetFocus(paneLCTree)
 
 	m = m.cycleLocalChangesFocus()
-	if m.focused != paneGraph || m.localChanges.Focused() != paneLCTree {
-		t.Fatalf("after first tab want graph/tree, got focused=%d lc=%d", m.focused, m.localChanges.Focused())
+	if m.localChanges.Focused() != paneLCDiff {
+		t.Fatalf("after first tab want diff, got %d", m.localChanges.Focused())
 	}
 	m = m.cycleLocalChangesFocus()
-	if m.focused != paneGraph || m.localChanges.Focused() != paneLCDiff {
-		t.Fatalf("after second tab want graph/diff, got focused=%d lc=%d", m.focused, m.localChanges.Focused())
-	}
-	m = m.cycleLocalChangesFocus()
-	if m.focused != paneRefs || m.localChanges.Focused() != paneLCTree {
-		t.Fatalf("after third tab want refs/tree, got focused=%d lc=%d", m.focused, m.localChanges.Focused())
+	if m.localChanges.Focused() != paneLCTree {
+		t.Fatalf("after second tab want tree, got %d", m.localChanges.Focused())
 	}
 }
 

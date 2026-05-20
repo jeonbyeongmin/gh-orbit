@@ -371,3 +371,157 @@ func validateWorktreePath(path string) error {
 	}
 	return nil
 }
+
+// worktreesModalState backs viewModeWorktreesModal — the global `w`
+// overlay listing every git worktree with a cursor + ▶ current marker.
+// Mirrors branchesModalState (branches.go): an int cursor into
+// m.refs.Worktrees() at open time; reloads (after add / remove) clamp
+// via beginWorktreesModal on re-entry.
+type worktreesModalState struct {
+	cursor int
+}
+
+const helpTextWorktreesModal = "[j/k] nav · [enter] switch · [a] add · [d] remove · [esc] close"
+
+// beginWorktreesModal opens viewModeWorktreesModal. Cursor lands on the
+// current worktree if found, else 0. Empty inventory surfaces an inline
+// error and stays in viewModeNormal (consistent with beginBranchesModal).
+func (m Model) beginWorktreesModal() (Model, tea.Cmd) {
+	wts := m.refs.Worktrees()
+	if len(wts) == 0 {
+		m.status = "worktrees: none loaded yet"
+		m.statusStyle = statusErrS
+		return m, nil
+	}
+	cursor := 0
+	for i, wt := range wts {
+		if wt.Path == m.workdir {
+			cursor = i
+			break
+		}
+	}
+	m.worktreesModal.cursor = cursor
+	m.mode = viewModeWorktreesModal
+	m.status = ""
+	return m, nil
+}
+
+func (m Model) worktreesModalMoveCursor(delta int) Model {
+	wts := m.refs.Worktrees()
+	if len(wts) == 0 {
+		return m
+	}
+	c := m.worktreesModal.cursor + delta
+	if c < 0 {
+		c = 0
+	}
+	if c >= len(wts) {
+		c = len(wts) - 1
+	}
+	m.worktreesModal.cursor = c
+	return m
+}
+
+// worktreesModalEnter dispatches a switchWorktreeMsg for the cursor
+// entry. The Model's existing switchWorktree handler does the validate +
+// retarget + reload chain; the modal closes on entry to viewModeNormal.
+func (m Model) worktreesModalEnter() (Model, tea.Cmd) {
+	wts := m.refs.Worktrees()
+	if m.worktreesModal.cursor < 0 || m.worktreesModal.cursor >= len(wts) {
+		return m, nil
+	}
+	wt := wts[m.worktreesModal.cursor]
+	m.mode = viewModeNormal
+	m.worktreesModal = worktreesModalState{}
+	if wt.Path == m.workdir {
+		m.status = "already on this worktree"
+		m.statusStyle = statusOkS
+		return m, nil
+	}
+	return m, func() tea.Msg { return switchWorktreeMsg{path: wt.Path} }
+}
+
+// worktreesModalAdd opens the existing add-input sub-modal. The modal
+// flow takes over (viewModeWorktreeAddInput); on cancel the user returns
+// to viewModeNormal, not the worktrees modal, matching how branches
+// modal hands off to viewModeRefDeleteConfirm.
+func (m Model) worktreesModalAdd() (Model, tea.Cmd) {
+	m.worktreesModal = worktreesModalState{}
+	return m.beginWorktreeAdd()
+}
+
+// worktreesModalRemove arms the existing remove-confirm sub-modal for
+// the cursor entry. beginWorktreeRemove already rejects removing the
+// current worktree with a status line.
+func (m Model) worktreesModalRemove() (Model, tea.Cmd) {
+	wts := m.refs.Worktrees()
+	if m.worktreesModal.cursor < 0 || m.worktreesModal.cursor >= len(wts) {
+		return m, nil
+	}
+	target := wts[m.worktreesModal.cursor]
+	m.worktreesModal = worktreesModalState{}
+	m = m.beginWorktreeRemove(target)
+	return m, nil
+}
+
+// renderWorktreesModalInner — header + scroll-windowed worktree list
+// with ▶ on the current entry and `>` on the cursor.
+func (m Model) renderWorktreesModalInner() string {
+	wts := m.refs.Worktrees()
+	header := modalHeaderS.Render("[Worktrees]")
+	if len(wts) == 0 {
+		return strings.Join([]string{
+			header,
+			help.Render("(no worktrees loaded)"),
+			help.Render(helpTextWorktreesModal),
+		}, "\n")
+	}
+
+	const visibleBudget = 16
+	visibleRows := visibleBudget
+	if len(wts) < visibleRows {
+		visibleRows = len(wts)
+	}
+	top := m.worktreesModal.cursor - visibleRows/2
+	if top < 0 {
+		top = 0
+	}
+	end := top + visibleRows
+	if end > len(wts) {
+		end = len(wts)
+		top = end - visibleRows
+		if top < 0 {
+			top = 0
+		}
+	}
+
+	lines := []string{header}
+	if top > 0 {
+		lines = append(lines, help.Render(fmt.Sprintf("↑ %d more", top)))
+	}
+	for i := top; i < end; i++ {
+		wt := wts[i]
+		base := filepath.Base(wt.Path)
+		label := base
+		if wt.Branch != "" {
+			label = label + " · " + wt.Branch
+		} else if wt.Detached {
+			label = label + " · (detached)"
+		}
+		if wt.Path == m.workdir {
+			label = "▶ " + label
+		} else {
+			label = "  " + label
+		}
+		if i == m.worktreesModal.cursor {
+			lines = append(lines, selectedStyle.Render("> "+label))
+		} else {
+			lines = append(lines, "  "+label)
+		}
+	}
+	if rest := len(wts) - end; rest > 0 {
+		lines = append(lines, help.Render(fmt.Sprintf("↓ %d more", rest)))
+	}
+	lines = append(lines, help.Render(helpTextWorktreesModal))
+	return strings.Join(lines, "\n")
+}

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -172,39 +171,7 @@ func TestRenderTopDashboardFooterPlainWhenNeverFetched(t *testing.T) {
 	}
 }
 
-func TestModelTopDashboardOffByDefault(t *testing.T) {
-	// Make sure the env var is not set (other tests don't lean on it).
-	prev, had := os.LookupEnv("GH_ORBIT_TOP_DASHBOARD")
-	_ = os.Unsetenv("GH_ORBIT_TOP_DASHBOARD")
-	t.Cleanup(func() {
-		if had {
-			_ = os.Setenv("GH_ORBIT_TOP_DASHBOARD", prev)
-		}
-	})
-	m := New()
-	if m.topDashboard {
-		t.Error("topDashboard should default to false when env var is unset")
-	}
-}
-
-func TestModelTopDashboardOnWhenEnvVarSet(t *testing.T) {
-	t.Setenv("GH_ORBIT_TOP_DASHBOARD", "1")
-	m := New()
-	if !m.topDashboard {
-		t.Error("topDashboard should be true when GH_ORBIT_TOP_DASHBOARD=1")
-	}
-}
-
-func TestModelTopDashboardOffOnOtherValues(t *testing.T) {
-	t.Setenv("GH_ORBIT_TOP_DASHBOARD", "true") // intentionally not "1"
-	m := New()
-	if m.topDashboard {
-		t.Error("only literal '1' should enable topDashboard; 'true' should stay off")
-	}
-}
-
-func TestModelViewWithDashboardOnDoesNotPanic(t *testing.T) {
-	t.Setenv("GH_ORBIT_TOP_DASHBOARD", "1")
+func TestModelViewWithDashboardDoesNotPanic(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(initWindowSize(120, 40))
 	m = updated.(Model)
@@ -218,7 +185,7 @@ func TestModelViewWithDashboardOnDoesNotPanic(t *testing.T) {
 	m.refs, _ = m.refs.Update(refsLoadedMsg{refs: nil})
 	view := m.View()
 	if view == "" {
-		t.Fatal("View should produce non-empty output when dashboard is on")
+		t.Fatal("View should produce non-empty output with dashboard always on")
 	}
 }
 

@@ -1,70 +1,75 @@
 # worktrees
 
-The refs sidebar's top section is a sticky inventory of every entry from
-`git worktree list --porcelain`. The cockpit shape this surface is built
+Multi-worktree is a first-class cockpit concept. The shape it's built
 for: an AI agent occupies worktree A and is mid-task; the reviewer pops
-into gh-orbit, sees both trees in the sidebar at a glance, switches to
-worktree B for a quick read, and switches back — all in-process, no
-second terminal, no disturbance to the agent's session.
+into gh-orbit, sees every tree in the top dashboard at a glance,
+switches to worktree B for a quick read via the `w` modal, and switches
+back — all in-process, no second terminal, no disturbance to the
+agent's session.
 
-Inventory invariant: the worktree section is always visible. Even when
-the user is deep in the refs list (scrolled past all branches), the
-sticky frame keeps the inventory rendered.
+Two surfaces share the worktree state, in different roles:
 
-## Sidebar section
+- **Top dashboard** — read-only band rendered above the graph pane on
+  every frame. Lists every entry from `git worktree list --porcelain`,
+  marks the current entry with `▶`, paints a `●` dirty marker (`?` on
+  timeout). The dashboard is always visible; it never grabs the cursor.
+- **`w` modal** — centered overlay listing every worktree with a
+  cursor. The single entry for the worktree workflow (switch / add /
+  remove). Opens via the global `w` keybind.
 
-The pane is laid out top-to-bottom as:
+## Dashboard rendering
+
+Layout (N=4 example):
 
 ```
-Worktrees        ← section header
-▶ main · main · ●   ← current worktree, ▶ prefix + bold + select color
-  feat · feat · ?   ← non-current worktree (dirty fan-out timed out)
-  other · other     ← non-current worktree (clean)
-
-● Local Changes  3 files · +47 -12 · 2m ago   ← sticky working-tree row
-
-Local branches
-  ...
-Remote branches  ← Q5 filter: hides origin/X when a local X exists
-  ...
-Tags
-  ...
+┌──────────────────────────────────────────────────────────┐
+│ Worktrees (4)              ◆ Local Changes 3 files…      │
+│ ▶ main · develop ●                                       │
+│   feat-auth · feat/auth                                  │
+│   feat-qa · feat/qa                                      │
+│   refactor · feat/refactor ●                             │
+│ ────────────────────────────── fetched 14m ago           │
+└──────────────────────────────────────────────────────────┘
 ```
 
-The `● Local Changes` row carries an inline meta `N files · +X -Y · Zm ago`
-when the working tree is dirty (numstat against HEAD, plus the wall-clock
-timestamp of the last successful load). Empty working tree falls back to
-the bare label. The row reuses cursor-accent weight (highlight color when
-unselected, bold-highlight when selected) so it reads as a cockpit signal;
-the meta itself renders dim. Width-bound: meta truncates with `…` before
-the label is dropped — the label is the row's primary identity.
+- **Header line** — `Worktrees (N)` left, `◆ Local Changes meta` right.
+  The Local Changes meta carries `N files · +X -Y · Zm ago` when the
+  working tree is dirty (numstat against HEAD + load wall clock); empty
+  working tree drops the meta. On narrow widths the label wins.
+- **Worktree row** — `name · branch · dirty`. `name` is the basename of
+  the worktree path. The current entry (the one `m.workdir` lives in)
+  prefixes with `▶` + bold + select color so the user knows which
+  context the rest of the cockpit describes.
+- **Separator line** — horizontal rule with `fetched Xm ago` right-
+  aligned. The freshness clock for fetch attempts; blank rule before
+  the first fetch.
 
-The dirty marker on each worktree row:
+Dirty marker on each row:
 
 - `●` — `git status` returned non-empty (dirty).
 - `?` — the per-row 3s budget was exhausted; render a placeholder so
-  the sidebar never silently lies about a slow / stuck worktree.
+  the dashboard never silently lies about a slow / stuck worktree.
 - (none) — clean, OR not yet loaded.
 
-`refModel.SetWorktrees(entries, currentPath)` populates the section;
-per-tree fan-out fires after every `worktreesLoadedMsg` and tags each
-row's `worktreeDirty` / `worktreeTimedOut` state.
+The dashboard is read-only — no cursor, no key handling. `refModel.SetWorktrees(entries, currentPath)` populates the state; per-tree fan-out fires after every `worktreesLoadedMsg` and tags each row's `worktreeDirty` / `worktreeTimedOut` state.
 
-## Key matrix on a worktree row
+## `w` modal (`viewModeWorktreesModal`)
 
-| Key       | Action                                                                   |
-| --------- | ------------------------------------------------------------------------ |
-| `j` / `k` | move cursor within / across the worktree section and into Local Changes  |
-| `g` / `G` | jump to top of inventory / bottom of refs (cursor traversal extends)     |
-| `enter`   | switch to the worktree under the cursor                                  |
-| `a`       | open the add-worktree input sub-modal                                    |
-| `d`       | open the remove-worktree confirm sub-modal (refuses the current entry)   |
+The cursor surface for worktree actions. Opens via the global `w`
+keybind from `viewModeNormal`. Mirrors the branches modal (`b`)
+pattern.
 
-Cursor traversal order (top to bottom): worktree rows → `● Local Changes`
-sticky → ref rows in the three sections. `onWorktree int` (-1 when not
-on a worktree row) carries the cursor index inside the worktree section;
-the existing `onLocalChanges bool` plus `cursor int` (n-th ref) handle
-the other two regions.
+| Key       | Action                                                              |
+| --------- | ------------------------------------------------------------------- |
+| `j` / `k` | move cursor within the list (bounded; no wrap)                      |
+| `enter`   | switch to the worktree under the cursor                             |
+| `a`       | open the add-worktree input sub-modal                               |
+| `d`       | open the remove-worktree confirm sub-modal (refuses current entry)  |
+| `esc` / `q` | close modal                                                       |
+
+Modal opens with the cursor parked on the current worktree. Empty
+inventory rejects entry with a status line; on entry success the modal
+closes and the action sub-modal takes over.
 
 ## Add input sub-modal (`viewModeWorktreeAddInput`)
 
@@ -97,23 +102,23 @@ status surface saves a round trip.
 ## In-process switch
 
 `switchWorktreeMsg{path}` is the seam every "go to a different worktree"
-surface dispatches through (today: `enter` on a sidebar row). On switch:
+surface dispatches through (today: `enter` inside the `w` modal). On
+switch:
 
 1. Validate path (directory containing `.git`); fail surfaces on status.
 2. Same-path → no-op + "already on this worktree".
-3. Rewrite `m.workdir`, reset `currentRefs` to `--all`, drop every
-   cursor-persist slot (cross-tree cursor restoration would be
-   confusing — same-named branch in two trees lands cursor wrong).
+3. Rewrite `m.workdir`, reset `currentRefs` to `--all`.
 4. Arm `pendingHEADHash = pendingHEADSentinel` so the post-reload refs
    stream snaps the graph onto the new tree's HEAD commit.
 5. Bump `sidebarWorktreesReqID` (drops any in-flight fan-out from the
-   previous tree).
+   previous tree — the field name predates PR B2 and now stands for
+   "worktree-loader reqID", not a sidebar component).
 6. Dispatch `tea.Batch(reloadCmd(), loadWorktreesCmd(...))` and — when
    `viewModeLocalChanges` is active — a fresh `loadStatusCmd` too.
 
 `m.refs.SetWorktrees(...)` is nudged synchronously with the new path so
-the `▶` marker flips immediately while the authoritative list (with
-its dirty fan-out) is in flight.
+the `▶` marker on the dashboard flips immediately while the
+authoritative list (with its dirty fan-out) is in flight.
 
 ## Dirty fan-out
 
@@ -122,33 +127,15 @@ its dirty fan-out) is in flight.
 result lands as a separate `worktreeDirtyResultMsg` so rows light up
 incrementally instead of waiting for the slowest tree.
 
-**E3 budget** (eng-review iron rule): each per-row goroutine has a
-3-second `context.WithTimeout`. On timeout the msg carries
-`timedOut=true`; the sidebar renders `?` for that row instead of
-trusting the (effectively unknown) dirty bit. Without the budget a
-stuck NFS / slow network mount could leave the sidebar visually
-stalled.
+**E3 budget**: each per-row goroutine has a 3-second
+`context.WithTimeout`. On timeout the msg carries `timedOut=true`; the
+dashboard renders `?` for that row instead of trusting the
+(effectively unknown) dirty bit. Without the budget a stuck NFS / slow
+network mount could leave the dashboard visually stalled.
 
 Stale-drop: a `worktreeDirtyResultMsg` whose `reqID` doesn't match the
 live `sidebarWorktreesReqID` is dropped — a worktree switch in the
 middle of a fan-out can't bleed dirty state from the previous tree.
-
-## Why no full-screen list modal anymore
-
-The original `w` modal was a centered overlay listing every worktree —
-useful when the list was the only surface that ever saw it, but
-redundant once the sidebar is the list. Removing the modal:
-
-- Reduces mode count (one less `viewMode` to gate keys for).
-- Aligns with invariant 2 of the cockpit narrative: multi-worktree
-  state is permanent context, not a thing to summon.
-- Saves a keystroke per inspection — no `w` to open, no `esc` to
-  close. The visible inventory IS the answer.
-
-The two action sub-modals stay because branch-name input and remove
-confirmation are genuinely modal interactions (single-purpose,
-focus-stealing); rendering them as overlays keeps the cursor
-ungrabbed in the sidebar.
 
 ## Scope: v1 explicitly excludes
 
@@ -158,7 +145,7 @@ into its own backlog so the policy decisions get a dedicated interview:
 - `git worktree lock` / `unlock` — lock-recommendation policy.
 - `git worktree move` — path-input UX + post-move workdir reconciliation.
 - `git worktree prune` — auto vs. manual trigger, prunable display.
-- last commit subject / time on each row.
+- last commit subject / time on each row (per-wt HEAD fan-out).
 - Claude Code agent-session hint per row (requires Claude Code internals
   research before the detection method can be chosen).
 

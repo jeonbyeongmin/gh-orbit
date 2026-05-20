@@ -5,235 +5,38 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
-// pressRefsKey dispatches a single key into the refModel directly. Used by
-// tests that exercise refs.go's local key handling without standing up a
-// full Model.
-func pressRefsKey(t *testing.T, r refModel, key string) refModel {
-	t.Helper()
-	out, _ := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
-	return out
-}
-
-func TestRefModelInitialView(t *testing.T) {
-	r := newRefsModel()
-	if got := r.View(); got != "loading…" {
-		t.Errorf("initial view = %q, want %q", got, "loading…")
-	}
-}
+// refModel is a storage container post-PR-B2 — these tests cover the
+// data-shape contracts (LocalRefs / RemoteRefs / Worktrees / dirty maps
+// / Local Changes meta / fetch freshness) and the few render helpers
+// that the dashboard reuses (composeLocalChangesRow, formatLocalChangesMeta,
+// renderWorktreeSidebarRow). Cursor / View / Update key handling left
+// with the sidebar in PR B2.
 
 func TestRefModelHandlesLoadFailure(t *testing.T) {
 	r := newRefsModel()
 	r, _ = r.Update(refsLoadFailedMsg{err: errSentinel})
-	view := r.View()
-	if !strings.Contains(view, "load error") {
-		t.Errorf("error view should mention load error, got %q", view)
+	if !r.loaded {
+		t.Error("loaded should flip to true on a load failure (loaded = 'we tried')")
+	}
+	if r.err == nil {
+		t.Error("err should carry the failure sentinel")
 	}
 }
 
-func TestRefModelDefaultCursorOnLocalChanges(t *testing.T) {
-	r := newRefsModel()
-	if r.onWorktree != -1 {
-		t.Errorf("default onWorktree = %d, want -1", r.onWorktree)
-	}
-	if !r.onLocalChanges {
-		t.Error("default onLocalChanges should be true (sticky row is the entry-point focus)")
-	}
-}
-
-func TestRefModelEnterOnLocalChangesEmitsLocalChangesMsg(t *testing.T) {
+func TestRefModelResetForReloadClearsLoaded(t *testing.T) {
 	r := newRefsModel()
 	r, _ = r.Update(refsLoadedMsg{refs: nil})
-	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("enter on Local Changes should emit a cmd")
+	if !r.loaded {
+		t.Fatal("setup: loaded should be true after refsLoadedMsg")
 	}
-	msg := cmd()
-	if _, ok := msg.(localChangesEnterRequestedMsg); !ok {
-		t.Errorf("enter on Local Changes emitted %T, want localChangesEnterRequestedMsg", msg)
-	}
-}
-
-func TestRefModelEnterOnWorktreeEmitsSwitchMsg(t *testing.T) {
-	r := newRefsModel()
-	r.SetWorktrees([]git.Worktree{
-		{Path: "/tmp/wt-a", Branch: "main"},
-		{Path: "/tmp/wt-b", Branch: "feat/foo"},
-	}, "/tmp/wt-a")
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-	r.onWorktree = 1
-	r.onLocalChanges = false
-
-	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("enter on worktree row should emit a cmd")
-	}
-	msg := cmd()
-	sw, ok := msg.(refWorktreeSwitchRequestedMsg)
-	if !ok {
-		t.Errorf("enter on worktree row emitted %T, want refWorktreeSwitchRequestedMsg", msg)
-	}
-	if sw.path != "/tmp/wt-b" {
-		t.Errorf("switch path = %q, want /tmp/wt-b", sw.path)
-	}
-}
-
-func TestRefModelAOnWorktreeEmitsAddMsg(t *testing.T) {
-	r := newRefsModel()
-	r.SetWorktrees([]git.Worktree{{Path: "/tmp/wt-a", Branch: "main"}}, "/tmp/wt-a")
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-	r.onWorktree = 0
-	r.onLocalChanges = false
-
-	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	if cmd == nil {
-		t.Fatal("a on worktree row should emit a cmd")
-	}
-	if _, ok := cmd().(refWorktreeAddRequestedMsg); !ok {
-		t.Errorf("a on worktree row emitted %T, want refWorktreeAddRequestedMsg", cmd())
-	}
-}
-
-func TestRefModelAOnLocalChangesNoOp(t *testing.T) {
-	r := newRefsModel()
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-	_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	if cmd != nil {
-		t.Errorf("a on Local Changes should be no-op, got cmd = %v", cmd)
-	}
-}
-
-func TestRefModelJKAcrossWorktreesAndLocalChanges(t *testing.T) {
-	r := newRefsModel()
-	r.SetWorktrees([]git.Worktree{
-		{Path: "/tmp/wt-a", Branch: "main"},
-		{Path: "/tmp/wt-b", Branch: "feat/a"},
-	}, "/tmp/wt-a")
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-	r.onWorktree = 0
-	r.onLocalChanges = false
-
-	// j → wt-b
-	r = pressRefsKey(t, r, "j")
-	if r.onWorktree != 1 {
-		t.Errorf("after j: onWorktree = %d, want 1", r.onWorktree)
-	}
-	// j → Local Changes
-	r = pressRefsKey(t, r, "j")
-	if r.onWorktree != -1 || !r.onLocalChanges {
-		t.Errorf("after j past last wt: onWorktree=%d onLocalChanges=%v, want -1/true", r.onWorktree, r.onLocalChanges)
-	}
-	// j on Local Changes: no further
-	r = pressRefsKey(t, r, "j")
-	if !r.onLocalChanges {
-		t.Error("j on Local Changes should stay")
-	}
-	// k → wt-b
-	r = pressRefsKey(t, r, "k")
-	if r.onWorktree != 1 || r.onLocalChanges {
-		t.Errorf("after k from Local Changes: onWorktree=%d onLocalChanges=%v, want 1/false", r.onWorktree, r.onLocalChanges)
-	}
-	// k → wt-a
-	r = pressRefsKey(t, r, "k")
-	if r.onWorktree != 0 {
-		t.Errorf("after k: onWorktree = %d, want 0", r.onWorktree)
-	}
-	// k on first wt: stays
-	r = pressRefsKey(t, r, "k")
-	if r.onWorktree != 0 {
-		t.Errorf("k on first wt should stay, onWorktree = %d", r.onWorktree)
-	}
-}
-
-func TestRefModelGGoesToTop(t *testing.T) {
-	r := newRefsModel()
-	r.SetWorktrees([]git.Worktree{{Path: "/tmp/wt-a"}}, "/tmp/wt-a")
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-
-	r = pressRefsKey(t, r, "g")
-	if r.onWorktree != 0 || r.onLocalChanges {
-		t.Errorf("g should land on first worktree: onWorktree=%d onLocalChanges=%v", r.onWorktree, r.onLocalChanges)
-	}
-}
-
-func TestRefModelGGoesToLocalChangesWhenNoWorktrees(t *testing.T) {
-	r := newRefsModel()
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-
-	r = pressRefsKey(t, r, "g")
-	if !r.onLocalChanges {
-		t.Error("g without worktrees should land on Local Changes")
-	}
-}
-
-func TestRefModelCapitalGGoesToBottom(t *testing.T) {
-	r := newRefsModel()
-	r.SetWorktrees([]git.Worktree{{Path: "/tmp/wt-a"}}, "/tmp/wt-a")
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-	r.onWorktree = 0
-	r.onLocalChanges = false
-
-	r = pressRefsKey(t, r, "G")
-	if !r.onLocalChanges {
-		t.Error("G should land on Local Changes (bottom of inventory)")
-	}
-}
-
-func TestRefModelSetWorktreesClampsCursorWhenEntryDisappears(t *testing.T) {
-	r := newRefsModel()
-	r.SetWorktrees([]git.Worktree{
-		{Path: "/tmp/a"}, {Path: "/tmp/b"}, {Path: "/tmp/c"},
-	}, "/tmp/a")
-	r.onWorktree = 2
-	r.onLocalChanges = false
-
-	// /tmp/c disappears.
-	r.SetWorktrees([]git.Worktree{{Path: "/tmp/a"}, {Path: "/tmp/b"}}, "/tmp/a")
-	if r.onWorktree != -1 || !r.onLocalChanges {
-		t.Errorf("disappeared cursor should fall back to Local Changes, got onWorktree=%d onLocalChanges=%v",
-			r.onWorktree, r.onLocalChanges)
-	}
-}
-
-func TestRefModelStickyRowVisibleInView(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 10)
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-
-	view := ansi.Strip(r.View())
-	if !strings.Contains(view, "● Local Changes") {
-		t.Errorf("View should contain Local Changes sticky row, got %q", view)
-	}
-}
-
-func TestRefModelStickyRowBareLabelWhenNoSummary(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 10)
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-
-	view := ansi.Strip(r.View())
-	if strings.Contains(view, "files ·") {
-		t.Errorf("View without summary should not show meta, got %q", view)
-	}
-}
-
-func TestRefModelStickyRowRendersInlineMeta(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(60, 10)
-	r.SetLocalChangesSummary(
-		git.LocalChangesSummary{FilesChanged: 3, Insertions: 12, Deletions: 4},
-		time.Now().Add(-2*time.Minute),
-	)
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-
-	view := ansi.Strip(r.View())
-	if !strings.Contains(view, "3 files") || !strings.Contains(view, "+12 -4") {
-		t.Errorf("inline meta missing, got %q", view)
+	r.ResetForReload()
+	if r.loaded {
+		t.Error("ResetForReload should flip loaded back to false")
 	}
 }
 
@@ -267,6 +70,35 @@ func TestPartitionByKindHidesMirroredRemote(t *testing.T) {
 	out := partitionByKind(refs)
 	if len(out[1]) != 1 || out[1][0].ShortName != "origin/feat/qa" {
 		t.Errorf("mirror filter should hide origin/main when local main exists; remote slice = %+v", out[1])
+	}
+}
+
+// --- Worktrees ---
+
+func TestRefModelSetWorktreesPrunesDirtyMaps(t *testing.T) {
+	r := newRefsModel()
+	r.SetWorktrees([]git.Worktree{{Path: "/a"}, {Path: "/b"}}, "/a")
+	r.SetWorktreeDirty("/a", true, false)
+	r.SetWorktreeDirty("/b", false, true)
+	if !r.WorktreeDirty("/a") {
+		t.Error("setup: /a should be dirty")
+	}
+	// /b disappears.
+	r.SetWorktrees([]git.Worktree{{Path: "/a"}}, "/a")
+	if _, present := r.worktreeDirty["/b"]; present {
+		t.Error("SetWorktrees should prune dirty entries for paths that disappeared")
+	}
+	if _, present := r.worktreeTimedOut["/b"]; present {
+		t.Error("SetWorktrees should prune timedOut entries for paths that disappeared")
+	}
+}
+
+func TestRefModelWorktreesAccessor(t *testing.T) {
+	r := newRefsModel()
+	r.SetWorktrees([]git.Worktree{{Path: "/a"}, {Path: "/b"}}, "/a")
+	wts := r.Worktrees()
+	if len(wts) != 2 {
+		t.Errorf("Worktrees() len = %d, want 2", len(wts))
 	}
 }
 
@@ -320,46 +152,25 @@ func TestComposeLocalChangesRowBareLabelWhenTooNarrowForMeta(t *testing.T) {
 	}
 }
 
-// --- fetch footer ---
+// --- renderWorktreeSidebarRow shape (the dashboard reuses it) ---
 
-func TestFormatFetchFooterEmptyWhenNever(t *testing.T) {
-	r := newRefsModel()
-	if got := r.formatFetchFooter(time.Now(), 40); got != "" {
-		t.Errorf("expected empty footer when lastFetchAt is zero, got %q", got)
+func TestRenderWorktreeRowShowsCurrentMarker(t *testing.T) {
+	out := renderWorktreeSidebarRow(
+		git.Worktree{Path: "/tmp/wt-a", Branch: "main"},
+		true, false, "", 40,
+	)
+	if !strings.Contains(ansi.Strip(out), "▶") {
+		t.Errorf("current=true row should carry ▶ marker: %q", ansi.Strip(out))
 	}
 }
 
-func TestFormatFetchFooterRendersAge(t *testing.T) {
-	r := newRefsModel()
-	now := time.Now()
-	r.SetLastFetchAt(now.Add(-3 * time.Minute))
-	got := ansi.Strip(r.formatFetchFooter(now, 40))
-	if !strings.Contains(got, "fetched 3m ago") {
-		t.Errorf("expected 'fetched 3m ago', got %q", got)
-	}
-}
-
-func TestFormatFetchFooterJustNowNoAgoSuffix(t *testing.T) {
-	r := newRefsModel()
-	now := time.Now()
-	r.SetLastFetchAt(now)
-	got := ansi.Strip(r.formatFetchFooter(now, 40))
-	if !strings.Contains(got, "fetched just now") {
-		t.Errorf("expected 'fetched just now', got %q", got)
-	}
-	if strings.Contains(got, "just now ago") {
-		t.Errorf("'just now' should not get ' ago' suffix, got %q", got)
-	}
-}
-
-func TestRefModelViewIncludesFooterAfterFetch(t *testing.T) {
-	r := newRefsModel()
-	r.SetSize(40, 10)
-	r.SetLastFetchAt(time.Now().Add(-5 * time.Minute))
-	r, _ = r.Update(refsLoadedMsg{refs: nil})
-
-	view := ansi.Strip(r.View())
-	if !strings.Contains(view, "fetched") {
-		t.Errorf("View after fetch should contain footer, got %q", view)
+func TestRenderWorktreeRowDirtyMarkerLast(t *testing.T) {
+	out := renderWorktreeSidebarRow(
+		git.Worktree{Path: "/tmp/wt-a", Branch: "main"},
+		false, false, "●", 40,
+	)
+	plain := ansi.Strip(out)
+	if !strings.HasSuffix(strings.TrimSpace(plain), "●") {
+		t.Errorf("dirty marker should be the trailing segment: %q", plain)
 	}
 }

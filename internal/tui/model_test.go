@@ -128,11 +128,6 @@ func TestRenderHelpStatusReturnsPaneHint(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	m.focused = paneRefs
-	if got := m.renderHelpStatus(); !strings.Contains(got, "enter switch") {
-		t.Errorf("paneRefs hint missing 'enter switch': %q", got)
-	}
-
 	m.focused = paneGraph
 	if got := m.renderHelpStatus(); !strings.Contains(got, "enter checkout/ff/detach") {
 		t.Errorf("paneGraph hint missing 'enter checkout/ff/detach': %q", got)
@@ -151,7 +146,7 @@ func TestRenderHelpStatusInHelpModeReturnsPanel(t *testing.T) {
 	m.mode = viewModeHelp
 
 	got := m.renderHelpStatus()
-	for _, want := range []string{"[Global]", "[Refs]", "[Graph]", "[Tab]"} {
+	for _, want := range []string{"[Global]", "[Graph]", "[Tab]", "[Local Changes]"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("help-mode renderHelpStatus missing %q\n--- panel ---\n%s", want, got)
 		}
@@ -297,22 +292,19 @@ func TestFocusCycle_TabWrap(t *testing.T) {
 		return updated.(Model)
 	}
 
-	// tab cycles forward and wraps: graph → tab → refs → graph → tab.
+	// tab cycles forward and wraps: graph → tab → graph (paneRefs retired
+	// in PR B2 so the cycle has only two stops).
 	m = tabStep()
 	if m.focused != paneTab {
 		t.Errorf("after tab #1 from graph, focus = %v, want paneTab", m.focused)
 	}
 	m = tabStep()
-	if m.focused != paneRefs {
-		t.Errorf("after tab #2 from tab, focus = %v, want paneRefs (wrap)", m.focused)
-	}
-	m = tabStep()
 	if m.focused != paneGraph {
-		t.Errorf("after tab #3 from refs, focus = %v, want paneGraph", m.focused)
+		t.Errorf("after tab #2 from tab, focus = %v, want paneGraph (wrap)", m.focused)
 	}
 	m = tabStep()
 	if m.focused != paneTab {
-		t.Errorf("after tab #4 from graph, focus = %v, want paneTab", m.focused)
+		t.Errorf("after tab #3 from graph, focus = %v, want paneTab", m.focused)
 	}
 }
 
@@ -382,7 +374,7 @@ func TestRefsGraphTabKeys_NoOp(t *testing.T) {
 		return updated.(Model)
 	}
 
-	for _, focus := range []pane{paneRefs, paneGraph} {
+	for _, focus := range []pane{paneGraph} {
 		m := New()
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 		m = updated.(Model)
@@ -485,8 +477,10 @@ func TestModelRKeyReloadsBothPanes(t *testing.T) {
 	if !strings.Contains(m.graph.View(), "loading") {
 		t.Errorf("graph view should show loading after r, got %q", m.graph.View())
 	}
-	if !strings.Contains(m.refs.View(), "loading") {
-		t.Errorf("refs view should show loading after r, got %q", m.refs.View())
+	// refs has no View() post-PR-B2 (storage-only). loaded=false is the
+	// observable signal that the reload reset took effect.
+	if m.refs.loaded {
+		t.Error("refs.loaded should be false after r (mid-reload)")
 	}
 }
 
@@ -1412,28 +1406,6 @@ func TestE7DirtyTreeAbortReturnsToGraphCleanly(t *testing.T) {
 			// 3-pane layout with the post-abort status.
 			_ = m.View()
 		})
-	}
-}
-
-func TestModelGraphCNoOpWhenRefsFocused(t *testing.T) {
-	stubCheckout(t)
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.focused = paneRefs
-
-	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
-		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
-	}})
-	m = updated.(Model)
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
-	m = updated.(Model)
-	if cmd != nil {
-		t.Errorf("'C' on refs pane should be a no-op, got cmd=%v", cmd)
-	}
-	if m.checkoutInFlight {
-		t.Error("checkoutInFlight should not latch on refs-focused 'C'")
 	}
 }
 

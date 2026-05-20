@@ -1,14 +1,20 @@
-// Left sidebar. Post-refs-LIST-subtract, the sidebar hosts only three
-// surfaces: the worktrees inventory (the cockpit's first-class anchor for
-// "which working tree am I reviewing?"), the sticky `● Local Changes`
-// row, and a `fetched Xm ago` freshness footer. The Local/Remote/Tags ref
-// sections are gone — graph Enter's decision tree is the single checkout
-// surface; the branches modal (`b`) is the single delete-branch surface.
+// Refs storage container. Post-sidebar-shell-subtract there is no
+// ref-list view, no cursor, no sidebar at all — refModel survives as a
+// data holder for everything the rest of the cockpit needs:
 //
-// byKind storage stays because graph Enter's chip evaluator still consumes
-// LocalRefs/RemoteRefs (for the cross-branch FF + branch-picker paths) and
-// the branches modal pulls its candidate list from LocalRefs. Nothing in
-// the sidebar renders a ref row anymore.
+//   - byKind ([local, remote, tag]) backs graph Enter's chip evaluator
+//     and the branches modal's source list (via LocalRefs / RemoteRefs).
+//   - worktrees + dirty/timed-out maps + currentWorktreePath back the
+//     top dashboard and the worktrees modal (via Worktrees /
+//     WorktreeDirty / SelectedWorktree-style consumers in worktree.go).
+//   - localChangesSummary + lastFetchAt back the dashboard's inline
+//     Local Changes meta and the fetched-Xm-ago footer.
+//
+// The helper render funcs (renderWorktreeSidebarRow, composeLocalChangesRow,
+// formatLocalChangesMeta, formatFetchFooter) live here because the
+// dashboard reuses them with the same visual vocabulary — moving them to
+// dashboard.go would only push their package-private callers around. The
+// "Sidebar" in those names is now a historical artifact, not a place.
 package tui
 
 import (
@@ -27,53 +33,25 @@ import (
 const refLoadTimeout = 30 * time.Second
 
 type refModel struct {
-	// byKind is the [local, remote, tag] storage produced by partitionByKind.
-	// LocalRefs / RemoteRefs expose the slices to graph Enter + branches
-	// modal; the sidebar itself no longer renders these.
 	byKind [3][]git.Ref
-	width  int
-	height int
 	loaded bool
 	err    error
 
-	// Worktrees inventory + cursor.
 	worktrees           []git.Worktree
 	currentWorktreePath string
 	worktreeDirty       map[string]bool
 	worktreeTimedOut    map[string]bool
 
-	// onWorktree is 0..len-1 when the cursor sits on a worktree row,
-	// otherwise -1. onLocalChanges flags the sticky row as the focus.
-	// Exactly one of (onWorktree >= 0) or onLocalChanges is true while
-	// there is anything to focus; default = onLocalChanges true so an
-	// empty-worktree load still has a sensible cursor.
-	onWorktree     int
-	onLocalChanges bool
-
-	// localChangesSummary feeds the inline meta on the sticky row.
 	localChangesSummary         git.LocalChangesSummary
 	localChangesSummaryLoadedAt time.Time
 
-	// lastFetchAt feeds the sidebar footer's `fetched Xm ago`.
 	lastFetchAt time.Time
 }
 
-func newRefsModel() refModel {
-	return refModel{onWorktree: -1, onLocalChanges: true}
-}
+func newRefsModel() refModel { return refModel{} }
 
 type refsLoadedMsg struct{ refs []git.Ref }
 type refsLoadFailedMsg struct{ err error }
-
-// refWorktreeSwitchRequestedMsg fires when enter is pressed on a worktree
-// row. The Model turns it into a switchWorktreeMsg via the existing seam.
-type refWorktreeSwitchRequestedMsg struct{ path string }
-
-// refWorktreeAddRequestedMsg / refWorktreeRemoveRequestedMsg fire on `a`
-// / `d` from a worktree row — the Model opens the add-input / remove-
-// confirm sub-modal.
-type refWorktreeAddRequestedMsg struct{}
-type refWorktreeRemoveRequestedMsg struct{ target git.Worktree }
 
 func loadRefsCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
@@ -89,15 +67,19 @@ func loadRefsCmd(dir string) tea.Cmd {
 
 func (r refModel) Init() tea.Cmd { return nil }
 
-// ResetForReload clears loaded/err so View renders the "loading…" placeholder
-// while a fresh loadRefsCmd is in flight. cursor state (onWorktree /
-// onLocalChanges) is intentionally left alone so a reload preserves the
-// user's focus.
+// ResetForReload flips loaded/err back to their "in-flight" defaults
+// while a fresh loadRefsCmd is running. Other panes never block on
+// r.loaded — they read LocalRefs/RemoteRefs/Worktrees which return the
+// last good snapshot even mid-reload.
 func (r *refModel) ResetForReload() {
 	r.loaded = false
 	r.err = nil
 }
 
+// Update only consumes refsLoaded* messages. KeyMsg handling lived here
+// when the sidebar owned a cursor; the cursor moved into branchesModal
+// and worktreesModal, so refModel.Update is purely about ingesting fresh
+// for-each-ref output.
 func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	switch m := msg.(type) {
 	case refsLoadedMsg:
@@ -109,99 +91,21 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 		r.loaded = true
 		r.err = m.err
 		return r, nil
-	case tea.KeyMsg:
-		switch m.String() {
-		case "enter":
-			if wt, ok := r.SelectedWorktree(); ok {
-				return r, func() tea.Msg { return refWorktreeSwitchRequestedMsg{path: wt.Path} }
-			}
-			if r.onLocalChanges {
-				return r, func() tea.Msg { return localChangesEnterRequestedMsg{} }
-			}
-			return r, nil
-		case "a":
-			if r.onWorktree != -1 {
-				return r, func() tea.Msg { return refWorktreeAddRequestedMsg{} }
-			}
-			return r, nil
-		}
-		return r.handleKey(m), nil
 	}
 	return r, nil
 }
 
-// handleKey owns j/k/g/G cursor movement across worktree rows + the
-// sticky Local Changes row. Worktree section is "above" the sticky row in
-// flat order, so j from the last worktree lands on Local Changes; k from
-// Local Changes lands on the bottom worktree (when any). g/G jump to the
-// top / bottom of the visible inventory.
-func (r refModel) handleKey(msg tea.KeyMsg) refModel {
-	wtCount := len(r.worktrees)
-	switch msg.String() {
-	case "j", "down":
-		if r.onWorktree != -1 {
-			if r.onWorktree < wtCount-1 {
-				r.onWorktree++
-				return r
-			}
-			// Last worktree → fall through to Local Changes.
-			r.onWorktree = -1
-			r.onLocalChanges = true
-			return r
-		}
-		// onLocalChanges: nowhere further down.
-		return r
-	case "k", "up":
-		if r.onWorktree != -1 {
-			if r.onWorktree > 0 {
-				r.onWorktree--
-			}
-			return r
-		}
-		if r.onLocalChanges && wtCount > 0 {
-			r.onLocalChanges = false
-			r.onWorktree = wtCount - 1
-		}
-		return r
-	case "g":
-		if wtCount > 0 {
-			r.onLocalChanges = false
-			r.onWorktree = 0
-		} else {
-			r.onLocalChanges = true
-			r.onWorktree = -1
-		}
-		return r
-	case "G":
-		r.onLocalChanges = true
-		r.onWorktree = -1
-		return r
-	}
-	return r
-}
-
-// LocalRefs returns the cached local-branch slice. branches modal + graph
-// Enter's chip evaluator both reach into byKind through this API.
+// LocalRefs returns the cached local-branch slice. graph Enter's chip
+// evaluator + the branches modal both reach into byKind through this API.
 func (r refModel) LocalRefs() []git.Ref { return r.byKind[0] }
 
-// RemoteRefs returns the cached remote-tracking slice (origin/<branch>
-// entries). graph Enter's cross-branch FF path consumes this.
+// RemoteRefs returns the cached remote-tracking slice. graph Enter's
+// cross-branch FF path consumes this.
 func (r refModel) RemoteRefs() []git.Ref { return r.byKind[1] }
 
-// IsLocalChangesSelected reports whether the sticky row is the focus.
-func (r refModel) IsLocalChangesSelected() bool { return r.onLocalChanges }
-
-// SelectedWorktree returns the worktree under the cursor, if any.
-func (r refModel) SelectedWorktree() (git.Worktree, bool) {
-	if r.onWorktree < 0 || r.onWorktree >= len(r.worktrees) {
-		return git.Worktree{}, false
-	}
-	return r.worktrees[r.onWorktree], true
-}
-
-// SetWorktrees rewrites the inventory. The cursor is clamped so an entry
-// that just disappeared doesn't strand onWorktree on an invalid index;
-// when the previous focus is gone the cursor falls back to Local Changes.
+// SetWorktrees rewrites the inventory. Dirty / timed-out maps drop
+// entries that disappeared so the dashboard never paints a marker for a
+// pruned worktree.
 func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 	r.worktrees = entries
 	r.currentWorktreePath = currentPath
@@ -225,10 +129,6 @@ func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 			delete(r.worktreeTimedOut, p)
 		}
 	}
-	if r.onWorktree >= len(entries) {
-		r.onWorktree = -1
-		r.onLocalChanges = true
-	}
 }
 
 func (r *refModel) SetWorktreeDirty(path string, dirty, timedOut bool) {
@@ -251,32 +151,28 @@ func (r refModel) WorktreeDirty(path string) bool {
 	return r.worktreeDirty[path]
 }
 
-// SetLocalChangesSummary publishes the latest numstat + reload time into
-// the sidebar so the sticky row's inline meta can render.
+// SetLocalChangesSummary publishes the latest numstat + reload time so
+// the dashboard's inline meta can render `N files · +X -Y · Zm ago`.
 func (r *refModel) SetLocalChangesSummary(summary git.LocalChangesSummary, loadedAt time.Time) {
 	r.localChangesSummary = summary
 	r.localChangesSummaryLoadedAt = loadedAt
 }
 
-// ResetLocalChangesSummary clears the inline meta. Used when the freshness
-// signal is no longer trustworthy (e.g. directory change).
+// ResetLocalChangesSummary clears the inline meta — used when the
+// freshness signal is no longer trustworthy (e.g. directory change).
 func (r *refModel) ResetLocalChangesSummary() {
 	r.localChangesSummary = git.LocalChangesSummary{}
 	r.localChangesSummaryLoadedAt = time.Time{}
 }
 
-// SetLastFetchAt records the wall-clock of the most recent fetch attempt.
+// SetLastFetchAt records the wall-clock of the most recent fetch
+// attempt. The dashboard footer formats it as `fetched Xm ago`.
 func (r *refModel) SetLastFetchAt(t time.Time) { r.lastFetchAt = t }
 
-func (r *refModel) SetSize(w, h int) {
-	r.width = w
-	r.height = h
-}
-
-// partitionByKind sorts refs into [local, remote, tag] slots. Same Q5
-// remote-mirror filter as before — a remote-tracking ref whose stripped
-// name matches a local branch is hidden so the chip evaluator + branches
-// modal see the cleaned list.
+// partitionByKind sorts refs into [local, remote, tag] slots. The Q5
+// remote-mirror filter hides a remote-tracking ref whose stripped name
+// matches a local branch — graph Enter + branches modal see the cleaned
+// list, no redundant mirror noise.
 func partitionByKind(refs []git.Ref) [3][]git.Ref {
 	localNames := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {
@@ -304,52 +200,9 @@ func partitionByKind(refs []git.Ref) [3][]git.Ref {
 
 var refHeaderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime)).Bold(true)
 
-func (r refModel) View() string {
-	if !r.loaded {
-		return "loading…"
-	}
-	if r.err != nil {
-		return fmt.Sprintf("(load error: %s)", r.err)
-	}
-	width := r.width
-	if width < 1 {
-		width = 1
-	}
-
-	var b strings.Builder
-	if len(r.worktrees) > 0 {
-		b.WriteString(refHeaderStyle.Render(runewidth.Truncate("Worktrees", width, "…")))
-		b.WriteByte('\n')
-		for i, wt := range r.worktrees {
-			isCurrent := wt.Path == r.currentWorktreePath
-			selected := r.onWorktree == i
-			dirtyMark := ""
-			if r.worktreeTimedOut[wt.Path] {
-				dirtyMark = "?"
-			} else if r.worktreeDirty[wt.Path] {
-				dirtyMark = "●"
-			}
-			b.WriteString(renderWorktreeSidebarRow(wt, isCurrent, selected, dirtyMark, width))
-			b.WriteByte('\n')
-		}
-		b.WriteByte('\n') // gap before sticky row
-	}
-	b.WriteString(r.renderLocalChangesRow(width, r.onLocalChanges, time.Now()))
-
-	if footer := r.formatFetchFooter(time.Now(), width); footer != "" {
-		b.WriteByte('\n')
-		b.WriteString(footer)
-	}
-
-	return b.String()
-}
-
-func (r refModel) renderLocalChangesRow(width int, selected bool, now time.Time) string {
-	label := "● Local Changes"
-	meta := r.formatLocalChangesMeta(now)
-	return composeLocalChangesRow(label, meta, width, selected)
-}
-
+// formatLocalChangesMeta builds the `N files · +X -Y · Zm ago` string.
+// Returns "" when the summary carries no signal so the dashboard header
+// falls back to a bare "Worktrees (N)" label instead of a stale meta.
 func (r refModel) formatLocalChangesMeta(now time.Time) string {
 	if r.localChangesSummary.Empty() {
 		return ""
@@ -374,6 +227,9 @@ func (r refModel) formatLocalChangesMeta(now time.Time) string {
 	return strings.Join(parts, " · ")
 }
 
+// composeLocalChangesRow lays out label + meta against a width budget.
+// Kept here because the dashboard header reuses the same truncation
+// rule for the right-aligned Local Changes meta.
 func composeLocalChangesRow(label, meta string, width int, selected bool) string {
 	labelStyle := cursorStyle
 	if selected {
@@ -398,6 +254,10 @@ func composeLocalChangesRow(label, meta string, width int, selected bool) string
 	return labelStyle.Render(label) + sep + timeStyle.Render(metaOut)
 }
 
+// renderWorktreeSidebarRow formats one worktree entry inside the
+// dashboard row body. `▶` + bold for the current entry; 2-col indent
+// for the rest. The `Sidebar` in the name is a historical artifact —
+// the dashboard reuses the same row shape.
 func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMark string, width int) string {
 	const prefixWidth = 2
 	prefix := "  "
@@ -431,23 +291,4 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMa
 		body = cursorStyle.Render(body)
 	}
 	return prefix + body
-}
-
-// formatFetchFooter renders the sidebar's bottom freshness footer. "" when
-// no fetch has been attempted yet (so the body keeps full height). Reuses
-// relativeShortAt for "just now" / "Xm" / "Xh" parity with the Local
-// Changes inline meta.
-func (r refModel) formatFetchFooter(now time.Time, width int) string {
-	if r.lastFetchAt.IsZero() || width < 1 {
-		return ""
-	}
-	age := relativeShortAt(r.lastFetchAt, now)
-	var text string
-	if age == "just now" {
-		text = "fetched " + age
-	} else {
-		text = "fetched " + age + " ago"
-	}
-	text = runewidth.Truncate(text, width, "…")
-	return timeStyle.Render(text)
 }

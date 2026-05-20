@@ -116,6 +116,11 @@ const (
 	// (esc). post-delete summary lands on the bottom status line with the
 	// `git reflog` recovery hint.
 	viewModeZombieCleanupConfirm
+	// viewModeBranchesModal hosts the centered overlay listing every local
+	// branch. Entered via `b` from viewModeNormal. `d` on the cursor row
+	// arms viewModeRefDeleteConfirm against that branch — the delete-branch
+	// chain stays single-codepath with the refs-pane inline d.
+	viewModeBranchesModal
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
@@ -241,6 +246,9 @@ type Model struct {
 	// esc / enter; the picker reads candidates+cursor while open and
 	// dispatches a graph-Enter checkout on enter.
 	branchPicker branchPickerState
+	// branchesModal backs viewModeBranchesModal. Cursor indexes into
+	// m.refs.LocalRefs() at modal-open time. Reset on esc/q.
+	branchesModal branchesModalState
 	// pendingRefDelete backs viewModeRefDeleteConfirm. Stamped on `d`
 	// keypress with the cursor's local-branch name; the inline-confirm
 	// renderer / key router reads it without re-deriving from refs.
@@ -1025,6 +1033,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.mode == viewModeBranchesModal {
+			switch msg.String() {
+			case "j", "down":
+				return m.branchesModalMoveCursor(1), nil
+			case "k", "up":
+				return m.branchesModalMoveCursor(-1), nil
+			case "d":
+				return m.beginBranchesModalDelete()
+			case "esc", "q":
+				m.mode = viewModeNormal
+				m.branchesModal = branchesModalState{}
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		if m.mode == viewModeZombieCleanupConfirm {
 			// While the bulk-delete cmd is in flight, only ctrl+c (quit)
 			// is honored so a second y/Y can't fork a parallel sweep.
@@ -1220,6 +1246,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = viewModeDiffWindow
 			m.diff.SetPatchViewportSize(m.width, m.height-1)
 			return m, loadDiffPatchCmd(m.workdir, c.Hash, m.diffReqID)
+		case "b":
+			// Branches modal — local-branch list with cursor + `d` delete
+			// entry. Independent of focused pane; the modal is the new
+			// global entry for delete-branch in preparation for refs LIST
+			// removal in the follow-up PR.
+			return m.beginBranchesModal()
 		}
 		switch m.focused {
 		case paneRefs:
@@ -1855,6 +1887,8 @@ func (m Model) View() string {
 	switch m.mode {
 	case viewModeBranchPicker:
 		return composeOverlay(base, renderModalBox(m.renderBranchPickerInner()), m.width, m.height)
+	case viewModeBranchesModal:
+		return composeOverlay(base, renderModalBox(m.renderBranchesModalInner()), m.width, m.height)
 	case viewModeCheckoutConfirm:
 		return composeOverlay(base, renderModalBox(m.renderCheckoutConfirmInner()), m.width, m.height)
 	case viewModeWorktreeAddInput:
@@ -1906,7 +1940,7 @@ func (m Model) tabBody() string {
 // shortcut reference can fit the full key matrix.
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
-	case viewModeBranchPicker, viewModeCheckoutConfirm,
+	case viewModeBranchPicker, viewModeBranchesModal, viewModeCheckoutConfirm,
 		viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm,
 		viewModeZombieCleanupConfirm:
 		return " "

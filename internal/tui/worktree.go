@@ -324,12 +324,10 @@ func (m Model) switchWorktree(path string) (Model, tea.Cmd) {
 	// filtered to. Reset to the unified --all view so the first load
 	// shows something meaningful; the user can re-filter from there.
 	m.currentRefs = []string{refsAllSentinel}
-	// Switch is intentionally cursor-amnesiac: same branch name in two
-	// trees is rare and would land the cursor on the wrong row anyway.
-	// Drop persist state explicitly so reloadCmd's snapshot below doesn't
-	// repopulate it from the (about-to-be-replaced) refs pane.
-	m.pendingRefCursorPersist = persistedRefHandle{}
-	m.pendingRefCursorAfterDelete = deletedRefHandle{}
+	// Switch is intentionally cursor-amnesiac for the worktree row state —
+	// the sidebar's cursor model (onWorktree / onLocalChanges) gets reset by
+	// SetWorktrees post-reload anyway. Refs-cursor persist state was retired
+	// with the refs LIST subtract.
 	// Arm the HEAD jump so the post-reload refsLoadedMsg snaps the graph
 	// cursor onto the new tree's HEAD commit instead of position 0.
 	m.pendingHEADHash = pendingHEADSentinel

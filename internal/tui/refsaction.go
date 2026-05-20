@@ -26,22 +26,6 @@ type refDeleteState struct {
 // call. Mirrors the checkoutExec pattern in checkout.go.
 var branchDeleteExec = git.BranchDelete
 
-// deletedRefHandle pairs a deleted ref's display name with the section it
-// belonged to, so the post-reload cursor jump can scope its insertion-point
-// search to the matching section instead of bleeding across sections.
-type deletedRefHandle struct {
-	name string
-	kind git.RefKind
-}
-
-// persistedRefHandle snapshots the refs cursor at reloadCmd time so the
-// post-reload refsLoadedMsg handler can restore the same ref across the
-// reload's cursor=0 reset. Zero value (all fields empty) means "no persist".
-type persistedRefHandle struct {
-	name string
-	kind git.RefKind
-}
-
 // branchDeleteSucceededMsg fires when `git branch -d/-D <name>` returned
 // without error. localName drives the post-reload cursor jump (next ref
 // in the same section, or previous when last).

@@ -1,14 +1,10 @@
 # checkout
 
-Two entry points: refs `enter`, graph `enter`. Both share the dirty-tree confirm flow. Pull is a separate global action (`p`) — there is no cursor-bound checkout+pull chain.
-
-## refs `enter`
-
-Translates the cursor ref into a local-name argument before invoking `git checkout`:
-
-- Local branch → pass `ShortName` (`main`, `feat/foo`).
-- Tag → pass `ShortName`. Result is a detached HEAD on the tag's commit, which is what the user picked.
-- Remote-tracking ref → strip `<remote>/` prefix, pass the inner branch name (`origin/feat` → `feat`). Git's dwim creates a local tracking branch when no same-name local exists. The wrapper does **not** invoke `--track` explicitly.
+Single entry point: graph `enter`. The refs-pane Enter handler was retired
+together with the refs LIST in the subtract-sidebar sequence — every
+checkout scenario (local branch, remote-ahead-of-local, detached commit,
+multi-chip ambiguous row) is covered by the graph Enter decision tree
+below. Pull is a separate global action (`p`).
 
 ## Dirty-tree confirm flow
 
@@ -16,7 +12,7 @@ Translates the cursor ref into a local-name argument before invoking `git checko
 - On that sentinel the TUI enters `viewModeCheckoutConfirm`. Only `a` / `esc` / `ctrl+c` work; every other key is swallowed.
 - `a` / `esc` clear `pendingCheckout` and leave the working tree alone.
 
-The modal is reused for the same-branch FF (`withFF`) and cross-branch FF (`withCheckoutFF`) paths — the hint text reflects which chain the abort applies to.
+The modal is reused for the same-branch FF (`withFF`) and cross-branch FF (`withCheckoutFF`) paths — the hint text reflects which chain the abort applies to. graph Enter is the only entry, so the modal lookups never need to disambiguate refs-vs-graph callsites.
 
 ## graph `enter`
 

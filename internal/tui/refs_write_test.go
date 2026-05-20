@@ -21,15 +21,17 @@ func initSized(t *testing.T) Model {
 	return updated.(Model)
 }
 
-// pressRune dispatches a single-rune key message.
+// pressRune dispatches a single-rune key message into the Model layer.
 func pressRune(t *testing.T, m Model, r rune) (Model, tea.Cmd) {
 	t.Helper()
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	return updated.(Model), cmd
 }
 
-// TestDKeyOnGraphFocusOpensPatchOverlay locks in the existing behavior so
-// the refs-focus override doesn't leak into other panes.
+// TestDKeyOnGraphFocusOpensPatchOverlay locks in the graph-focus `d`
+// override: instead of triggering a delete, it loads the patch overlay
+// for the commit under the graph cursor. The branches modal's `d` is a
+// completely separate code path (see branches_test.go).
 func TestDKeyOnGraphFocusOpensPatchOverlay(t *testing.T) {
 	m := initSized(t)
 	m = seedRefs(t, m, []git.Ref{
@@ -44,79 +46,10 @@ func TestDKeyOnGraphFocusOpensPatchOverlay(t *testing.T) {
 	}
 }
 
-// TestDKeyOnRefsFocusOpensInlineConfirm is the gating regression: refs
-// focus reinterprets `d` as the inline delete confirm.
-func TestDKeyOnRefsFocusOpensInlineConfirm(t *testing.T) {
-	m := initSized(t)
-	m = seedRefs(t, m, []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
-		{ShortName: "feat/foo", Kind: git.RefKindLocal},
-	})
-	m.focused = paneRefs
-	m.refs.cursor = 1 // feat/foo
-
-	m, _ = pressRune(t, m, 'd')
-	if m.mode != viewModeRefDeleteConfirm {
-		t.Errorf("refs-focus d should enter viewModeRefDeleteConfirm, got %v", m.mode)
-	}
-	if m.pendingRefDelete.localName != "feat/foo" {
-		t.Errorf("pendingRefDelete.localName = %q, want feat/foo", m.pendingRefDelete.localName)
-	}
-}
-
-func TestDKeyOnRefsFocusHEADBranchRejected(t *testing.T) {
-	m := initSized(t)
-	m = seedRefs(t, m, []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
-	})
-	m.focused = paneRefs
-	m.refs.cursor = 0
-	m, _ = pressRune(t, m, 'd')
-	if m.mode == viewModeRefDeleteConfirm {
-		t.Error("inline confirm should not open for HEAD branch")
-	}
-	if !strings.Contains(m.status, "current branch") {
-		t.Errorf("status = %q, want 'current branch'", m.status)
-	}
-}
-
-func TestDKeyOnRefsFocusTagRejected(t *testing.T) {
-	m := initSized(t)
-	m = seedRefs(t, m, []git.Ref{
-		{ShortName: "v1.0", Kind: git.RefKindTag},
-	})
-	m.focused = paneRefs
-	m.refs.cursor = 0
-	m, _ = pressRune(t, m, 'd')
-	if m.mode == viewModeRefDeleteConfirm {
-		t.Error("inline confirm should not open for a tag")
-	}
-	if !strings.Contains(m.status, "local branches only") {
-		t.Errorf("status = %q, want 'local branches only'", m.status)
-	}
-}
-
-func TestDKeyOnRefsFocusRemoteRejected(t *testing.T) {
-	m := initSized(t)
-	m = seedRefs(t, m, []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
-		{ShortName: "origin/feat", Kind: git.RefKindRemote},
-	})
-	m.focused = paneRefs
-	m.refs.cursor = 1
-	m, _ = pressRune(t, m, 'd')
-	if m.mode == viewModeRefDeleteConfirm {
-		t.Error("inline confirm should not open for a remote-tracking ref")
-	}
-	if !strings.Contains(m.status, "local branches only") {
-		t.Errorf("status = %q, want 'local branches only'", m.status)
-	}
-}
-
-// E6 regression: the inline delete confirm accepts only y / Y / esc.
-// The keystroke sequence below is the documented user flow — without it,
-// a future re-introduction of `f` / `F` / arbitrary keys would silently
-// dispatch (or be silently no-op) instead of being caught by review.
+// TestDeleteInlineConfirmKeystrokeSequence pins the user-facing keystroke
+// matrix of the inline branch-delete confirm. After the refs-LIST subtract
+// the only entry into this confirm is the branches modal — open it with
+// `b`, move to a non-HEAD branch, and press `d` to arm.
 func TestDeleteInlineConfirmKeystrokeSequence(t *testing.T) {
 	open := func(t *testing.T) (Model, *bool, *string) {
 		t.Helper()
@@ -134,8 +67,9 @@ func TestDeleteInlineConfirmKeystrokeSequence(t *testing.T) {
 			{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
 			{ShortName: "feat/foo", Kind: git.RefKindLocal},
 		})
-		m.focused = paneRefs
-		m.refs.cursor = 1
+		// b → modal opens at HEAD (main, cursor=0). j → feat/foo. d → arm.
+		m, _ = pressRune(t, m, 'b')
+		m, _ = pressRune(t, m, 'j')
 		m, _ = pressRune(t, m, 'd')
 		_ = called
 		_ = callForce
@@ -164,9 +98,6 @@ func TestDeleteInlineConfirmKeystrokeSequence(t *testing.T) {
 		m, force, seenName := open(t)
 		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 		m = updated.(Model)
-		// Prompt stays visible during dispatch — the success msg is what
-		// closes it. The user sees a stable "deleting…" status until the
-		// reload kicks in.
 		if m.mode != viewModeRefDeleteConfirm {
 			t.Errorf("y should keep confirm visible during dispatch, mode = %v", m.mode)
 		}
@@ -234,8 +165,8 @@ func TestDeleteInlineConfirmKeystrokeSequence(t *testing.T) {
 
 func TestDeleteInlineConfirmYRetryAfterNotMerged(t *testing.T) {
 	// Press `y`, get back branchDeleteNotMergedMsg, then press `Y` to retry
-	// with force. This mirrors the user-facing flow: the inline prompt
-	// re-arms with a "press [Y] to force" hint after the not-merged sentinel.
+	// with force. Mirrors the user-facing flow: the inline prompt re-arms
+	// with a "press [Y] to force" hint after the not-merged sentinel.
 	var attempts int
 	var lastForce bool
 	withRefsActionStubs(t, refsActionStubs{
@@ -243,7 +174,7 @@ func TestDeleteInlineConfirmYRetryAfterNotMerged(t *testing.T) {
 			attempts++
 			lastForce = force
 			if !force {
-				return fmt.Errorf("git branch -d: %w", git.ErrBranchNotFullyMerged)
+				return fmt.Errorf("wrapped: %w", git.ErrBranchNotFullyMerged)
 			}
 			return nil
 		},
@@ -253,29 +184,28 @@ func TestDeleteInlineConfirmYRetryAfterNotMerged(t *testing.T) {
 		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
 		{ShortName: "feat/foo", Kind: git.RefKindLocal},
 	})
-	m.focused = paneRefs
-	m.refs.cursor = 1
+	m, _ = pressRune(t, m, 'b')
+	m, _ = pressRune(t, m, 'j')
 	m, _ = pressRune(t, m, 'd')
 
-	// First attempt: y → not merged, prompt re-arms with [Y] hint.
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	// First y: safe-delete attempt → not-merged.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("y should dispatch")
+		t.Fatal("first y should dispatch")
 	}
-	updated, _ := m.Update(cmd())
+	updated, _ = m.Update(cmd())
 	m = updated.(Model)
 	if m.mode != viewModeRefDeleteConfirm {
-		t.Errorf("not-merged should re-arm confirm, mode = %v", m.mode)
+		t.Errorf("after not-merged the prompt should stay open, mode = %v", m.mode)
 	}
-	if m.pendingRefDelete.localName != "feat/foo" {
-		t.Errorf("pendingRefDelete cleared early: %+v", m.pendingRefDelete)
-	}
-	if !strings.Contains(m.status, "press [Y] to force") {
-		t.Errorf("status = %q, want 'press [Y] to force' hint", m.status)
+	if !strings.Contains(m.status, "not fully merged") {
+		t.Errorf("status = %q, want 'not fully merged' hint", m.status)
 	}
 
-	// Second attempt: Y → force succeeds.
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	// Second Y: force-delete.
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	m = updated.(Model)
 	if cmd == nil {
 		t.Fatal("Y should dispatch")
 	}
@@ -288,7 +218,7 @@ func TestDeleteInlineConfirmYRetryAfterNotMerged(t *testing.T) {
 	}
 }
 
-func TestBranchDeleteSucceededReloadsAndArmsCursor(t *testing.T) {
+func TestBranchDeleteSucceededReloadsAndClearsState(t *testing.T) {
 	m := initSized(t)
 	m = seedRefs(t, m, []git.Ref{
 		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
@@ -298,12 +228,6 @@ func TestBranchDeleteSucceededReloadsAndArmsCursor(t *testing.T) {
 	m = updated.(Model)
 	if m.refActionInFlight {
 		t.Error("refActionInFlight should clear on success")
-	}
-	if m.pendingRefCursorAfterDelete.name != "feat/foo" {
-		t.Errorf("pendingRefCursorAfterDelete = %+v, want feat/foo local", m.pendingRefCursorAfterDelete)
-	}
-	if m.pendingRefCursorAfterDelete.kind != git.RefKindLocal {
-		t.Errorf("pendingRefCursorAfterDelete kind = %v, want local", m.pendingRefCursorAfterDelete.kind)
 	}
 	if !strings.Contains(m.status, "deleted 'feat/foo'") {
 		t.Errorf("status = %q", m.status)

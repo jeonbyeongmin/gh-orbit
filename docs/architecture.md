@@ -1,20 +1,21 @@
 # architecture
 
-Fork-style three-pane TUI. Refs sidebar, commit graph on top-right, detail tab below.
+Fork-style three-pane TUI. Left sidebar (worktrees + Local Changes), commit graph on top-right, detail tab below. Post-refs-LIST-subtract the sidebar no longer renders Local/Remote/Tags sections — graph Enter is the single checkout surface; the branches modal (`b`) is the single delete-branch surface.
 
 ```
 ┌──────────┬──────────────────────────────────────┐
-│ wt list  │   commit graph (full width, 60%)     │
-│ ● Local  │                                      │
-│ local    │                                      │
-│ remote   ├──────────────────────────────────────┤
-│ tags     │ [Commit] · Changes  (40%)            │
-│          │ author / date / parents / sign       │
+│ Worktrees│   commit graph (full width, 60%)     │
+│ ▶ main   │                                      │
+│   feat-a │                                      │
+│          ├──────────────────────────────────────┤
+│ ● Local  │ [Commit] · Changes  (40%)            │
+│ Changes  │ author / date / parents / sign       │
 │          │ full message — or — file-list ↔ diff │
+│ fetched… │                                      │
 └──────────┴──────────────────────────────────────┘
 ```
 
-The refs sidebar's top section is the sticky worktree inventory (`Worktrees` header + one row per `git worktree list` entry, current row prefixed `▶`). See [worktrees.md](worktrees.md). The sidebar's bottom row is reserved for a dim `fetched Xm ago` footer — the freshness clock for the refs view, driven by terminal focus events with a 60s throttle so an alt-tab burst can't saturate `git fetch`.
+The sidebar's top section is the sticky worktree inventory (`Worktrees` header + one row per `git worktree list` entry, current row prefixed `▶`). See [worktrees.md](worktrees.md). Below the worktrees sits the sticky `● Local Changes` row (entered also via `,`). The sidebar's bottom row is reserved for a dim `fetched Xm ago` footer — the cockpit's freshness clock, driven by terminal focus events with a 60s throttle so an alt-tab burst can't saturate `git fetch`.
 
 - Graph/tab split is user-resizable: `ctrl+↑` / `ctrl+↓`, 5% per press, clamped to [20, 80].
 - Tab is `Commit` (full metadata: author/email, ISO 8601 dates, parent hashes, `%G?` sign-status, full body) or `Changes` (file-list cursor left, follower patch viewport right).
@@ -34,10 +35,10 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `ctrl+d` / `ctrl+u` | Changes       | scroll the patch follower viewport                                                                                    |
 | `h` / `l` / `←` / `→` | tab pane    | switch between Commit and Changes (toggle, wraps)                                                                     |
 | `ctrl+↑` / `ctrl+↓` | global        | resize graph/tab split                                                                                                |
-| `enter`             | refs          | checkout cursor ref / switch worktree (cursor-context) — see [checkout.md](checkout.md), [worktrees.md](worktrees.md) |
-| `o`                 | refs          | jump graph cursor to ref tip                                                                                          |
-| `d`                 | refs          | delete branch / remove worktree (cursor-context inline confirm) — see [branches.md](branches.md), [worktrees.md](worktrees.md) |
-| `a`                 | refs          | add worktree (only when cursor is on a worktree row) — see [worktrees.md](worktrees.md)                               |
+| `enter`             | refs          | switch worktree / open Local Changes (cursor-context) — see [worktrees.md](worktrees.md)                              |
+| `d`                 | refs          | remove worktree (cursor on a worktree row; inline confirm) — see [worktrees.md](worktrees.md)                         |
+| `a`                 | refs          | add worktree (cursor on a worktree row) — see [worktrees.md](worktrees.md)                                            |
+| `b`                 | global        | open branches modal (delete-branch entry) — see [branches.md](branches.md)                                            |
 | `enter`             | graph         | context-aware: checkout / FF / detach — see [checkout.md](checkout.md)                                                |
 | `y`                 | Commit tab    | copy full hash to clipboard                                                                                           |
 | `d`                 | graph / tab   | open the focused commit's full patch overlay                                                                          |
@@ -54,10 +55,10 @@ Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `esc` / `q`. The 
 
 Bottom hint is focus-aware:
 
-- refs → `enter checkout/switch · d delete/remove · a add wt · o jump`
+- refs → `enter switch/local-changes · d remove wt · a add wt`
 - graph → `enter/d patch · C detach`
 - tab → `h/l switch · y copy`
-- every focus appends `? help · q quit`.
+- every focus appends `b branches · ? help · q quit`.
 
 ## Bubble Tea rules
 

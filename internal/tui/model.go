@@ -253,18 +253,6 @@ type Model struct {
 	// keypress with the cursor's local-branch name; the inline-confirm
 	// renderer / key router reads it without re-deriving from refs.
 	pendingRefDelete refDeleteState
-	// pendingRefCursorAfterDelete carries the deleted ref name + section
-	// across a refs reload after delete success so the cursor lands on the
-	// next (or previous, if last) ref in the same section. Zero name means
-	// no adjustment.
-	pendingRefCursorAfterDelete deletedRefHandle
-	// pendingRefCursorPersist is the "previous cursor position snapshot"
-	// reloadCmd writes just before every reload, so the post-reload
-	// refsLoadedMsg can restore the cursor onto the same ref after the
-	// refModel's cursor=0 reset. Only consumed when the higher-priority
-	// pendingRefCursorAfterDelete is absent. Zero value = no persist
-	// (detached HEAD / empty ref set).
-	pendingRefCursorPersist persistedRefHandle
 	// refActionInFlight gates the `d` key while a branch-delete cmd is
 	// running. Distinct from checkoutInFlight so a stuck refs write can't
 	// deadlock checkout / pull / FF chains.
@@ -514,28 +502,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.refs, cmd = m.refs.Update(msg)
-		// Apply pending refs cursor jumps after the model has the new ref
-		// list. Priority: delete > persist (reload-cursor snapshot). The
-		// switch fires at most one branch and drops the persist handle
-		// whenever delete wins, so a delete-armed reload doesn't leak
-		// persist state to the next cycle. SelectAfterDeleted /
-		// SelectByNameKindOrNeighbor are no-ops on a load failure
-		// (refs.loaded stays false).
-		switch {
-		case m.pendingRefCursorAfterDelete.name != "":
-			m.refs.SelectAfterDeleted(m.pendingRefCursorAfterDelete.name, m.pendingRefCursorAfterDelete.kind)
-			m.pendingRefCursorAfterDelete = deletedRefHandle{}
-			m.pendingRefCursorPersist = persistedRefHandle{}
-		case m.pendingRefCursorPersist.name != "":
-			h := m.pendingRefCursorPersist
-			m.refs.SelectByNameKindOrNeighbor(h.name, h.kind)
-			m.pendingRefCursorPersist = persistedRefHandle{}
-		}
-		return m, cmd
-
-	case refCheckoutRequestedMsg:
-		var cmd tea.Cmd
-		m, cmd = m.beginCheckout(git.CheckoutTarget(msg.ref), false)
 		return m, cmd
 
 	case checkoutSucceededMsg:
@@ -561,23 +527,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingCheckout = pendingCheckout{}
 		m.status = "checkout failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
-		return m, nil
-
-	case refSelectedMsg:
-		// Unified graph: Enter no longer reloads; it jumps the graph cursor
-		// to the row whose hash equals the ref tip. currentRefs stays at
-		// [refsAllSentinel] so reload(r) keeps the unified base. When the
-		// tip is outside the loaded MaxCount window we surface that through
-		// the status bar instead of failing silently.
-		if m.graph.JumpToHash(msg.ref.ObjectName) {
-			m.status = ""
-			if c, ok := m.graph.Selected(); ok {
-				return m, m.beginDiffStat(c.Hash)
-			}
-		} else {
-			m.status = "ref tip not in loaded window: " + msg.ref.ShortName
-			m.statusStyle = statusErrS
-		}
 		return m, nil
 
 	case commitSelectedMsg:
@@ -784,10 +733,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "deleted '" + msg.localName + "'"
 		}
 		m.statusStyle = statusOkS
-		m.pendingRefCursorAfterDelete = deletedRefHandle{
-			name: msg.localName,
-			kind: git.RefKindLocal,
-		}
 		return m, m.reloadCmd()
 
 	case branchDeleteFailedMsg:
@@ -1203,9 +1148,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusBusyS
 			return m, detectZombieBranchesCmd(m.workdir)
 		case "enter":
-			// Graph focus only — refs pane has its own enter handler
-			// (refs.go: refCheckoutRequestedMsg). On other panes, fall
-			// through to the focused-sub-model dispatch below.
+			// Graph focus only — the sidebar has its own enter handler in
+			// refs.go (worktree switch on a worktree row, Local Changes
+			// enter on the sticky row). On other panes, fall through to
+			// the focused-sub-model dispatch below.
 			if m.focused != paneGraph {
 				break
 			}
@@ -1482,15 +1428,12 @@ func checkoutLabel(ref string, detached bool) string {
 	return "checkout: " + ref
 }
 
-// beginRefDelete reads the cursor row from refs and routes the delete
-// intent to whichever context the cursor is in:
-//   - on a worktree row: open the worktree remove-confirm sub-modal.
-//   - on a local branch row: arm the inline branch-delete confirm.
-//   - on HEAD / tag / remote-tracking ref: status-bar rejection.
-//
-// Worktree-row delete piggybacks on `d` instead of a separate keybind so
-// the sidebar's "delete the thing under the cursor" mental model stays
-// uniform across worktrees and branches.
+// beginRefDelete is the `d`-on-sidebar entry. Post-refs-LIST-subtract the
+// sidebar only renders worktree rows + the sticky Local Changes row, so
+// the only useful action is worktree-remove. branch-delete moved to the
+// branches modal (`b`) — see branches.go. A `d` on Local Changes / empty
+// sidebar silently no-ops (status untouched) to keep the inline-confirm
+// pattern uniform with how worktree-remove arms.
 func (m Model) beginRefDelete() (Model, tea.Cmd) {
 	if m.refActionInFlight {
 		return m, nil
@@ -1499,25 +1442,6 @@ func (m Model) beginRefDelete() (Model, tea.Cmd) {
 		m = m.beginWorktreeRemove(wt)
 		return m, nil
 	}
-	ref, ok := m.refs.Selected()
-	if !ok {
-		m.status = "delete: no ref selected"
-		m.statusStyle = statusErrS
-		return m, nil
-	}
-	if ref.Kind == git.RefKindLocal && ref.IsHead {
-		m.status = "cannot delete current branch"
-		m.statusStyle = statusErrS
-		return m, nil
-	}
-	if ref.Kind != git.RefKindLocal {
-		m.status = "delete: local branches only"
-		m.statusStyle = statusErrS
-		return m, nil
-	}
-	m.pendingRefDelete = refDeleteState{localName: ref.ShortName}
-	m.mode = viewModeRefDeleteConfirm
-	m.status = ""
 	return m, nil
 }
 
@@ -1582,19 +1506,13 @@ func (m *Model) cancelStream() {
 
 // reloadCmd resets both panes to their loading state and dispatches fresh
 // log + refs queries. A stale ref in m.currentRefs surfaces via the new
-// stream's commitsStreamDoneMsg.err.
+// stream's commitsStreamDoneMsg.err. The sidebar's cursor state
+// (onWorktree / onLocalChanges) is preserved across the reload by
+// refModel.ResetForReload — no per-ref persist handle needed now that the
+// refs LIST is gone.
 func (m *Model) reloadCmd() tea.Cmd {
 	m.cancelStream()
 	m.streamReqID++
-	// Snapshot the currently focused ref so refsLoadedMsg can restore the
-	// cursor across the upcoming cursor=0 reset. Selected() returns false on
-	// detached HEAD / empty ref set / pre-load, which falls through to a
-	// zero handle and a no-op restore.
-	if ref, ok := m.refs.Selected(); ok {
-		m.pendingRefCursorPersist = persistedRefHandle{name: ref.ShortName, kind: ref.Kind}
-	} else {
-		m.pendingRefCursorPersist = persistedRefHandle{}
-	}
 	resetCmd := m.graph.ResetForReload()
 	m.refs.ResetForReload()
 	return tea.Batch(

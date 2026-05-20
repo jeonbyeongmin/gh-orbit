@@ -129,8 +129,8 @@ func TestRenderHelpStatusReturnsPaneHint(t *testing.T) {
 	m = updated.(Model)
 
 	m.focused = paneRefs
-	if got := m.renderHelpStatus(); !strings.Contains(got, "enter checkout") {
-		t.Errorf("paneRefs hint missing 'enter checkout': %q", got)
+	if got := m.renderHelpStatus(); !strings.Contains(got, "enter switch") {
+		t.Errorf("paneRefs hint missing 'enter switch': %q", got)
 	}
 
 	m.focused = paneGraph
@@ -454,74 +454,6 @@ func TestModelInitSeedsCurrentRefsWithAllSentinel(t *testing.T) {
 	}
 }
 
-func TestModelRefSelectedJumpsCursor(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	now := time.Now()
-	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
-		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: now}},
-		{commit: git.Commit{Hash: "bbb2222", Subject: "second", AuthorTime: now}},
-		{commit: git.Commit{Hash: "ccc3333", Subject: "third", AuthorTime: now}},
-	}})
-	m = updated.(Model)
-	if !m.graph.loaded {
-		t.Fatalf("graph should be loaded before refSelectedMsg")
-	}
-
-	updated, cmd := m.Update(refSelectedMsg{ref: git.Ref{
-		FullName:   "refs/heads/feat",
-		ShortName:  "feat",
-		Kind:       git.RefKindLocal,
-		ObjectName: "ccc3333",
-	}})
-	m = updated.(Model)
-	if !m.graph.loaded {
-		t.Errorf("graph.loaded should remain true after refSelectedMsg (no reload)")
-	}
-	// refSelectedMsg dispatches a diff debounce tick so the right pane
-	// refreshes for the newly focused commit. It does NOT dispatch a graph
-	// load cmd — currentRefs stays at --all.
-	if cmd == nil {
-		t.Error("refSelectedMsg should dispatch a diff debounce cmd for the new cursor")
-	}
-	if got := m.graph.list.Index(); got != 2 {
-		t.Errorf("graph cursor index = %d, want 2 (row of ccc3333)", got)
-	}
-	if got, want := m.currentRefs, []string{refsAllSentinel}; !slices.Equal(got, want) {
-		t.Errorf("currentRefs should stay at --all after Enter, got %v want %v", got, want)
-	}
-	if m.status != "" {
-		t.Errorf("status should be empty after successful jump, got %q", m.status)
-	}
-}
-
-func TestModelRefSelectedTipMissingShowsStatus(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
-		{commit: git.Commit{Hash: "aaa1111", Subject: "first", AuthorTime: time.Now()}},
-	}})
-	m = updated.(Model)
-
-	updated, _ = m.Update(refSelectedMsg{ref: git.Ref{
-		FullName:   "refs/heads/old",
-		ShortName:  "old",
-		Kind:       git.RefKindLocal,
-		ObjectName: "deadbeef",
-	}})
-	m = updated.(Model)
-	if !strings.Contains(m.status, "ref tip not in loaded window") {
-		t.Errorf("status %q should mention loaded window", m.status)
-	}
-	if !strings.Contains(m.status, "old") {
-		t.Errorf("status %q should mention the ref short name", m.status)
-	}
-}
-
 func TestModelRKeyReloadsBothPanes(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -563,15 +495,6 @@ func TestModelRKeyPreservesAllSentinel(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
-	// Selecting a ref no longer mutates currentRefs (unified graph keeps the
-	// --all base). r must preserve that invariant across reloads.
-	updated, _ = m.Update(refSelectedMsg{ref: git.Ref{
-		FullName:   "refs/heads/feat",
-		ShortName:  "feat",
-		Kind:       git.RefKindLocal,
-		ObjectName: "abc1234",
-	}})
-	m = updated.(Model)
 	updated, _ = m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
 		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
 	}})
@@ -1165,76 +1088,6 @@ func stubCheckout(t *testing.T) (
 	}
 	return func() (string, bool) { return ref, refSet },
 		func() (string, bool) { return detachedRef, detachedSet }
-}
-
-func TestModelRefCheckoutEnterDispatchesLocalShortName(t *testing.T) {
-	getRef, _ := stubCheckout(t)
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	updated, cmd := m.Update(refCheckoutRequestedMsg{ref: git.Ref{
-		ShortName: "feat/foo",
-		FullName:  "refs/heads/feat/foo",
-		Kind:      git.RefKindLocal,
-	}})
-	m = updated.(Model)
-
-	if !m.checkoutInFlight {
-		t.Error("checkoutInFlight should latch on refCheckoutRequestedMsg")
-	}
-	if m.pendingCheckout.ref != "feat/foo" || m.pendingCheckout.detached {
-		t.Errorf("pendingCheckout = %+v, want {feat/foo false}", m.pendingCheckout)
-	}
-	if cmd == nil {
-		t.Fatal("refCheckoutRequestedMsg should return a checkoutCmd")
-	}
-	_ = cmd()
-	if got, ok := getRef(); !ok || got != "feat/foo" {
-		t.Errorf("checkoutExec ref = %q ok=%v, want feat/foo", got, ok)
-	}
-}
-
-func TestModelRefCheckoutEnterStripsRemotePrefix(t *testing.T) {
-	getRef, _ := stubCheckout(t)
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	updated, cmd := m.Update(refCheckoutRequestedMsg{ref: git.Ref{
-		ShortName: "origin/feat",
-		FullName:  "refs/remotes/origin/feat",
-		Kind:      git.RefKindRemote,
-	}})
-	m = updated.(Model)
-
-	if cmd == nil {
-		t.Fatal("expected a checkoutCmd")
-	}
-	_ = cmd()
-	got, ok := getRef()
-	if !ok || got != "feat" {
-		t.Errorf("checkoutExec ref = %q ok=%v, want %q (dwim DWIM)", got, ok, "feat")
-	}
-	if m.pendingCheckout.ref != "feat" {
-		t.Errorf("pendingCheckout.ref = %q, want feat", m.pendingCheckout.ref)
-	}
-}
-
-func TestModelCheckoutInFlightGate(t *testing.T) {
-	stubCheckout(t)
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.checkoutInFlight = true
-
-	updated, cmd := m.Update(refCheckoutRequestedMsg{ref: git.Ref{
-		ShortName: "feat", Kind: git.RefKindLocal,
-	}})
-	m = updated.(Model)
-	if cmd != nil {
-		t.Errorf("second Enter while checkoutInFlight should be a no-op, got cmd=%v", cmd)
-	}
 }
 
 func TestModelCheckoutSucceededReloadsAndArmsHEAD(t *testing.T) {

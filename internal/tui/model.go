@@ -181,6 +181,12 @@ type Model struct {
 	// splitRatio is the percentage of the right-column height allocated to the
 	// graph; the tab area takes the remainder. Bounded by splitRatioMin/Max.
 	splitRatio int
+	// statusTickSeq counts every status line that arms a tea.Tick auto-clear
+	// (today: the switch-confirmation in switchWorktree). The dispatcher
+	// captures the value at send time; on receipt the handler only clears
+	// when m.statusTickSeq still matches, so a follow-up action that bumps
+	// the counter can't be wiped by a stale tick.
+	statusTickSeq uint64
 	// diffReqID counts every diff dispatch (cursor change, `d` press). Stale
 	// in-flight git show responses compare their reqID against this and drop
 	// themselves if they no longer match.
@@ -360,6 +366,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case switchWorktreeMsg:
 		next, cmd := m.switchWorktree(msg.path)
 		return next, cmd
+
+	case statusClearTickMsg:
+		// Stale-tick gate: a re-switch (or any other path that bumps
+		// statusTickSeq) invalidates this tick. Prefix check is a
+		// belt-and-suspenders guard so a follow-up status overwrite
+		// without a seq bump still survives.
+		if msg.seq == m.statusTickSeq && strings.HasPrefix(m.status, "→ switched:") {
+			m.status = ""
+			m.statusStyle = statusOkS
+		}
+		return m, nil
 
 	case worktreesLoadedMsg:
 		// Drop stale loads (a switch or another reload bumped the reqID

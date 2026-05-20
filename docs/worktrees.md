@@ -120,6 +120,30 @@ switch:
 the `▶` marker on the dashboard flips immediately while the
 authoritative list (with its dirty fan-out) is in flight.
 
+### Switch confirmation status line
+
+On every successful switch the status line paints
+`→ switched: <prev-basename> → <new-basename>` and the handler arms a
+`tea.Tick(3s)` auto-clear. The fix for scenario 3 (switch confirmation
+ambiguity) from the design doc — without the toast a fast switch can
+look like a no-op because the surrounding TUI (dashboard `▶`, graph,
+tab) animates faster than the eye registers.
+
+Anti-stale mechanism: `m.statusTickSeq` is incremented before the tick
+is dispatched, and the closure captures the current value. On receipt
+the handler clears only when `m.statusTickSeq == msg.seq` AND the
+status still starts with `→ switched:`. Two protections:
+
+- **Seq gate** — a follow-up switch bumps the counter, invalidating the
+  earlier tick so it can't wipe the fresh "→ switched" line.
+- **Prefix gate** — even with a matching seq, a non-switched status
+  (e.g. `fetching…`) survives. Belt-and-suspenders: any future status
+  source that forgets to bump the seq still won't get wiped here.
+
+Validation failures (`worktree switch: ...`) and the same-path no-op
+(`already on this worktree`) don't fire the tick — those status lines
+are user-facing rejections that should persist until the next action.
+
 ## Dirty fan-out
 
 `worktreeDirtyFanoutCmd(reqID, paths)` dispatches N concurrent

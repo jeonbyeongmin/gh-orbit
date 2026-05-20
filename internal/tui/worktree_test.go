@@ -118,6 +118,16 @@ func TestSwitchWorktreeUpdatesWorkdirAndDispatchesReload(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected reload+sidebar cmd batch, got nil")
 	}
+	// PR C: switch confirmation polish.
+	if !strings.HasPrefix(got.status, "→ switched:") {
+		t.Errorf("status = %q, want '→ switched:' prefix", got.status)
+	}
+	if !strings.Contains(got.status, "main → feat-a") {
+		t.Errorf("status = %q, want 'main → feat-a'", got.status)
+	}
+	if got.statusTickSeq != 1 {
+		t.Errorf("statusTickSeq = %d, want 1 (bumped once)", got.statusTickSeq)
+	}
 }
 
 func TestSwitchWorktreeNoopOnSamePath(t *testing.T) {
@@ -507,3 +517,46 @@ func reflectDeepEqualPaths(a, b []git.Worktree) bool {
 // Avoid an "errors unused" lint when the file's only path through the
 // errors package is the (now-private) E3 timeout assertion.
 var _ = errors.New
+
+func TestStatusClearTickClearsMatchingSeq(t *testing.T) {
+	m := New()
+	m.statusTickSeq = 7
+	m.status = "→ switched: main → feat-a"
+	m.statusStyle = statusOkS
+
+	updated, cmd := m.Update(statusClearTickMsg{seq: 7})
+	m = updated.(Model)
+	if m.status != "" {
+		t.Errorf("matching seq tick should clear status, got %q", m.status)
+	}
+	if cmd != nil {
+		t.Errorf("clear-tick handler should not dispatch a cmd, got %v", cmd)
+	}
+}
+
+func TestStatusClearTickIgnoresStaleSeq(t *testing.T) {
+	m := New()
+	m.statusTickSeq = 8 // a follow-up switch bumped past the tick's seq
+	m.status = "→ switched: feat-a → feat-b"
+
+	updated, _ := m.Update(statusClearTickMsg{seq: 7})
+	m = updated.(Model)
+	if m.status == "" {
+		t.Error("stale seq tick should NOT clear status")
+	}
+}
+
+func TestStatusClearTickRespectsStatusReplacement(t *testing.T) {
+	// Same seq, but the status was overwritten by another action (e.g.
+	// fetch). The prefix gate prevents wiping the new line.
+	m := New()
+	m.statusTickSeq = 7
+	m.status = "fetching…"
+	m.statusStyle = statusBusyS
+
+	updated, _ := m.Update(statusClearTickMsg{seq: 7})
+	m = updated.(Model)
+	if m.status != "fetching…" {
+		t.Errorf("non-'switched' status should survive the tick, got %q", m.status)
+	}
+}

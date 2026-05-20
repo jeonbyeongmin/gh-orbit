@@ -300,6 +300,23 @@ type switchWorktreeMsg struct {
 	path string
 }
 
+// switchConfirmTTL is how long the "→ switched: A → B" status line
+// stays before tea.Tick clears it. Long enough for the user to register
+// the change visually (scenario 3: switch confirmation ambiguity); short
+// enough that the line returns to its useful default before any follow-up
+// action lands.
+const switchConfirmTTL = 3 * time.Second
+
+// statusClearTickMsg fires from tea.Tick(switchConfirmTTL) after a
+// switch-confirmation status line is painted. seq is captured at
+// dispatch time; on receipt the handler clears the line only when
+// m.statusTickSeq still matches — a re-switch (or any other action that
+// bumps statusTickSeq via setStatusWithTTL) invalidates the pending
+// tick so it can't wipe a fresh status.
+type statusClearTickMsg struct {
+	seq uint64
+}
+
 // switchWorktree applies switchWorktreeMsg: validates path, rewrites
 // m.workdir, drops any cursor-persist state from the previous tree, and
 // triggers a full reload (commits + refs + head ancestors + — if the user
@@ -319,6 +336,7 @@ func (m Model) switchWorktree(path string) (Model, tea.Cmd) {
 		m.statusStyle = statusOkS
 		return m, nil
 	}
+	prevName := filepath.Base(m.workdir)
 	m.workdir = path
 	// The new tree may not host any of the refs the old stream was
 	// filtered to. Reset to the unified --all view so the first load
@@ -341,8 +359,17 @@ func (m Model) switchWorktree(path string) (Model, tea.Cmd) {
 	if m.mode == viewModeLocalChanges {
 		cmd = tea.Batch(cmd, loadStatusCmd(m.workdir))
 	}
-	m.status = "worktree: " + filepath.Base(path)
+	// switch confirmation: "→ switched: prev → new" with a 3s tea.Tick
+	// auto-clear. statusTickSeq snapshot at dispatch time; only the
+	// matching tick is allowed to clear (scenario 3 polish — design doc
+	// SC #7).
+	m.statusTickSeq++
+	seq := m.statusTickSeq
+	m.status = fmt.Sprintf("→ switched: %s → %s", prevName, filepath.Base(path))
 	m.statusStyle = statusOkS
+	cmd = tea.Batch(cmd, tea.Tick(switchConfirmTTL, func(time.Time) tea.Msg {
+		return statusClearTickMsg{seq: seq}
+	}))
 	// Sidebar's current-worktree marker depends on m.workdir; nudge the
 	// existing snapshot so the ▶ row flips immediately while the fresh
 	// list (with its dirty fan-out) is in flight. The next sidebar load

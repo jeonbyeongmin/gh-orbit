@@ -1,0 +1,229 @@
+package tui
+
+import (
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/jeonbyeongmin/gh-orbit/internal/git"
+)
+
+// withModel returns a Model with non-zero size + worktrees seeded so the
+// dashboard renders. Width/height matter only for paneSizes; the dashboard
+// render takes width as an argument.
+func withModel(t *testing.T, worktrees []git.Worktree, currentPath string) Model {
+	t.Helper()
+	m := initSized(t)
+	m.refs.SetWorktrees(worktrees, currentPath)
+	m.refs, _ = m.refs.Update(refsLoadedMsg{refs: nil})
+	return m
+}
+
+func TestDashboardLinesZeroWhenNoWorktrees(t *testing.T) {
+	m := initSized(t)
+	if got := dashboardLines(m); got != 0 {
+		t.Errorf("dashboardLines with no worktrees = %d, want 0", got)
+	}
+}
+
+func TestDashboardLinesHeaderPlusWorktreesPlusSeparator(t *testing.T) {
+	m := withModel(t,
+		[]git.Worktree{{Path: "/a"}, {Path: "/b"}, {Path: "/c"}, {Path: "/d"}},
+		"/a",
+	)
+	if got := dashboardLines(m); got != 6 {
+		t.Errorf("dashboardLines for 4 worktrees = %d, want 6 (header + 4 rows + separator)", got)
+	}
+}
+
+func TestRenderTopDashboardEmptyWhenNoWorktrees(t *testing.T) {
+	m := initSized(t)
+	if got := renderTopDashboard(m, 80); got != "" {
+		t.Errorf("dashboard with zero worktrees should render empty, got %q", got)
+	}
+}
+
+func TestRenderTopDashboardIncludesWorktreeNames(t *testing.T) {
+	m := withModel(t,
+		[]git.Worktree{
+			{Path: "/tmp/wt-main", Branch: "main"},
+			{Path: "/tmp/wt-feat", Branch: "feat/foo"},
+		},
+		"/tmp/wt-main",
+	)
+	plain := ansi.Strip(renderTopDashboard(m, 80))
+	for _, want := range []string{"Worktrees (2)", "wt-main", "wt-feat", "main", "feat/foo"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("dashboard missing %q: %q", want, plain)
+		}
+	}
+}
+
+func TestRenderTopDashboardCurrentMarker(t *testing.T) {
+	m := withModel(t,
+		[]git.Worktree{
+			{Path: "/tmp/wt-a", Branch: "main"},
+			{Path: "/tmp/wt-b", Branch: "feat/foo"},
+		},
+		"/tmp/wt-b",
+	)
+	plain := ansi.Strip(renderTopDashboard(m, 80))
+	// The current marker is `▶`; it should land on the wt-b row, not the
+	// wt-a row. A row-aware check beats searching the whole string for `▶`.
+	rows := strings.Split(plain, "\n")
+	var aRow, bRow string
+	for _, r := range rows {
+		if strings.Contains(r, "wt-a") {
+			aRow = r
+		}
+		if strings.Contains(r, "wt-b") {
+			bRow = r
+		}
+	}
+	if aRow == "" || bRow == "" {
+		t.Fatalf("dashboard missing wt-a / wt-b rows; got:\n%s", plain)
+	}
+	if strings.Contains(aRow, "▶") {
+		t.Errorf("wt-a should not carry ▶ marker: %q", aRow)
+	}
+	if !strings.Contains(bRow, "▶") {
+		t.Errorf("wt-b (current) should carry ▶ marker: %q", bRow)
+	}
+}
+
+func TestRenderTopDashboardDirtyMarker(t *testing.T) {
+	m := withModel(t,
+		[]git.Worktree{{Path: "/tmp/wt-a", Branch: "main"}},
+		"/tmp/wt-a",
+	)
+	m.refs.SetWorktreeDirty("/tmp/wt-a", true, false)
+	plain := ansi.Strip(renderTopDashboard(m, 80))
+	if !strings.Contains(plain, "●") {
+		t.Errorf("dashboard should carry dirty marker `●`: %q", plain)
+	}
+}
+
+func TestRenderTopDashboardHeaderCarriesLocalChangesMeta(t *testing.T) {
+	m := withModel(t,
+		[]git.Worktree{{Path: "/tmp/wt-a", Branch: "main"}},
+		"/tmp/wt-a",
+	)
+	m.refs.SetLocalChangesSummary(
+		git.LocalChangesSummary{FilesChanged: 3, Insertions: 12, Deletions: 4},
+		time.Now().Add(-2*time.Minute),
+	)
+	plain := ansi.Strip(renderTopDashboard(m, 100))
+	if !strings.Contains(plain, "◆ Local Changes") {
+		t.Errorf("dashboard header should carry Local Changes meta: %q", plain)
+	}
+	if !strings.Contains(plain, "3 files") || !strings.Contains(plain, "+12 -4") {
+		t.Errorf("dashboard header should include Local Changes counts: %q", plain)
+	}
+}
+
+func TestRenderTopDashboardHeaderDropsMetaOnNarrowWidth(t *testing.T) {
+	m := withModel(t,
+		[]git.Worktree{{Path: "/tmp/wt-a", Branch: "main"}},
+		"/tmp/wt-a",
+	)
+	m.refs.SetLocalChangesSummary(
+		git.LocalChangesSummary{FilesChanged: 3, Insertions: 12, Deletions: 4},
+		time.Now(),
+	)
+	plain := ansi.Strip(renderTopDashboard(m, 20))
+	// Header line is the first row. It must always render "Worktrees" even
+	// if Local Changes meta gets dropped for lack of room.
+	header := strings.SplitN(plain, "\n", 2)[0]
+	if !strings.Contains(header, "Worktrees") {
+		t.Errorf("narrow header should keep Worktrees label: %q", header)
+	}
+}
+
+func TestRenderTopDashboardFooterCarriesFreshness(t *testing.T) {
+	m := withModel(t,
+		[]git.Worktree{{Path: "/tmp/wt-a", Branch: "main"}},
+		"/tmp/wt-a",
+	)
+	m.refs.SetLastFetchAt(time.Now().Add(-5 * time.Minute))
+	plain := ansi.Strip(renderTopDashboard(m, 80))
+	if !strings.Contains(plain, "fetched 5m ago") {
+		t.Errorf("dashboard footer should carry 'fetched 5m ago': %q", plain)
+	}
+}
+
+func TestRenderTopDashboardFooterPlainWhenNeverFetched(t *testing.T) {
+	m := withModel(t,
+		[]git.Worktree{{Path: "/tmp/wt-a", Branch: "main"}},
+		"/tmp/wt-a",
+	)
+	plain := ansi.Strip(renderTopDashboard(m, 40))
+	if strings.Contains(plain, "fetched") {
+		t.Errorf("dashboard footer should be plain rule before any fetch attempt: %q", plain)
+	}
+	// Last line should still be the separator rule.
+	lines := strings.Split(plain, "\n")
+	last := lines[len(lines)-1]
+	if !strings.Contains(last, "─") {
+		t.Errorf("dashboard last line should be the separator rule, got %q", last)
+	}
+}
+
+func TestModelTopDashboardOffByDefault(t *testing.T) {
+	// Make sure the env var is not set (other tests don't lean on it).
+	prev, had := os.LookupEnv("GH_ORBIT_TOP_DASHBOARD")
+	_ = os.Unsetenv("GH_ORBIT_TOP_DASHBOARD")
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv("GH_ORBIT_TOP_DASHBOARD", prev)
+		}
+	})
+	m := New()
+	if m.topDashboard {
+		t.Error("topDashboard should default to false when env var is unset")
+	}
+}
+
+func TestModelTopDashboardOnWhenEnvVarSet(t *testing.T) {
+	t.Setenv("GH_ORBIT_TOP_DASHBOARD", "1")
+	m := New()
+	if !m.topDashboard {
+		t.Error("topDashboard should be true when GH_ORBIT_TOP_DASHBOARD=1")
+	}
+}
+
+func TestModelTopDashboardOffOnOtherValues(t *testing.T) {
+	t.Setenv("GH_ORBIT_TOP_DASHBOARD", "true") // intentionally not "1"
+	m := New()
+	if m.topDashboard {
+		t.Error("only literal '1' should enable topDashboard; 'true' should stay off")
+	}
+}
+
+func TestModelViewWithDashboardOnDoesNotPanic(t *testing.T) {
+	t.Setenv("GH_ORBIT_TOP_DASHBOARD", "1")
+	m := New()
+	updated, _ := m.Update(initWindowSize(120, 40))
+	m = updated.(Model)
+	m.refs.SetWorktrees(
+		[]git.Worktree{
+			{Path: "/tmp/wt-a", Branch: "main"},
+			{Path: "/tmp/wt-b", Branch: "feat/foo"},
+		},
+		"/tmp/wt-a",
+	)
+	m.refs, _ = m.refs.Update(refsLoadedMsg{refs: nil})
+	view := m.View()
+	if view == "" {
+		t.Fatal("View should produce non-empty output when dashboard is on")
+	}
+}
+
+// initWindowSize is a thin alias so the test reads top-to-bottom without a
+// nested type literal.
+func initWindowSize(w, h int) tea.WindowSizeMsg {
+	return tea.WindowSizeMsg{Width: w, Height: h}
+}

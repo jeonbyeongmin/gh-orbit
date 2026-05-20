@@ -17,6 +17,23 @@ Fork-style three-pane TUI. Left sidebar (worktrees + Local Changes), commit grap
 
 The sidebar's top section is the sticky worktree inventory (`Worktrees` header + one row per `git worktree list` entry, current row prefixed `▶`). See [worktrees.md](worktrees.md). Below the worktrees sits the sticky `● Local Changes` row (entered also via `,`). The sidebar's bottom row is reserved for a dim `fetched Xm ago` footer — the cockpit's freshness clock, driven by terminal focus events with a 60s throttle so an alt-tab burst can't saturate `git fetch`.
 
+### Top dashboard (`GH_ORBIT_TOP_DASHBOARD=1`)
+
+Opt-in dogfood surface. When the env var is set to `1`, View renders an additional horizontal band above the graph pane carrying the same three signals (worktrees inventory, Local Changes meta, fetch freshness) — read-only, no cursor. The sidebar keeps rendering the same data this cycle (PR B1 = coexist); PR B2 will retire the sidebar half and remove the flag.
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ Worktrees (4)                       ◆ Local Changes 3 …    │
+│ ▶ main · develop ●                                         │
+│   feat-auth · feat/auth                                    │
+│   feat-qa · feat/qa                                        │
+│   refactor · feat/refactor ●                               │
+│ ─────────────────────────────── fetched 14m ago            │
+└────────────────────────────────────────────────────────────┘
+```
+
+Inner height = `len(worktrees) + 2` (header + N rows + separator). paneSizes caps the dashboard at `mainH - 6` so the graph and tab boxes each retain ≥3 outer rows.
+
 - Graph/tab split is user-resizable: `ctrl+↑` / `ctrl+↓`, 5% per press, clamped to [20, 80].
 - Tab is `Commit` (full metadata: author/email, ISO 8601 dates, parent hashes, `%G?` sign-status, full body) or `Changes` (file-list cursor left, follower patch viewport right).
 - `File Tree` tab is reserved for a follow-up.

@@ -36,8 +36,7 @@ var clipboardWrite = clipboard.WriteAll
 type pane int
 
 const (
-	paneRefs pane = iota
-	paneGraph
+	paneGraph pane = iota
 	paneTab
 	paneCount
 )
@@ -121,13 +120,19 @@ const (
 	// arms viewModeRefDeleteConfirm against that branch — the delete-branch
 	// chain stays single-codepath with the refs-pane inline d.
 	viewModeBranchesModal
+	// viewModeWorktreesModal hosts the centered overlay listing every
+	// worktree. Entered via `w` from viewModeNormal. `enter` switches to
+	// the cursor entry, `a` opens add-input, `d` opens remove-confirm.
+	// Post-sidebar-shell-subtract this modal is the entry point for the
+	// worktree workflow that used to live on the refs-pane worktree rows.
+	viewModeWorktreesModal
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
 // the `?` help panel is open. Each helpData category renders as a 1-line
 // header + 1-line entries row, so 5 categories × 2 rows = 10. paneSizes
 // clamps this on small terminals.
-const helpExpandedHeight = 10
+const helpExpandedHeight = 8
 
 // pendingCheckout remembers what the user was trying to check out so the
 // confirm modal's hint can name the chain it's aborting. detached=true
@@ -176,12 +181,6 @@ type Model struct {
 	// splitRatio is the percentage of the right-column height allocated to the
 	// graph; the tab area takes the remainder. Bounded by splitRatioMin/Max.
 	splitRatio int
-	// topDashboard mirrors the GH_ORBIT_TOP_DASHBOARD=1 env var. When true,
-	// View renders the top dashboard (worktrees inventory + Local Changes
-	// meta + fetch freshness) above the graph pane, while the sidebar keeps
-	// rendering the same data — both surfaces coexist this cycle (PR B1).
-	// PR B2 will retire the sidebar half and remove this flag.
-	topDashboard bool
 	// diffReqID counts every diff dispatch (cursor change, `d` press). Stale
 	// in-flight git show responses compare their reqID against this and drop
 	// themselves if they no longer match.
@@ -255,6 +254,9 @@ type Model struct {
 	// branchesModal backs viewModeBranchesModal. Cursor indexes into
 	// m.refs.LocalRefs() at modal-open time. Reset on esc/q.
 	branchesModal branchesModalState
+	// worktreesModal backs viewModeWorktreesModal. Cursor indexes into
+	// m.refs.Worktrees() at modal-open time.
+	worktreesModal worktreesModalState
 	// pendingRefDelete backs viewModeRefDeleteConfirm. Stamped on `d`
 	// keypress with the cursor's local-branch name; the inline-confirm
 	// renderer / key router reads it without re-deriving from refs.
@@ -307,7 +309,6 @@ func New() Model {
 		currentRefs:           []string{refsAllSentinel},
 		streamReqID:           1,
 		sidebarWorktreesReqID: 1,
-		topDashboard:          os.Getenv("GH_ORBIT_TOP_DASHBOARD") == "1",
 	}
 	if wd, err := os.Getwd(); err == nil {
 		m.workdir = wd
@@ -435,18 +436,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = viewModeNormal
 		m.status = "remove: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
-		return m, nil
-
-	case refWorktreeSwitchRequestedMsg:
-		return m, func() tea.Msg { return switchWorktreeMsg(msg) }
-
-	case refWorktreeAddRequestedMsg:
-		var cmd tea.Cmd
-		m, cmd = m.beginWorktreeAdd()
-		return m, cmd
-
-	case refWorktreeRemoveRequestedMsg:
-		m = m.beginWorktreeRemove(msg.target)
 		return m, nil
 
 	case commitsStreamStartedMsg:
@@ -1003,6 +992,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.mode == viewModeWorktreesModal {
+			switch msg.String() {
+			case "j", "down":
+				return m.worktreesModalMoveCursor(1), nil
+			case "k", "up":
+				return m.worktreesModalMoveCursor(-1), nil
+			case "enter":
+				return m.worktreesModalEnter()
+			case "a":
+				return m.worktreesModalAdd()
+			case "d":
+				return m.worktreesModalRemove()
+			case "esc", "q":
+				m.mode = viewModeNormal
+				m.worktreesModal = worktreesModalState{}
+				return m, nil
+			case "ctrl+c":
+				m.cancelStream()
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		if m.mode == viewModeZombieCleanupConfirm {
 			// While the bulk-delete cmd is in flight, only ctrl+c (quit)
 			// is honored so a second y/Y can't fork a parallel sweep.
@@ -1051,14 +1062,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, loadStatusCmd(m.workdir)
 			}
 			// Tree sub-focus owns cursor movement + stage/unstage.
-			// Diff sub-focus owns viewport scroll. paneRefs focus inside the
-			// mode forwards to refs.Update so j/k still navigates the sidebar
-			// (sticky row + ref rows).
-			if m.focused == paneRefs {
-				var cmd tea.Cmd
-				m.refs, cmd = m.refs.Update(msg)
-				return m, cmd
-			}
+			// Diff sub-focus owns viewport scroll.
 			switch m.localChanges.Focused() {
 			case paneLCTree:
 				return m.handleLocalChangesTreeKey(msg)
@@ -1141,12 +1145,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// sub-model. Reserved for a future Rebase action.
 			return m, nil
 		case "Z":
-			// Zombie-branch cleanup: only meaningful when the refs pane is
-			// the focus context. Other panes swallow Z so it doesn't leak
-			// into the focused sub-model.
-			if m.focused != paneRefs {
-				return m, nil
-			}
+			// Zombie-branch cleanup is a global action now that the sidebar
+			// is gone — the previous paneRefs focus gate had no meaningful
+			// successor, and the bulk-delete is the same regardless of
+			// which pane the user is on.
 			if m.zombieInFlight {
 				return m, nil
 			}
@@ -1155,10 +1157,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusBusyS
 			return m, detectZombieBranchesCmd(m.workdir)
 		case "enter":
-			// Graph focus only — the sidebar has its own enter handler in
-			// refs.go (worktree switch on a worktree row, Local Changes
-			// enter on the sticky row). On other panes, fall through to
-			// the focused-sub-model dispatch below.
+			// Graph focus only — tab focus falls through to its own
+			// sub-model below. The sidebar is retired in PR B2; worktree
+			// switch + Local Changes enter no longer come from a sidebar
+			// row (`,` global and `w` modal cover those entries).
 			if m.focused != paneGraph {
 				break
 			}
@@ -1183,13 +1185,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				shortHash(c.Hash), len(locals), len(remotes))
 			return m, evaluateGraphActionCmd(m.workdir, c.Hash, locals, remotes)
 		case "d":
-			// Refs focus reinterprets `d` as the delete intent so the
-			// destructive ref-write key doesn't collide with the patch
-			// overlay. Graph / tab focus falls through to the patch
-			// overlay (the original behavior).
-			if m.focused == paneRefs {
-				return m.beginRefDelete()
-			}
+			// `d` opens the patch overlay for the focused commit. Sidebar
+			// is gone so the previous paneRefs interpretation (worktree
+			// remove via cursor row) moved into the `w` worktree modal.
 			c, ok := m.graph.Selected()
 			if !ok {
 				return m, nil
@@ -1201,16 +1199,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, loadDiffPatchCmd(m.workdir, c.Hash, m.diffReqID)
 		case "b":
 			// Branches modal — local-branch list with cursor + `d` delete
-			// entry. Independent of focused pane; the modal is the new
-			// global entry for delete-branch in preparation for refs LIST
-			// removal in the follow-up PR.
+			// entry. Global, independent of focused pane.
 			return m.beginBranchesModal()
+		case "w":
+			// Worktrees modal — worktree list with cursor + `enter` switch,
+			// `a` add, `d` remove. Post-sidebar-shell-subtract this is the
+			// single entry for worktree workflow (the sidebar's worktree
+			// rows used to host these actions on cursor row).
+			return m.beginWorktreesModal()
 		}
 		switch m.focused {
-		case paneRefs:
-			var cmd tea.Cmd
-			m.refs, cmd = m.refs.Update(msg)
-			return m, cmd
 		case paneGraph:
 			var cmd tea.Cmd
 			m.graph, cmd = m.graph.Update(msg)
@@ -1250,10 +1248,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // applyPaneSizes recomputes the inner content dimensions for every sub-model
-// from the current width/height/splitRatio.
+// from the current width/height/splitRatio. refs is a pure storage model
+// post-sidebar-shell-subtract, so it owns no size of its own — the
+// dashboard reads m.refs directly with the width handed to it by View.
 func (m *Model) applyPaneSizes() {
 	s := m.paneSizes()
-	m.refs.SetSize(s.refsW, s.refsH)
 	m.graph.SetSize(s.graphW, s.graphH)
 	m.diff.SetSize(s.tabW, s.tabH)
 	// tabBody renders header + spacer (2 lines) above the tab content.
@@ -1289,18 +1288,13 @@ func (m *Model) exitLocalChangesMode() {
 	m.applyPaneSizes()
 }
 
-// cycleLocalChangesFocus implements the 3-way tab cycle inside the mode:
-// refs → tree → diff → refs. Sub-focus inside the right column lives on
-// m.localChanges; outer focus only distinguishes refs vs. right column.
+// cycleLocalChangesFocus implements the 2-way tab cycle inside the mode:
+// tree → diff → tree. Sidebar focus retired in PR B2 so the outer focus
+// stays on paneGraph and only the localChanges sub-focus toggles.
 func (m Model) cycleLocalChangesFocus() Model {
-	switch {
-	case m.focused == paneRefs:
-		m.focused = paneGraph
-		m.localChanges.SetFocus(paneLCTree)
-	case m.localChanges.Focused() == paneLCTree:
+	if m.localChanges.Focused() == paneLCTree {
 		m.localChanges.SetFocus(paneLCDiff)
-	default:
-		m.focused = paneRefs
+	} else {
 		m.localChanges.SetFocus(paneLCTree)
 	}
 	return m
@@ -1435,23 +1429,6 @@ func checkoutLabel(ref string, detached bool) string {
 	return "checkout: " + ref
 }
 
-// beginRefDelete is the `d`-on-sidebar entry. Post-refs-LIST-subtract the
-// sidebar only renders worktree rows + the sticky Local Changes row, so
-// the only useful action is worktree-remove. branch-delete moved to the
-// branches modal (`b`) — see branches.go. A `d` on Local Changes / empty
-// sidebar silently no-ops (status untouched) to keep the inline-confirm
-// pattern uniform with how worktree-remove arms.
-func (m Model) beginRefDelete() (Model, tea.Cmd) {
-	if m.refActionInFlight {
-		return m, nil
-	}
-	if wt, ok := m.refs.SelectedWorktree(); ok {
-		m = m.beginWorktreeRemove(wt)
-		return m, nil
-	}
-	return m, nil
-}
-
 // dispatchRefDelete fires branchDeleteCmd with the in-flight gate armed.
 // force=false picks `git branch -d`; force=true picks `-D`. The inline
 // prompt stays open while the cmd runs — branchDeleteSucceededMsg /
@@ -1535,8 +1512,7 @@ func (m *Model) reloadCmd() tea.Cmd {
 // layout stacks graph above the tab area in the right column; refs is a
 // full-height left sidebar.
 type paneSizes struct {
-	refsW, refsH   int
-	dashW, dashH   int // non-zero only when Model.topDashboard is true
+	dashW, dashH   int
 	graphW, graphH int
 	tabW, tabH     int
 	// lcTreeW/H, lcDiffW/H carry the right-column split when mode ==
@@ -1565,41 +1541,22 @@ func (m Model) paneSizes() paneSizes {
 	if mainH < 1 {
 		mainH = 1
 	}
-	// refs sidebar gets ~20% of total width, right column the rest. Each box
-	// claims 2 cols of border around its content.
-	refsOuterW := m.width * 20 / 100
-	if refsOuterW < 12 {
-		refsOuterW = 12
-	}
-	if refsOuterW > m.width-12 {
-		refsOuterW = m.width - 12
-	}
-	rightOuterW := m.width - refsOuterW
+	// Sidebar retired in PR B2 — the dashboard (top) + graph + tab now
+	// stack vertically across the full terminal width. Each box claims 2
+	// cols of border around its content.
+	rightOuterW := m.width
 
-	s.refsW = refsOuterW - 2
-	s.refsH = mainH - 2
-	if s.refsW < 1 {
-		s.refsW = 1
-	}
-	if s.refsH < 1 {
-		s.refsH = 1
-	}
-
-	// Right column: dashboard (top, when on) + graph + tab. Dashboard size
-	// is data-driven (header + N worktree rows + separator + 2 border rows);
-	// graph + tab split the remainder by splitRatio.
+	// Dashboard: header + N worktree rows + separator + 2 border rows.
+	// Data-driven; 0 (no dashboard) when there are no worktrees yet.
 	var dashOuterH int
-	if m.topDashboard {
-		inner := dashboardLines(m)
-		if inner > 0 {
-			dashOuterH = inner + 2 // 2 rows for the border chrome
-			if dashOuterH > mainH-6 {
-				// Never starve graph + tab; cap dashboard at mainH-6 so each
-				// of graph/tab gets ≥3 outer rows.
-				dashOuterH = mainH - 6
-				if dashOuterH < 0 {
-					dashOuterH = 0
-				}
+	if inner := dashboardLines(m); inner > 0 {
+		dashOuterH = inner + 2
+		if dashOuterH > mainH-6 {
+			// Never starve graph + tab; cap dashboard at mainH-6 so each
+			// of graph/tab gets ≥3 outer rows.
+			dashOuterH = mainH - 6
+			if dashOuterH < 0 {
+				dashOuterH = 0
 			}
 		}
 	}
@@ -1820,25 +1777,23 @@ func (m Model) View() string {
 	}
 	s := m.paneSizes()
 
-	refsBox := boxStyle(m.focused == paneRefs).Width(s.refsW).Height(s.refsH).Render(m.refs.View())
-	var rightCol string
+	var main string
 	if m.mode == viewModeLocalChanges {
-		treeFocused := m.focused != paneRefs && m.localChanges.Focused() == paneLCTree
-		diffFocused := m.focused != paneRefs && m.localChanges.Focused() == paneLCDiff
+		treeFocused := m.localChanges.Focused() == paneLCTree
+		diffFocused := m.localChanges.Focused() == paneLCDiff
 		treeBox := boxStyle(treeFocused).Width(s.lcTreeW).Height(s.lcTreeH).Render(m.localChanges.TreeView())
 		diffBox := boxStyle(diffFocused).Width(s.lcDiffW).Height(s.lcDiffH).Render(m.localChanges.DiffView())
-		rightCol = lipgloss.JoinHorizontal(lipgloss.Top, treeBox, diffBox)
+		main = lipgloss.JoinHorizontal(lipgloss.Top, treeBox, diffBox)
 	} else {
 		graphBox := boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
 		tabBox := boxStyle(m.focused == paneTab).Width(s.tabW).Height(s.tabH).Render(m.tabBody())
-		if m.topDashboard && s.dashH > 0 {
+		if s.dashH > 0 {
 			dashBox := boxStyle(false).Width(s.dashW).Height(s.dashH).Render(renderTopDashboard(m, s.dashW))
-			rightCol = lipgloss.JoinVertical(lipgloss.Left, dashBox, graphBox, tabBox)
+			main = lipgloss.JoinVertical(lipgloss.Left, dashBox, graphBox, tabBox)
 		} else {
-			rightCol = lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
+			main = lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
 		}
 	}
-	main := lipgloss.JoinHorizontal(lipgloss.Top, refsBox, rightCol)
 	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
 
 	switch m.mode {
@@ -1846,6 +1801,8 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderBranchPickerInner()), m.width, m.height)
 	case viewModeBranchesModal:
 		return composeOverlay(base, renderModalBox(m.renderBranchesModalInner()), m.width, m.height)
+	case viewModeWorktreesModal:
+		return composeOverlay(base, renderModalBox(m.renderWorktreesModalInner()), m.width, m.height)
 	case viewModeCheckoutConfirm:
 		return composeOverlay(base, renderModalBox(m.renderCheckoutConfirmInner()), m.width, m.height)
 	case viewModeWorktreeAddInput:
@@ -1897,9 +1854,9 @@ func (m Model) tabBody() string {
 // shortcut reference can fit the full key matrix.
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
-	case viewModeBranchPicker, viewModeBranchesModal, viewModeCheckoutConfirm,
-		viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm,
-		viewModeZombieCleanupConfirm:
+	case viewModeBranchPicker, viewModeBranchesModal, viewModeWorktreesModal,
+		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
+		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm:
 		return " "
 	case viewModeRefDeleteConfirm:
 		return m.refDeleteInlineHint()

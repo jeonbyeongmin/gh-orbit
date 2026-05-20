@@ -28,31 +28,24 @@ var helpCategories = []helpCategory{
 	{
 		title: "Global",
 		entries: []helpEntry{
-			{"tab", "focus"},
+			{"tab", "focus graph/tab"},
 			{"?", "help"},
 			{"q", "quit"},
 			{"F", "fetch"},
 			{"p", "pull"},
 			{"r", "reload"},
-			{"d", "patch"},
 			{",", "local changes"},
+			{"w", "worktrees modal"},
 			{"b", "branches modal"},
+			{"Z", "zombie cleanup"},
 			{"ctrl+↑/↓", "resize"},
-		},
-	},
-	{
-		title: "Refs",
-		entries: []helpEntry{
-			{"enter", "switch worktree / open local changes"},
-			{"d", "remove worktree (on worktree row)"},
-			{"a", "add worktree (on worktree row)"},
-			{"Z", "zombie cleanup (merged + upstream gone)"},
 		},
 	},
 	{
 		title: "Graph",
 		entries: []helpEntry{
-			{"enter", "go"},
+			{"enter", "checkout / ff / detach"},
+			{"d", "patch overlay"},
 		},
 	},
 	{
@@ -84,9 +77,8 @@ func helpData() []helpCategory { return helpCategories }
 // hint ends with `? help · q quit` so the user always sees how to expand
 // the panel or quit, regardless of which pane has focus.
 var paneHintTexts = map[pane]string{
-	paneRefs:  "enter switch/local-changes · d remove wt · a add wt · Z zombie cleanup · b branches · ? help · q quit",
-	paneGraph: "enter checkout/ff/detach · d patch · b branches · ? help · q quit",
-	paneTab:   "h/l switch · y copy · b branches · ? help · q quit",
+	paneGraph: "enter checkout/ff/detach · d patch · w worktrees · b branches · Z zombies · ? help · q quit",
+	paneTab:   "h/l switch · y copy · w worktrees · b branches · ? help · q quit",
 }
 
 // paneHintsRendered is the pre-styled form of paneHintTexts. View() runs on

@@ -608,7 +608,6 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 			// PR #14 회귀 가드: tail-follow 는 사용자가 한 번이라도
 			// cursor 를 의식적으로 옮긴 뒤에만 작동해야 한다.
 			g.userHasMoved = true
-			return g, tea.Batch(cmd, emitCommitSelected(newHash))
 		}
 		return g, cmd
 	}
@@ -631,9 +630,8 @@ func appendCommitItems(dst []list.Item, rows []graphRow) []list.Item {
 	return dst
 }
 
-// handleAppended folds one streaming batch into the list. First batch:
-// SetItems + commitSelectedMsg for the initial cursor. Subsequent batch:
-// append, with tail-follow gated by userHasMoved (PR #14 회귀 가드).
+// handleAppended folds one streaming batch into the list. Tail-follow on
+// subsequent batches is gated by userHasMoved (PR #14 회귀 가드).
 func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 	if !g.loaded {
 		items := appendCommitItems(make([]list.Item, 0, len(m.rows)), m.rows)
@@ -645,9 +643,6 @@ func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 		g.streaming = !m.done
 		g.err = nil
 		cmds := []tea.Cmd{setCmd}
-		if c, ok := g.Selected(); ok {
-			cmds = append(cmds, emitCommitSelected(c.Hash))
-		}
 		if !m.done && m.next != nil {
 			cmds = append(cmds, m.next)
 		}
@@ -673,11 +668,6 @@ func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 	cmds := []tea.Cmd{setCmd}
 	if atTail {
 		g.list.Select(len(items) - 1)
-		if c, ok := g.Selected(); ok {
-			// Tail-follow moved the cursor — re-emit so Commit/Changes
-			// tabs follow it. model.go's diffReqID debounces fast batches.
-			cmds = append(cmds, emitCommitSelected(c.Hash))
-		}
 	}
 	if !m.done && m.next != nil {
 		cmds = append(cmds, m.next)
@@ -711,10 +701,6 @@ func hasIsHead(refs []git.DecoratedRef) bool {
 		}
 	}
 	return false
-}
-
-func emitCommitSelected(hash string) tea.Cmd {
-	return func() tea.Msg { return commitSelectedMsg{hash: hash} }
 }
 
 func (g graphModel) View() string {

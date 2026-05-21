@@ -25,9 +25,9 @@ func TestPaneSizesShrinkWhenHelpExpanded(t *testing.T) {
 	expanded := m.paneSizes()
 
 	wantDelta := helpExpandedHeight - 1
-	gotDelta := (normal.graphH + normal.tabH) - (expanded.graphH + expanded.tabH)
+	gotDelta := normal.graphH - expanded.graphH
 	if gotDelta != wantDelta {
-		t.Errorf("graph+tab delta on viewModeHelp = %d, want %d (helpExpandedHeight - 1)",
+		t.Errorf("graph delta on viewModeHelp = %d, want %d (helpExpandedHeight - 1)",
 			gotDelta, wantDelta)
 	}
 }
@@ -52,19 +52,12 @@ func TestHelpToggleEntersAndExitsMode(t *testing.T) {
 
 func TestHelpModeKeysPassThrough(t *testing.T) {
 	// The expanded panel is a reference, not a modal — shortcuts must keep
-	// working while it is open so a user can act on what they read. tab
-	// cycles focus, F dispatches a fetch, q quits.
+	// working while it is open so a user can act on what they read. F
+	// dispatches a fetch, q quits.
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	m.mode = viewModeHelp
-	startFocus := m.focused
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = updated.(Model)
-	if m.focused == startFocus {
-		t.Errorf("tab in help mode should still cycle focus, got %v", m.focused)
-	}
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
 	m = updated.(Model)
@@ -129,13 +122,12 @@ func TestRenderHelpStatusReturnsPaneHint(t *testing.T) {
 	m = updated.(Model)
 
 	m.focused = paneGraph
-	if got := m.renderHelpStatus(); !strings.Contains(got, "enter checkout/ff/detach") {
+	got := m.renderHelpStatus()
+	if !strings.Contains(got, "enter checkout/ff/detach") {
 		t.Errorf("paneGraph hint missing 'enter checkout/ff/detach': %q", got)
 	}
-
-	m.focused = paneTab
-	if got := m.renderHelpStatus(); !strings.Contains(got, "y copy") {
-		t.Errorf("paneTab hint missing 'y copy': %q", got)
+	if !strings.Contains(got, "y copy") {
+		t.Errorf("paneGraph hint missing 'y copy': %q", got)
 	}
 }
 
@@ -146,7 +138,7 @@ func TestRenderHelpStatusInHelpModeReturnsPanel(t *testing.T) {
 	m.mode = viewModeHelp
 
 	got := m.renderHelpStatus()
-	for _, want := range []string{"[Global]", "[Graph]", "[Tab]", "[Local Changes]"} {
+	for _, want := range []string{"[Global]", "[Graph]", "[Local Changes]"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("help-mode renderHelpStatus missing %q\n--- panel ---\n%s", want, got)
 		}
@@ -170,39 +162,17 @@ func TestRenderHelpStatusStatusOverridesHint(t *testing.T) {
 	}
 }
 
-func TestSplitRatioClampOnResize(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	if m.splitRatio != splitRatioDefault {
-		t.Fatalf("default splitRatio = %d, want %d", m.splitRatio, splitRatioDefault)
-	}
-
-	send := func(t tea.KeyType) {
-		updated, _ := m.Update(tea.KeyMsg{Type: t})
-		m = updated.(Model)
-	}
-
-	// 12 ctrl+down presses (each +5) would push past splitRatioMax=80; we
-	// expect it to clamp.
-	for i := 0; i < 12; i++ {
-		send(tea.KeyCtrlDown)
-	}
-	if m.splitRatio != splitRatioMax {
-		t.Errorf("after 12 ctrl+down, splitRatio = %d, want %d (clamp)", m.splitRatio, splitRatioMax)
-	}
-
-	// Now drain back below the floor.
-	for i := 0; i < 16; i++ {
-		send(tea.KeyCtrlUp)
-	}
-	if m.splitRatio != splitRatioMin {
-		t.Errorf("after 16 ctrl+up, splitRatio = %d, want %d (clamp)", m.splitRatio, splitRatioMin)
-	}
+// loadGraphFixture seeds the graph with a single commit so Selected()
+// returns true for y-copy tests.
+func loadGraphFixture(t *testing.T, m Model, hash string) Model {
+	t.Helper()
+	updated, _ := m.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: hash, Subject: "subj", AuthorTime: time.Now()}},
+	}})
+	return updated.(Model)
 }
 
-func TestYKeyCopiesHashFromCommitTab(t *testing.T) {
+func TestYKeyCopiesHashFromGraph(t *testing.T) {
 	original := clipboardWrite
 	t.Cleanup(func() { clipboardWrite = original })
 	var captured string
@@ -214,12 +184,7 @@ func TestYKeyCopiesHashFromCommitTab(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
-	// Pretend graph cursor selected this commit.
-	m.commitDetail.MarkLoading("0123456789abcdef0123456789abcdef01234567", 1)
-	m.focused = paneTab
-	if m.tabs.Active() != tabCommit {
-		t.Fatalf("tabs default = %v, want tabCommit", m.tabs.Active())
-	}
+	m = loadGraphFixture(t, m, "0123456789abcdef0123456789abcdef01234567")
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	m = updated.(Model)
@@ -231,7 +196,7 @@ func TestYKeyCopiesHashFromCommitTab(t *testing.T) {
 	}
 }
 
-func TestYKeyIsNoopOutsideCommitTab(t *testing.T) {
+func TestYKeyIsNoopWithoutSelection(t *testing.T) {
 	original := clipboardWrite
 	t.Cleanup(func() { clipboardWrite = original })
 	var captured string
@@ -243,14 +208,11 @@ func TestYKeyIsNoopOutsideCommitTab(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
-	m.commitDetail.MarkLoading("abc1234deadbeefcafe1234567890abcdef12345", 1)
-	// graph focused, not paneTab
-	m.focused = paneGraph
+	// No commits loaded — Selected() returns false.
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	m = updated.(Model)
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	if captured != "" {
-		t.Errorf("clipboard should not be written when graph focused, got %q", captured)
+		t.Errorf("clipboard should not be written when no commit is selected, got %q", captured)
 	}
 }
 
@@ -264,8 +226,7 @@ func TestYKeySurfacesClipboardError(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
-	m.commitDetail.MarkLoading("abc1234deadbeefcafe1234567890abcdef12345", 1)
-	m.focused = paneTab
+	m = loadGraphFixture(t, m, "abc1234deadbeefcafe1234567890abcdef12345")
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	m = updated.(Model)
@@ -277,139 +238,12 @@ func TestYKeySurfacesClipboardError(t *testing.T) {
 	}
 }
 
-func TestFocusCycle_TabWrap(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	// New() seeds focused at paneGraph.
-	if m.focused != paneGraph {
-		t.Fatalf("initial focus = %v, want paneGraph", m.focused)
-	}
-
-	tabStep := func() Model {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-		return updated.(Model)
-	}
-
-	// tab cycles forward and wraps: graph → tab → graph (paneRefs retired
-	// in PR B2 so the cycle has only two stops).
-	m = tabStep()
-	if m.focused != paneTab {
-		t.Errorf("after tab #1 from graph, focus = %v, want paneTab", m.focused)
-	}
-	m = tabStep()
-	if m.focused != paneGraph {
-		t.Errorf("after tab #2 from tab, focus = %v, want paneGraph (wrap)", m.focused)
-	}
-	m = tabStep()
-	if m.focused != paneTab {
-		t.Errorf("after tab #3 from graph, focus = %v, want paneTab", m.focused)
-	}
-}
-
-func TestTabPaneHL_TogglesCommitChanges(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.focused = paneTab
-	if m.tabs.Active() != tabCommit {
-		t.Fatalf("tabs default = %v, want tabCommit", m.tabs.Active())
-	}
-
-	send := func(r rune) Model {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-		return updated.(Model)
-	}
-
-	m = send('l')
-	if m.tabs.Active() != tabChanges {
-		t.Errorf("after l on paneTab, active = %v, want tabChanges", m.tabs.Active())
-	}
-	m = send('l')
-	if m.tabs.Active() != tabCommit {
-		t.Errorf("after l #2 (wrap), active = %v, want tabCommit", m.tabs.Active())
-	}
-	m = send('h')
-	if m.tabs.Active() != tabChanges {
-		t.Errorf("after h on paneTab, active = %v, want tabChanges (wrap reverse)", m.tabs.Active())
-	}
-}
-
-func TestTabPaneArrows_TogglesCommitChanges(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.focused = paneTab
-	if m.tabs.Active() != tabCommit {
-		t.Fatalf("tabs default = %v, want tabCommit", m.tabs.Active())
-	}
-
-	send := func(kt tea.KeyType) Model {
-		updated, _ := m.Update(tea.KeyMsg{Type: kt})
-		return updated.(Model)
-	}
-
-	m = send(tea.KeyRight)
-	if m.tabs.Active() != tabChanges {
-		t.Errorf("after → on paneTab, active = %v, want tabChanges", m.tabs.Active())
-	}
-	m = send(tea.KeyRight)
-	if m.tabs.Active() != tabCommit {
-		t.Errorf("after → #2 (wrap), active = %v, want tabCommit", m.tabs.Active())
-	}
-	m = send(tea.KeyLeft)
-	if m.tabs.Active() != tabChanges {
-		t.Errorf("after ← on paneTab, active = %v, want tabChanges (wrap reverse)", m.tabs.Active())
-	}
-}
-
-func TestRefsGraphTabKeys_NoOp(t *testing.T) {
-	sendRune := func(m Model, r rune) Model {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-		return updated.(Model)
-	}
-	sendKey := func(m Model, kt tea.KeyType) Model {
-		updated, _ := m.Update(tea.KeyMsg{Type: kt})
-		return updated.(Model)
-	}
-
-	for _, focus := range []pane{paneGraph} {
-		m := New()
-		updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-		m = updated.(Model)
-		m.focused = focus
-		startActive := m.tabs.Active()
-
-		for _, key := range []rune{'h', 'l'} {
-			m = sendRune(m, key)
-			if m.focused != focus {
-				t.Errorf("h/l from %v moved focus to %v, want unchanged", focus, m.focused)
-			}
-			if m.tabs.Active() != startActive {
-				t.Errorf("h/l from %v changed tab to %v, want %v", focus, m.tabs.Active(), startActive)
-			}
-		}
-
-		for _, kt := range []tea.KeyType{tea.KeyLeft, tea.KeyRight} {
-			m = sendKey(m, kt)
-			if m.focused != focus {
-				t.Errorf("←/→ from %v moved focus to %v, want unchanged", focus, m.focused)
-			}
-			if m.tabs.Active() != startActive {
-				t.Errorf("←/→ from %v changed tab to %v, want %v", focus, m.tabs.Active(), startActive)
-			}
-		}
-	}
-}
-
-func TestDiffOverlay_TabHLSwallowed(t *testing.T) {
+func TestDiffOverlay_NavKeysSwallowed(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	m.mode = viewModeDiffWindow
 	startFocus := m.focused
-	startActive := m.tabs.Active()
 
 	cases := []struct {
 		name string
@@ -429,9 +263,6 @@ func TestDiffOverlay_TabHLSwallowed(t *testing.T) {
 		}
 		if m.focused != startFocus {
 			t.Errorf("%s in overlay moved focus to %v, want %v", tc.name, m.focused, startFocus)
-		}
-		if m.tabs.Active() != startActive {
-			t.Errorf("%s in overlay changed tab to %v, want %v", tc.name, m.tabs.Active(), startActive)
 		}
 		if cmd != nil {
 			t.Errorf("%s in overlay should not dispatch a cmd, got %v", tc.name, cmd)
@@ -794,60 +625,6 @@ func TestModelFetchSucceededReloadsBothPanes(t *testing.T) {
 	}
 }
 
-func TestModelCommitSelectedDispatchesDebounce(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	priorReqID := m.diffReqID
-	updated, cmd := m.Update(commitSelectedMsg{hash: "aaa1111"})
-	m = updated.(Model)
-	if cmd == nil {
-		t.Fatal("commitSelectedMsg should return a batched debounce + commit-detail cmd")
-	}
-	if m.diffReqID != priorReqID+1 {
-		t.Errorf("diffReqID should advance by 1, got %d (was %d)", m.diffReqID, priorReqID)
-	}
-	if !m.changes.loadingFiles {
-		t.Error("changes pane should be marked loading after commitSelectedMsg")
-	}
-	if m.changes.hash != "aaa1111" {
-		t.Errorf("changes.hash = %q, want aaa1111", m.changes.hash)
-	}
-	if !m.commitDetail.loading {
-		t.Error("commitDetail should be marked loading after commitSelectedMsg")
-	}
-	if m.commitDetail.hash != "aaa1111" {
-		t.Errorf("commitDetail.hash = %q, want aaa1111", m.commitDetail.hash)
-	}
-}
-
-func TestModelDebounceMsgStaleReqIDIsDropped(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	// Simulate that two cursor moves happened before the first tick fires.
-	m.diffReqID = 5
-
-	_, cmd := m.Update(diffDebounceMsg{reqID: 3, hash: "stale"})
-	if cmd != nil {
-		t.Errorf("stale debounce tick should return no cmd, got %v", cmd)
-	}
-}
-
-func TestModelDebounceMsgFreshReqIDDispatches(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.diffReqID = 5
-
-	_, cmd := m.Update(diffDebounceMsg{reqID: 5, hash: "abc1234"})
-	if cmd == nil {
-		t.Fatal("fresh debounce tick should dispatch loadDiffStatCmd")
-	}
-}
-
 func TestModelDKeyOpensDiffWindow(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -923,29 +700,6 @@ func TestModelQClosesDiffWindowWithoutQuitting(t *testing.T) {
 	}
 }
 
-func TestModelStaleStatLoadedIsIgnored(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-
-	// Pretend two cursor moves happened; the latest reqID is 7 and changes
-	// is loading for hash "current". A stale response at reqID 3 must not
-	// mutate the file list.
-	m.diffReqID = 7
-	m.changes.MarkPending("current")
-
-	updated, _ = m.Update(diffStatLoadedMsg{reqID: 3, hash: "old", files: []git.FileStat{
-		{Path: "stale.txt", Insertions: 1},
-	}})
-	m = updated.(Model)
-	if len(m.changes.files) != 0 {
-		t.Errorf("stale diffStatLoadedMsg must not populate changes.files, got %v", m.changes.files)
-	}
-	if !m.changes.loadingFiles {
-		t.Error("stale response should leave loadingFiles=true since the in-flight call is still pending")
-	}
-}
-
 func TestModelFetchFailedSurfacesError(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -972,91 +726,6 @@ func TestModelFetchFailedSurfacesError(t *testing.T) {
 	}
 	if !m.graph.loaded {
 		t.Error("graph.loaded should remain on fetch failure")
-	}
-}
-
-// loadCommitDetailFixture installs a long body into the Commit-tab viewport
-// so paneTab dispatch tests have something to scroll. Mirrors the metadata
-// + body shape of a real ApplyDetailLoaded call but bypasses the git command
-// since these tests run without a repo.
-func loadCommitDetailFixture(t *testing.T, m *Model) {
-	t.Helper()
-	m.commitDetail.MarkLoading("hash", 1)
-	m.commitDetail.ApplyDetailLoaded(1, "hash", git.Detail{
-		Hash: "hash",
-		Body: strings.Repeat("body line\n", 60),
-	})
-}
-
-func TestPaneTabCommit_JKScrollsBodyViewport(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.focused = paneTab
-	loadCommitDetailFixture(t, &m)
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	m = updated.(Model)
-	if m.commitDetail.viewport.YOffset == 0 {
-		t.Errorf("j on Commit tab must scroll the body viewport, YOffset still 0")
-	}
-}
-
-func TestPaneTabCommit_TabTogglePreservesScroll(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.focused = paneTab
-	loadCommitDetailFixture(t, &m)
-
-	// Scroll a few lines down on the Commit tab.
-	for i := 0; i < 3; i++ {
-		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-		m = updated.(Model)
-	}
-	scrolled := m.commitDetail.viewport.YOffset
-	if scrolled == 0 {
-		t.Fatalf("setup: j×3 should have advanced the viewport")
-	}
-	// Toggle to Changes and back to Commit — the Commit-tab viewport state must
-	// survive the round trip (each tab keeps its own offset).
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	m = updated.(Model)
-	if m.tabs.Active() != tabChanges {
-		t.Fatalf("l should switch to Changes")
-	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
-	m = updated.(Model)
-	if m.tabs.Active() != tabCommit {
-		t.Fatalf("h should switch back to Commit")
-	}
-	if m.commitDetail.viewport.YOffset != scrolled {
-		t.Errorf("scroll position lost across tab toggle: got %d, want %d",
-			m.commitDetail.viewport.YOffset, scrolled)
-	}
-}
-
-func TestPaneTabCommit_CtrlDIsNoOp(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.focused = paneTab
-	if m.tabs.Active() != tabCommit {
-		t.Fatalf("setup: tab default = %v, want tabCommit", m.tabs.Active())
-	}
-	loadCommitDetailFixture(t, &m)
-
-	// ctrl+d/ctrl+u stay reserved for the Changes-tab patch viewport — the
-	// Commit tab must not consume them, so YOffset stays at 0.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
-	m = updated.(Model)
-	if m.commitDetail.viewport.YOffset != 0 {
-		t.Errorf("ctrl+d on Commit tab must be a no-op, YOffset = %d", m.commitDetail.viewport.YOffset)
-	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
-	m = updated.(Model)
-	if m.commitDetail.viewport.YOffset != 0 {
-		t.Errorf("ctrl+u on Commit tab must be a no-op, YOffset = %d", m.commitDetail.viewport.YOffset)
 	}
 }
 

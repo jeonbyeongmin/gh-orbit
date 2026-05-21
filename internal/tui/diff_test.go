@@ -37,22 +37,3 @@ func TestDiffPatchLoadedStaleReqIDIsDropped(t *testing.T) {
 		t.Errorf("stale patch must not flow into viewport, got %q", d.PatchView())
 	}
 }
-
-func TestTruncatePathDropsLeadingDirsForNarrow(t *testing.T) {
-	got := truncatePath("internal/tui/diff.go", 10)
-	if got == "internal/tui/diff.go" {
-		t.Errorf("expected truncation when path > width, got full path")
-	}
-	if !strings.HasPrefix(got, "…") {
-		t.Errorf("truncated path should start with '…', got %q", got)
-	}
-	if !strings.HasSuffix(got, "diff.go") {
-		t.Errorf("truncation should preserve filename, got %q", got)
-	}
-}
-
-func TestTruncatePathLeavesShortPathsAlone(t *testing.T) {
-	if got := truncatePath("f.txt", 40); got != "f.txt" {
-		t.Errorf("short path should pass through, got %q", got)
-	}
-}

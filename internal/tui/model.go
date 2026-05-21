@@ -364,6 +364,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.refs.SetWorktrees(msg.entries, m.workdir)
+		// Dashboard height is data-driven on len(worktrees); going from
+		// 0 → N (or N → 0) shrinks/grows the graph pane, so resize the
+		// graph viewport now to keep the bubbles list in sync.
+		m.applyPaneSizes()
 		paths := make([]string, 0, len(msg.entries))
 		for _, e := range msg.entries {
 			paths = append(paths, e.Path)

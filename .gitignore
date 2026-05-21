@@ -17,3 +17,7 @@ coverage.txt
 
 # Claude Code per-user settings (project-shared SKILL.md is tracked)
 .claude/settings.local.json
+
+# AI coding agent local artifacts
+.context/
+.antigravitycli/

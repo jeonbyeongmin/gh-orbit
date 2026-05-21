@@ -572,3 +572,53 @@ func TestStatusClearTickRespectsStatusReplacement(t *testing.T) {
 		t.Errorf("non-'switched' status should survive the tick, got %q", m.status)
 	}
 }
+
+// TestReloadCmdRefreshesWorktrees pins the contract that the global `r`
+// reload also refreshes the worktree inventory. Without this, `r` would
+// leave the dashboard stale while reloading graph + refs, contradicting
+// the user's "r = reload everything" mental model.
+func TestReloadCmdRefreshesWorktrees(t *testing.T) {
+	m := New()
+	prev := m.sidebarWorktreesReqID
+	cmd := m.reloadCmd()
+	if m.sidebarWorktreesReqID <= prev {
+		t.Errorf("sidebarWorktreesReqID did not bump after reloadCmd: got %d (was %d)", m.sidebarWorktreesReqID, prev)
+	}
+	if cmd == nil {
+		t.Errorf("reloadCmd returned nil")
+	}
+}
+
+// TestSucceededMsgRefreshesWorktrees guards the 6 dispatch sites that
+// must bump sidebarWorktreesReqID after a HEAD-changing or working-tree-
+// changing success message. "reqID bumped + non-nil cmd" is the same
+// definition the stale-drop fan-out uses, so checking it here is
+// equivalent to asserting loadWorktreesCmd was dispatched without
+// peeling apart the opaque tea.Cmd batch.
+func TestSucceededMsgRefreshesWorktrees(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{"CheckoutSucceeded", checkoutSucceededMsg{ref: "main", detached: false}},
+		{"PullSucceeded", pullSucceededMsg{}},
+		{"FFSucceeded", ffSucceededMsg{branch: "main", advance: 1}},
+		{"CheckoutThenFFSucceeded", checkoutThenFFSucceededMsg{branch: "main", advance: 1}},
+		{"LocalChangesAdd", localChangesAddSucceededMsg{path: "f"}},
+		{"LocalChangesRestore", localChangesRestoreSucceededMsg{path: "f"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New()
+			prev := m.sidebarWorktreesReqID
+			updated, cmd := m.Update(tc.msg)
+			got := updated.(Model)
+			if got.sidebarWorktreesReqID <= prev {
+				t.Errorf("sidebarWorktreesReqID did not bump after %T: got %d (was %d)", tc.msg, got.sidebarWorktreesReqID, prev)
+			}
+			if cmd == nil {
+				t.Errorf("expected non-nil cmd after %T", tc.msg)
+			}
+		})
+	}
+}

@@ -349,10 +349,10 @@ func (m Model) switchWorktree(path string) (Model, tea.Cmd) {
 	// Arm the HEAD jump so the post-reload refsLoadedMsg snaps the graph
 	// cursor onto the new tree's HEAD commit instead of position 0.
 	m.pendingHEADHash = pendingHEADSentinel
-	// Bump the sidebar reqID so any in-flight worktree-load reply from the
-	// previous tree drops on arrival.
-	m.sidebarWorktreesReqID++
-	cmd := tea.Batch(m.reloadCmd(), loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID), loadLocalChangesSummaryCmd(m.workdir))
+	// reloadCmd bumps sidebarWorktreesReqID and dispatches loadWorktreesCmd
+	// itself — that covers the in-flight invalidation for the new tree, so
+	// the switch handler no longer fans out explicitly.
+	cmd := tea.Batch(m.reloadCmd(), loadLocalChangesSummaryCmd(m.workdir))
 	// Local Changes mode keeps its own status snapshot; reloadCmd doesn't
 	// touch it. Re-fire the status load so the file tree reflects the new
 	// tree immediately rather than waiting for the user to press `r`.

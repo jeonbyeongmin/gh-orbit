@@ -103,8 +103,8 @@ unless the human explicitly asks.
 
 Feature-level reference lives under [`docs/`](docs/). Start at
 [`docs/index.md`](docs/index.md) for the map. When a task touches a
-documented surface (refs pane, checkout flow, stash, branches modal,
-git wrappers, config), read the relevant doc before editing — the
+documented surface (refs pane, checkout flow, branches modal,
+worktrees, git wrappers, config), read the relevant doc before editing — the
 invariants there are deliberate and shouldn't be silently
 overridden.
 

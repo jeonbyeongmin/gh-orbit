@@ -738,7 +738,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localChangesAddSucceededMsg:
 		m.status = "staged " + msg.path
 		m.statusStyle = statusOkS
-		return m, tea.Batch(loadStatusCmd(m.workdir), loadLocalChangesSummaryCmd(m.workdir))
+		m.sidebarWorktreesReqID++
+		return m, tea.Batch(
+			loadStatusCmd(m.workdir),
+			loadLocalChangesSummaryCmd(m.workdir),
+			loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
+		)
 
 	case localChangesAddFailedMsg:
 		m.status = "stage " + msg.path + ": " + firstLine(msg.err.Error())
@@ -748,7 +753,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localChangesRestoreSucceededMsg:
 		m.status = "unstaged " + msg.path
 		m.statusStyle = statusOkS
-		return m, tea.Batch(loadStatusCmd(m.workdir), loadLocalChangesSummaryCmd(m.workdir))
+		m.sidebarWorktreesReqID++
+		return m, tea.Batch(
+			loadStatusCmd(m.workdir),
+			loadLocalChangesSummaryCmd(m.workdir),
+			loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
+		)
 
 	case localChangesRestoreFailedMsg:
 		m.status = "unstage " + msg.path + ": " + firstLine(msg.err.Error())

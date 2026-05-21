@@ -160,6 +160,41 @@ func TestSidebarWorktreesLoadedAppliesToRefs(t *testing.T) {
 	}
 }
 
+// TestSidebarWorktreesLoadedRescalesGraphViewport locks in that an
+// async worktreesLoadedMsg, which grows dashboardLines from 0 to N+2,
+// also propagates the new graph pane height to m.graph. Without
+// applyPaneSizes the bubbles list keeps the pre-dashboard viewport
+// height and the cursor falls out of view — the "scroll 깨짐" symptom.
+func TestSidebarWorktreesLoadedRescalesGraphViewport(t *testing.T) {
+	m := initSized(t)
+	m = seedGraphCursor(t, m, "abc1234")
+	m.workdir = "/tmp/feat"
+
+	prev := m.paneSizes()
+	if m.graph.height != prev.graphH {
+		t.Fatalf("precondition: graph.height %d != paneSizes.graphH %d after initSized",
+			m.graph.height, prev.graphH)
+	}
+
+	entries := []git.Worktree{
+		{Path: "/tmp/main", Branch: "main", IsMain: true},
+		{Path: "/tmp/feat", Branch: "feat"},
+		{Path: "/tmp/qa", Branch: "qa"},
+	}
+	updated, _ := m.Update(worktreesLoadedMsg{reqID: m.sidebarWorktreesReqID, entries: entries})
+	m = updated.(Model)
+
+	now := m.paneSizes()
+	if now.graphH >= prev.graphH {
+		t.Fatalf("paneSizes should shrink graphH after dashboard appears: prev=%d new=%d",
+			prev.graphH, now.graphH)
+	}
+	if m.graph.height != now.graphH {
+		t.Errorf("graph.height not rescaled after worktreesLoadedMsg: graph.height=%d, paneSizes.graphH=%d",
+			m.graph.height, now.graphH)
+	}
+}
+
 func TestSidebarWorktreesLoadedDropsStaleReqID(t *testing.T) {
 	m := New()
 	preReqID := m.sidebarWorktreesReqID

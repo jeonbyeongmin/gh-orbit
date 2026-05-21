@@ -270,6 +270,76 @@ func TestDiffOverlay_NavKeysSwallowed(t *testing.T) {
 	}
 }
 
+func TestDiffOverlay_BracketKeysJumpFiles(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeDiffWindow
+	m.diff.SetPatchViewportSize(120, 5)
+	m.diff.BeginPatchLoad("h", 1)
+	m.diff.ApplyPatchLoaded(1, "h", threeFilePatch)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Errorf("] should not dispatch a cmd, got %v", cmd)
+	}
+	if got := m.diff.viewport.YOffset; got != 7 {
+		t.Errorf("] from top, YOffset = %d, want 7 (beta header)", got)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	m = updated.(Model)
+	if got := m.diff.viewport.YOffset; got != 0 {
+		t.Errorf("[ from beta, YOffset = %d, want 0 (alpha header)", got)
+	}
+}
+
+func TestRenderDiffOverlayHintCarriesPathAndIndex(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeDiffWindow
+	m.diff.SetPatchViewportSize(120, 5)
+	m.diff.BeginPatchLoad("h", 1)
+	m.diff.ApplyPatchLoaded(1, "h", threeFilePatch)
+
+	hint := m.renderDiffOverlayHint()
+	if !strings.Contains(hint, "alpha.go") {
+		t.Errorf("hint missing current path 'alpha.go': %q", hint)
+	}
+	if !strings.Contains(hint, "[1/3]") {
+		t.Errorf("hint missing index '[1/3]': %q", hint)
+	}
+	if !strings.Contains(hint, "[ ] file") {
+		t.Errorf("hint missing keymap '[ ] file': %q", hint)
+	}
+
+	m.diff.JumpToNextFile()
+	hint = m.renderDiffOverlayHint()
+	if !strings.Contains(hint, "beta.go") || !strings.Contains(hint, "[2/3]") {
+		t.Errorf("after ], hint = %q, want beta.go + [2/3]", hint)
+	}
+}
+
+func TestRenderDiffOverlayHintEmptyDiffFallsBackToKeymap(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeDiffWindow
+	m.diff.SetPatchViewportSize(120, 5)
+	m.diff.BeginPatchLoad("h", 1)
+	m.diff.ApplyPatchLoaded(1, "h", "")
+
+	hint := m.renderDiffOverlayHint()
+	if strings.Contains(hint, "[0/0]") {
+		t.Errorf("empty diff hint must not show [0/0], got %q", hint)
+	}
+	if !strings.Contains(hint, "esc/q close") {
+		t.Errorf("empty diff hint should still show keymap, got %q", hint)
+	}
+}
+
 func TestModelInitSeedsCurrentRefsWithAllSentinel(t *testing.T) {
 	m := New()
 	if got, want := m.currentRefs, []string{refsAllSentinel}; !slices.Equal(got, want) {

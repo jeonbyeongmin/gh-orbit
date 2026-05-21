@@ -161,6 +161,27 @@ Stale-drop: a `worktreeDirtyResultMsg` whose `reqID` doesn't match the
 live `sidebarWorktreesReqID` is dropped — a worktree switch in the
 middle of a fan-out can't bleed dirty state from the previous tree.
 
+## Refresh triggers
+
+`loadWorktreesCmd` is dispatched from these sites — each one bumps
+`sidebarWorktreesReqID` first so any in-flight fan-out from a previous
+load drops on arrival:
+
+- App startup (initial batch).
+- `worktree add` / `worktree remove` success.
+- `w`-modal switch (via `reloadCmd`).
+- `r` global reload key (via `reloadCmd`).
+- `fetch` / `pull` / `checkout` / `ff-only` / `checkoutThenFF` /
+  `branchDelete` success — all route through `reloadCmd`, which bumps
+  the worktree reqID and dispatches the inventory + fan-out together.
+- Local Changes `stage` / `unstage` success (explicit, in addition to
+  their own status reload — needed for the dashboard `●` to flip).
+
+Trees changed externally (another shell, another worktree's agent
+session) surface on the next such action, or whenever the user presses
+`r`. Automatic external-change detection (fsnotify / poll) is a
+separate backlog.
+
 ## Scope: v1 explicitly excludes
 
 The following actions are intentionally out of v1 — each was split off

@@ -1,6 +1,8 @@
 # architecture
 
-Stacked TUI. Top dashboard (worktrees + Local Changes meta + fetch freshness) sits above the commit graph; the graph fills the rest of the terminal. The per-commit diff is read in the full-screen `d` patch overlay — the previous bottom Commit/Changes tab pane was retired with the subtract-bottom-pane change. Post-PR-B2 the sidebar is retired — graph Enter is the single checkout surface, branches modal (`b`) is the single delete-branch surface, worktrees modal (`w`) is the single worktree-workflow surface.
+Stacked TUI. Top dashboard (worktrees + Local Changes meta + fetch freshness) sits above the commit graph; the graph fills the rest of the terminal. The per-commit diff is read in the full-screen `d` patch overlay, with `[` / `]` jumping between files inside it — the previous bottom Commit/Changes tab pane was retired with the subtract-bottom-pane change. Post-PR-B2 the sidebar is retired — graph Enter is the single checkout surface, branches modal (`b`) is the single delete-branch surface, worktrees modal (`w`) is the single worktree-workflow surface.
+
+The shape is closer to `tig` than to Fork: a dense commit cockpit on top, modal patch viewer for the actual diff work. `gh dash` covers the same neighborhood for remote PRs, which gh-orbit will absorb in a follow-up.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -20,7 +22,7 @@ Stacked TUI. Top dashboard (worktrees + Local Changes meta + fetch freshness) si
 
 The top dashboard is data-driven: header + N worktree rows + separator + 2 border rows. paneSizes caps the dashboard at `mainH - 3` so the graph retains ≥3 outer rows. The dashboard is read-only — cursor for worktree switching lives in the `w` modal (see [worktrees.md](worktrees.md)). Local Changes is entered globally via `,`. Fetch is throttled by terminal focus events (60s) so an alt-tab burst can't saturate `git fetch`.
 
-The full-screen `d` patch overlay is where commit diffs live (entire `git show -p` body), opened on top of the base layout and closed with `esc` / `q`.
+The full-screen `d` patch overlay is where commit diffs live (entire `git show -p` body), opened on top of the base layout and closed with `esc` / `q`. Inside the overlay, `[` / `]` jump to the previous / next `diff --git` header so a 20-file patch reads as 20 ordered chapters instead of one long scroll. The bottom hint surfaces `<path> [N/M]` so the reviewer always knows which file the cursor is in.
 
 ## Pane composition
 
@@ -46,7 +48,7 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `?`            | global | toggle expanded help panel                                                          |
 | `R`            | global | reserved for future Rebase                                                          |
 
-Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `esc` / `q`. The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md).
+Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `[` / `]` / `esc` / `q`. `[` jumps to the previous file header, `]` to the next; both are no-ops past the first / last file (no wrap — surprise jumps make the cockpit harder to read, not easier). The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md).
 
 `?` toggles a multi-line help panel that replaces the bottom hint with pane-grouped bindings. Reference, not modal — every shortcut keeps working. Suppressed inside the patch overlay and dirty-tree confirm; those modes keep their own single-line hint.
 

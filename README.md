@@ -27,20 +27,28 @@ pattern.
 
 Concretely, the design assumes:
 
-- You read **diffs more often than you write them.** Local Changes
-  view and the patch overlay are first-class, not buried.
+- You read **diffs more often than you write them.** The full-screen
+  patch overlay (`d`) is the primary review surface, with `[` / `]`
+  to jump between files; the Local Changes view covers the working
+  tree on the same overlay-first pattern.
 - You **switch branches a lot** because each agent run lands on a
-  fresh branch / worktree. Refs sidebar + graph-cursor checkout are
-  built around that.
+  fresh branch / worktree. Graph-cursor checkout (`enter`) + worktree
+  modal (`w`) + branches modal (`b`) are built around that.
 - You want **machine-reproducible git operations**, not a wrapper
   with its own opinions. Every git call shells out to your `git`
   binary so `.gitconfig`, hooks, signing, and LFS keep working — the
   same git an agent would invoke from a shell.
 
+The aesthetic is closer to `tig` than to Fork — a dense commit-graph
+cockpit with metadata on top, modal patch viewer for the actual diff
+work — not a three-pane file-browser. `gh dash` lives in the same
+neighborhood for remote PRs, which is the next milestone.
+
 ## Status
 
-**Early WIP.** The MVP scope is the local-side review surface (Fork
-replacement, agent-diff review); PR review/merge is the next milestone.
+**Early WIP.** The MVP scope is the local-side review surface
+(agent-diff review on top of a tig-style cockpit); PR review/merge is
+the next milestone.
 Today the build wires up:
 
 - Stacked layout — top dashboard (worktrees + Local Changes meta +
@@ -65,12 +73,14 @@ Today the build wires up:
 - ref pane: lazy auto-scroll on j/k/g/G with overflow clipping (no fold
   or sticky-header — those were tried and removed)
 - `d` opens a full-screen patch overlay for the focused commit
-  (entire `git show -p` body); `esc` / `q` close it without quitting
-  the app
+  (entire `git show -p` body); inside, `[` / `]` jump between files
+  and the bottom hint shows `<path> [N/M]` so you always know which
+  file the cursor is in; `esc` / `q` close it without quitting the app
 - vim-style key bindings (full table in [docs/architecture.md](./docs/architecture.md)):
   - `j` / `k` / `g` / `G` — navigate the commit graph
   - `enter` — context-sensitive on the graph: checkout / FF / detach
-  - `d` — open the focused commit's patch overlay
+  - `d` — open the focused commit's patch overlay; inside, `[` / `]`
+    jump prev / next file
   - `,` — open the Local Changes view (working-tree diff)
   - `w` / `b` — open the worktrees / branches modal; see
     [docs/worktrees.md](./docs/worktrees.md) and

@@ -801,6 +801,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			case "j", "k", "down", "up", "pgdown", "pgup":
 				return m, m.diff.ScrollPatch(msg)
+			case "]":
+				m.diff.JumpToNextFile()
+				return m, nil
+			case "[":
+				m.diff.JumpToPrevFile()
+				return m, nil
 			}
 			return m, nil
 		}
@@ -1623,9 +1629,42 @@ func renderModalBox(inner string) string {
 	return modalBoxStyle.Render(inner)
 }
 
-const helpTextDiffWindow = "j/k scroll · pgup/pgdn page · esc/q close"
+// diffOverlayHintBase is the keymap half of the bottom hint shown inside
+// the patch overlay. The current-file half (path + N/M) is prepended at
+// render time by renderDiffOverlayHint when files() is non-empty.
+const diffOverlayHintBase = "j/k scroll · pgup/pgdn page · [ ] file · esc/q close"
 
-var helpRenderedDiffWindow = help.Render(helpTextDiffWindow)
+// renderDiffOverlayHint builds the patch-overlay bottom line. For commits
+// with at least one file boundary it leads with `<path> [N/M] · `; for
+// empty diffs (merge commits) it falls back to the bare keymap so the
+// line doesn't read as " [0/0]". When the path makes the line overflow
+// the terminal width, the path is truncated from its left so the file
+// name (the discriminating tail) survives.
+func (m Model) renderDiffOverlayHint() string {
+	path, idx, total := m.diff.CurrentFile()
+	if total == 0 || path == "" {
+		return fitHelpLine(diffOverlayHintBase, m.width)
+	}
+	prefix := fmt.Sprintf("%s [%d/%d] · ", path, idx, total)
+	full := prefix + diffOverlayHintBase
+	if lipgloss.Width(full) <= m.width {
+		return help.Render(full)
+	}
+	// Path overflows. Reserve room for the suffix + `…[N/M] · ` ellipsis
+	// pad, then truncate the path from the left so the basename survives.
+	tail := fmt.Sprintf(" [%d/%d] · ", idx, total) + diffOverlayHintBase
+	budget := m.width - lipgloss.Width(tail) - 1
+	if budget < 4 {
+		return fitHelpLine(diffOverlayHintBase, m.width)
+	}
+	for i := 0; i < len(path); i++ {
+		candidate := "…" + path[i:]
+		if lipgloss.Width(candidate) <= budget {
+			return help.Render(candidate + tail)
+		}
+	}
+	return fitHelpLine(diffOverlayHintBase, m.width)
+}
 
 // confirmPromptS reuses the busy color and adds bold so the modal prompt
 // reads as "active dialog" rather than "an error just landed".
@@ -1636,7 +1675,7 @@ func (m Model) View() string {
 		return "starting…"
 	}
 	if m.mode == viewModeDiffWindow {
-		return lipgloss.JoinVertical(lipgloss.Left, m.diff.PatchView(), helpRenderedDiffWindow)
+		return lipgloss.JoinVertical(lipgloss.Left, m.diff.PatchView(), m.renderDiffOverlayHint())
 	}
 	s := m.paneSizes()
 

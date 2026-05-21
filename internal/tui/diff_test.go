@@ -86,6 +86,33 @@ func TestParseFileBoundariesEmpty(t *testing.T) {
 	}
 }
 
+// TestParseFileBoundariesStripsANSI guards against the bug that shipped
+// in PR 3 first cut: gh-orbit invokes git with `color.ui=always` (see
+// internal/git/show.go) so every line, headers included, arrives wrapped
+// in SGR escapes (`\x1b[1mdiff --git ...\x1b[m`). HasPrefix on the raw
+// line then misses every header, files comes back empty, the bracket
+// keys feel dead. The parser must strip ANSI before matching.
+func TestParseFileBoundariesStripsANSI(t *testing.T) {
+	const colored = "\x1b[1mdiff --git a/alpha.go b/alpha.go\x1b[m\n" +
+		"\x1b[1mindex 111..222 100644\x1b[m\n" +
+		"\x1b[1m--- a/alpha.go\x1b[m\n" +
+		"\x1b[1m+++ b/alpha.go\x1b[m\n" +
+		"\x1b[36m@@ -1 +1 @@\x1b[m\n" +
+		"\x1b[31m-alpha old\x1b[m\n" +
+		"\x1b[32m+alpha new\x1b[m\n" +
+		"\x1b[1mdiff --git a/beta.go b/beta.go\x1b[m\n"
+	got := parseFileBoundaries(colored)
+	if len(got) != 2 {
+		t.Fatalf("len(boundaries) = %d, want 2 (got %v)", len(got), got)
+	}
+	if got[0].path != "alpha.go" || got[0].line != 0 {
+		t.Errorf("boundary[0] = %+v, want {line:0 path:alpha.go}", got[0])
+	}
+	if got[1].path != "beta.go" || got[1].line != 7 {
+		t.Errorf("boundary[1] = %+v, want {line:7 path:beta.go}", got[1])
+	}
+}
+
 func TestParseFileDiffHeaderQuotedPath(t *testing.T) {
 	const line = `diff --git "a/dir with space/x" "b/dir with space/x"`
 	path, ok := parseFileDiffHeader(line)
@@ -121,24 +148,27 @@ func TestParseFileDiffHeaderNonHeaderRejected(t *testing.T) {
 	}
 }
 
-func TestDiffJumpToNextFile(t *testing.T) {
+func TestDiffJumpToNextFileAdvancesActiveAndViewport(t *testing.T) {
 	d := newDiffModel()
+	// Viewport smaller than patch (22 lines) so SetYOffset isn't clamped.
 	d.SetPatchViewportSize(80, 5)
 	d.BeginPatchLoad("h", 1)
 	d.ApplyPatchLoaded(1, "h", threeFilePatch)
-	// Start at top (line 0 = alpha header).
-	d.JumpToNextFile()
-	if got := d.viewport.YOffset; got != 7 {
-		t.Errorf("after first ], YOffset = %d, want 7 (beta header)", got)
+	if d.activeFile != 0 {
+		t.Fatalf("setup: activeFile = %d, want 0 after load", d.activeFile)
 	}
 	d.JumpToNextFile()
-	if got := d.viewport.YOffset; got != 14 {
-		t.Errorf("after second ], YOffset = %d, want 14 (gamma header)", got)
+	if d.activeFile != 1 || d.viewport.YOffset != 7 {
+		t.Errorf("after ], active=%d YOffset=%d, want 1 / 7 (beta)", d.activeFile, d.viewport.YOffset)
+	}
+	d.JumpToNextFile()
+	if d.activeFile != 2 || d.viewport.YOffset != 14 {
+		t.Errorf("after ]×2, active=%d YOffset=%d, want 2 / 14 (gamma)", d.activeFile, d.viewport.YOffset)
 	}
 	// At last file — ] is a no-op (no wrap).
 	d.JumpToNextFile()
-	if got := d.viewport.YOffset; got != 14 {
-		t.Errorf("after ] on last file, YOffset = %d, want 14 (stay put)", got)
+	if d.activeFile != 2 || d.viewport.YOffset != 14 {
+		t.Errorf("] at last file leaked: active=%d YOffset=%d, want stay 2 / 14", d.activeFile, d.viewport.YOffset)
 	}
 }
 
@@ -147,24 +177,45 @@ func TestDiffJumpToPrevFile(t *testing.T) {
 	d.SetPatchViewportSize(80, 5)
 	d.BeginPatchLoad("h", 1)
 	d.ApplyPatchLoaded(1, "h", threeFilePatch)
-	// Park inside file 3 (line 16, two lines past the gamma header).
-	d.viewport.SetYOffset(16)
-	d.JumpToPrevFile()
-	if got := d.viewport.YOffset; got != 14 {
-		t.Errorf("[ from inside gamma should land on gamma header, got %d, want 14", got)
+	// Walk to last file then back.
+	d.JumpToNextFile()
+	d.JumpToNextFile()
+	if d.activeFile != 2 {
+		t.Fatalf("setup: failed to reach gamma, active=%d", d.activeFile)
 	}
 	d.JumpToPrevFile()
-	if got := d.viewport.YOffset; got != 7 {
-		t.Errorf("[ #2 should land on beta header, got %d, want 7", got)
+	if d.activeFile != 1 || d.viewport.YOffset != 7 {
+		t.Errorf("[ from gamma, active=%d YOffset=%d, want 1 / 7 (beta)", d.activeFile, d.viewport.YOffset)
 	}
 	d.JumpToPrevFile()
-	if got := d.viewport.YOffset; got != 0 {
-		t.Errorf("[ #3 should land on alpha header, got %d, want 0", got)
+	if d.activeFile != 0 || d.viewport.YOffset != 0 {
+		t.Errorf("[ from beta, active=%d YOffset=%d, want 0 / 0 (alpha)", d.activeFile, d.viewport.YOffset)
 	}
 	// At first file — [ is a no-op.
 	d.JumpToPrevFile()
-	if got := d.viewport.YOffset; got != 0 {
-		t.Errorf("[ at first file, YOffset = %d, want 0 (stay put)", got)
+	if d.activeFile != 0 {
+		t.Errorf("[ at first file leaked: active=%d, want 0", d.activeFile)
+	}
+}
+
+// TestDiffJumpWorksOnPatchSmallerThanViewport guards the bug we shipped
+// in PR 3 first iteration: when the patch fits the viewport entirely
+// (MaxYOffset = 0), viewport.SetYOffset clamps to 0 and the bracket
+// keys looked like dead keys. activeFile must still advance so the
+// hint indicator updates even though the visible scroll can't move.
+func TestDiffJumpWorksOnPatchSmallerThanViewport(t *testing.T) {
+	d := newDiffModel()
+	// Viewport (height 50) bigger than patch (22 lines) → MaxYOffset = 0.
+	d.SetPatchViewportSize(80, 50)
+	d.BeginPatchLoad("h", 1)
+	d.ApplyPatchLoaded(1, "h", threeFilePatch)
+	d.JumpToNextFile()
+	if d.activeFile != 1 {
+		t.Errorf("active didn't advance on small-patch ], got %d, want 1", d.activeFile)
+	}
+	path, idx, total := d.CurrentFile()
+	if path != "beta.go" || idx != 2 || total != 3 {
+		t.Errorf("CurrentFile after ] = (%q, %d, %d), want (beta.go, 2, 3)", path, idx, total)
 	}
 }
 
@@ -175,37 +226,36 @@ func TestDiffJumpEmptyPatchIsNoop(t *testing.T) {
 	d.ApplyPatchLoaded(1, "h", "")
 	d.JumpToNextFile()
 	d.JumpToPrevFile()
+	if d.activeFile != -1 {
+		t.Errorf("empty patch active should stay -1, got %d", d.activeFile)
+	}
 	if got := d.viewport.YOffset; got != 0 {
 		t.Errorf("empty patch jumps should be no-ops, YOffset = %d", got)
 	}
 }
 
-func TestDiffCurrentFileTracksYOffset(t *testing.T) {
+func TestDiffScrollSyncsActiveFile(t *testing.T) {
 	d := newDiffModel()
 	d.SetPatchViewportSize(80, 5)
 	d.BeginPatchLoad("h", 1)
 	d.ApplyPatchLoaded(1, "h", threeFilePatch)
-
-	cases := []struct {
-		yOffset   int
-		wantPath  string
-		wantIndex int
-		wantTotal int
-	}{
-		{0, "alpha.go", 1, 3},
-		{3, "alpha.go", 1, 3}, // inside alpha
-		{7, "beta.go", 2, 3},  // on beta header
-		{10, "beta.go", 2, 3}, // inside beta
-		{14, "gamma.go", 3, 3},
-		{20, "gamma.go", 3, 3}, // past last header — still last file
+	// Simulate the user mashing j past the beta header. We can't easily
+	// fake a KeyMsg without sending it via viewport.Update, so just call
+	// SetYOffset directly and then invoke the sync.
+	d.viewport.SetYOffset(10) // inside beta
+	d.syncActiveFileFromYOffset()
+	if d.activeFile != 1 {
+		t.Errorf("scroll into beta did not sync active, got %d, want 1", d.activeFile)
 	}
-	for _, tc := range cases {
-		d.viewport.SetYOffset(tc.yOffset)
-		path, idx, total := d.CurrentFile()
-		if path != tc.wantPath || idx != tc.wantIndex || total != tc.wantTotal {
-			t.Errorf("YOffset=%d → (%q, %d, %d), want (%q, %d, %d)",
-				tc.yOffset, path, idx, total, tc.wantPath, tc.wantIndex, tc.wantTotal)
-		}
+	d.viewport.SetYOffset(17) // inside gamma
+	d.syncActiveFileFromYOffset()
+	if d.activeFile != 2 {
+		t.Errorf("scroll into gamma did not sync active, got %d, want 2", d.activeFile)
+	}
+	d.viewport.SetYOffset(3) // back inside alpha
+	d.syncActiveFileFromYOffset()
+	if d.activeFile != 0 {
+		t.Errorf("scroll back to alpha did not sync active, got %d, want 0", d.activeFile)
 	}
 }
 
@@ -231,5 +281,8 @@ func TestDiffClosePatchResetsFiles(t *testing.T) {
 	d.ClosePatch()
 	if d.files != nil {
 		t.Errorf("ClosePatch must release files, got %v", d.files)
+	}
+	if d.activeFile != -1 {
+		t.Errorf("ClosePatch must reset activeFile, got %d", d.activeFile)
 	}
 }

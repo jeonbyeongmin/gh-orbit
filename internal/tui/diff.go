@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -38,11 +39,27 @@ type diffModel struct {
 	// the order they appear. Empty for merge commits with no diff and for
 	// "no changes" rendering. Populated by ApplyPatchLoaded.
 	files []fileBoundary
+	// activeFile is the index into files[] that the reviewer is currently
+	// reading. Tracked independently of viewport.YOffset because the
+	// viewport clamps SetYOffset to MaxYOffset — on patches that fit the
+	// viewport entirely, YOffset can't advance past 0, but the reviewer
+	// still expects `]` / `[` to move the "current file" indicator. -1
+	// means no file is active (empty / failed / not-yet-loaded patch).
+	activeFile int
+}
+
+func (d *diffModel) resetActiveFile() {
+	if len(d.files) > 0 {
+		d.activeFile = 0
+	} else {
+		d.activeFile = -1
+	}
 }
 
 func newDiffModel() diffModel {
 	return diffModel{
-		viewport: viewport.New(0, 0),
+		viewport:   viewport.New(0, 0),
+		activeFile: -1,
 	}
 }
 
@@ -62,6 +79,7 @@ func (d *diffModel) BeginPatchLoad(hash string, reqID uint64) {
 	d.err = nil
 	d.reqID = reqID
 	d.files = nil
+	d.activeFile = -1
 	d.viewport.SetContent("")
 	d.viewport.GotoTop()
 }
@@ -71,6 +89,7 @@ func (d *diffModel) BeginPatchLoad(hash string, reqID uint64) {
 func (d *diffModel) ClosePatch() {
 	d.patchText = ""
 	d.files = nil
+	d.activeFile = -1
 	d.viewport.SetContent("")
 }
 
@@ -88,6 +107,7 @@ func (d *diffModel) ApplyPatchLoaded(reqID uint64, hash, text string) {
 	d.loadingPatch = false
 	d.patchText = text
 	d.files = parseFileBoundaries(text)
+	d.resetActiveFile()
 	d.err = nil
 	if d.patchViewportInit {
 		d.viewport.SetContent(text)
@@ -104,51 +124,57 @@ func (d *diffModel) ApplyPatchFailed(reqID uint64, hash string, err error) {
 }
 
 // ScrollPatch forwards a scroll key to the patch viewport and returns any cmd
-// the viewport produced (mouse-wheel handling, etc.) so the caller can batch it.
+// the viewport produced (mouse-wheel handling, etc.) so the caller can batch
+// it. After the viewport advances, activeFile re-syncs from the new YOffset
+// so the hint indicator stays consistent with what the reviewer is reading —
+// scrolling past a `diff --git` header with `j` updates the indicator the
+// same as if they had pressed `]`.
 func (d *diffModel) ScrollPatch(msg tea.KeyMsg) tea.Cmd {
 	var cmd tea.Cmd
 	d.viewport, cmd = d.viewport.Update(msg)
+	d.syncActiveFileFromYOffset()
 	return cmd
 }
 
-// JumpToNextFile sets the viewport offset to the next `diff --git` header
-// strictly below the current cursor. No-op if already on/past the last
-// header (no wrap — the user pressing `]` at the last file expects no
-// motion, not a surprise jump back to the top).
+// JumpToNextFile advances activeFile by one and slides the viewport down
+// to the new file's `diff --git` header. No wrap — at the last file the
+// call is a no-op (a surprise jump back to the top reads as a bug, not a
+// feature). The viewport's SetYOffset clamps to MaxYOffset on patches
+// shorter than the viewport, so the visible scroll may not move; the
+// activeFile bump is still meaningful because the hint indicator picks
+// it up. -1 / single-file / empty are all silent no-ops.
 func (d *diffModel) JumpToNextFile() {
-	cur := d.viewport.YOffset
-	for _, f := range d.files {
-		if f.line > cur {
-			d.viewport.SetYOffset(f.line)
-			return
-		}
+	if d.activeFile < 0 || d.activeFile >= len(d.files)-1 {
+		return
 	}
+	d.activeFile++
+	d.viewport.SetYOffset(d.files[d.activeFile].line)
 }
 
-// JumpToPrevFile sets the viewport offset to the previous `diff --git`
-// header strictly above the current cursor. No-op when no boundary
-// precedes the cursor.
+// JumpToPrevFile retreats activeFile by one and slides the viewport up
+// to the new file's header. No wrap — at the first file the call is a
+// no-op. Same clamp story as JumpToNextFile: on short patches the
+// visible scroll won't move, but the indicator still updates.
 func (d *diffModel) JumpToPrevFile() {
-	cur := d.viewport.YOffset
-	for i := len(d.files) - 1; i >= 0; i-- {
-		if d.files[i].line < cur {
-			d.viewport.SetYOffset(d.files[i].line)
-			return
-		}
+	if d.activeFile <= 0 {
+		return
 	}
+	d.activeFile--
+	d.viewport.SetYOffset(d.files[d.activeFile].line)
 }
 
-// CurrentFile returns the path of the file the viewport is currently
-// inside (largest header line <= YOffset), the 1-based index of that
-// file, and the total file count. Returns ("", 0, 0) when there are no
-// files (merge commits with empty diff) or the cursor sits above the
-// first header (transient — viewport always starts at the first header).
-func (d diffModel) CurrentFile() (path string, index, total int) {
+// syncActiveFileFromYOffset finds the largest file boundary at or below
+// the current YOffset and parks activeFile there. Called after every
+// scroll so manual j/k navigation keeps the indicator in sync. When the
+// viewport is parked above the first boundary (transient — viewport
+// always starts at the first header on load), the active stays at 0.
+func (d *diffModel) syncActiveFileFromYOffset() {
 	if len(d.files) == 0 {
-		return "", 0, 0
+		d.activeFile = -1
+		return
 	}
 	cur := d.viewport.YOffset
-	idx := -1
+	idx := 0
 	for i, f := range d.files {
 		if f.line <= cur {
 			idx = i
@@ -156,10 +182,20 @@ func (d diffModel) CurrentFile() (path string, index, total int) {
 			break
 		}
 	}
-	if idx < 0 {
-		return "", 0, len(d.files)
+	d.activeFile = idx
+}
+
+// CurrentFile returns the path of the active file, its 1-based index,
+// and the total file count. Returns ("", 0, 0) when no file is active
+// (empty / failed / not-yet-loaded patch). The indicator tracks
+// activeFile rather than viewport.YOffset so it stays meaningful on
+// patches that fit the viewport entirely — see the diffModel.activeFile
+// comment for why those decouple.
+func (d diffModel) CurrentFile() (path string, index, total int) {
+	if d.activeFile < 0 || d.activeFile >= len(d.files) {
+		return "", 0, 0
 	}
-	return d.files[idx].path, idx + 1, len(d.files)
+	return d.files[d.activeFile].path, d.activeFile + 1, len(d.files)
 }
 
 func (d diffModel) PatchView() string {
@@ -189,6 +225,13 @@ func firstLine(s string) string {
 // (`"a/with space"`) have their enclosing quotes stripped; embedded
 // backslash escapes are left as-is (the reviewer reads the same string
 // git would print).
+//
+// gh-orbit invokes git with `color.ui=always` so the overlay can render
+// the green/red diff palette, which means every line — header included —
+// carries ANSI escape sequences. The parser strips them per-line before
+// matching so the prefix / "b/" lookups see the clean text. The
+// `fileBoundary.line` index counts rendered lines (newlines in the raw
+// colored text), which is exactly what viewport.SetYOffset wants.
 func parseFileBoundaries(text string) []fileBoundary {
 	if text == "" {
 		return nil
@@ -210,12 +253,17 @@ func parseFileBoundaries(text string) []fileBoundary {
 // separates the two paths — paths containing that exact sequence as a
 // substring (e.g. `dir b/file`) would mis-split, but git never emits
 // such a path without quoting it, and the quoted branch handles that.
+//
+// ANSI escapes on the line (from `color.ui=always`) are stripped before
+// matching; the path returned is plain text suitable for the bottom-hint
+// indicator.
 func parseFileDiffHeader(line string) (string, bool) {
+	plain := ansi.Strip(line)
 	const prefix = "diff --git "
-	if !strings.HasPrefix(line, prefix) {
+	if !strings.HasPrefix(plain, prefix) {
 		return "", false
 	}
-	rest := line[len(prefix):]
+	rest := plain[len(prefix):]
 	// Quoted form: `"a/<path>" "b/<path>"`. Find the last `"b/` opener
 	// and trim the trailing closing quote.
 	if strings.HasPrefix(rest, "\"a/") {

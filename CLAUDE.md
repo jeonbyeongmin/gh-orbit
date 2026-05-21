@@ -3,9 +3,9 @@
 Behavioral contract for AI coding agents working in this repo.
 
 `gh-orbit` is itself a review cockpit for AI-coding-agent work
-(see [README.md](./README.md)), and the repo is developed
-plan-driven with Claude Code as the primary author. That means two
-things for any agent reading this file:
+(see [README.md](./README.md)), and the repo is developed with
+Claude Code as the primary author. That means two things for any
+agent reading this file:
 
 1. The end user of this product is *another developer* reviewing an
    agent's diff. Bias every UX decision toward "can a reviewer figure
@@ -91,13 +91,6 @@ questions come before implementation rather than after mistakes.
 
 ## Workflow conventions
 
-This repo is plan-driven. The project-local skills handle the
-mechanics — agents should invoke them rather than reinventing each
-step:
-
-- `/brainstorming` or `/backlog` to drop ideas into `backlogs/`.
-- `/interview` to refine one backlog item into a plan in `plans/`.
-- `/execute-plan` to walk a plan from `plans/` → code change → PR.
 - `/pr` to open a PR (runs `/simplify` → format/lint → typecheck →
   build → test before push; failures are bugs to fix, not bypass
   targets).
@@ -112,8 +105,8 @@ Feature-level reference lives under [`docs/`](docs/). Start at
 [`docs/index.md`](docs/index.md) for the map. When a task touches a
 documented surface (refs pane, checkout flow, stash, branches modal,
 git wrappers, config), read the relevant doc before editing — the
-invariants there are the result of prior interviews and shouldn't be
-silently overridden.
+invariants there are deliberate and shouldn't be silently
+overridden.
 
 ## gstack
 

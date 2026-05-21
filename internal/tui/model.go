@@ -738,7 +738,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localChangesAddSucceededMsg:
 		m.status = "staged " + msg.path
 		m.statusStyle = statusOkS
-		return m, tea.Batch(loadStatusCmd(m.workdir), loadLocalChangesSummaryCmd(m.workdir))
+		m.sidebarWorktreesReqID++
+		return m, tea.Batch(
+			loadStatusCmd(m.workdir),
+			loadLocalChangesSummaryCmd(m.workdir),
+			loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
+		)
 
 	case localChangesAddFailedMsg:
 		m.status = "stage " + msg.path + ": " + firstLine(msg.err.Error())
@@ -748,7 +753,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localChangesRestoreSucceededMsg:
 		m.status = "unstaged " + msg.path
 		m.statusStyle = statusOkS
-		return m, tea.Batch(loadStatusCmd(m.workdir), loadLocalChangesSummaryCmd(m.workdir))
+		m.sidebarWorktreesReqID++
+		return m, tea.Batch(
+			loadStatusCmd(m.workdir),
+			loadLocalChangesSummaryCmd(m.workdir),
+			loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
+		)
 
 	case localChangesRestoreFailedMsg:
 		m.status = "unstage " + msg.path + ": " + firstLine(msg.err.Error())
@@ -1376,10 +1386,13 @@ func (m *Model) cancelStream() {
 // stream's commitsStreamDoneMsg.err. The sidebar's cursor state
 // (onWorktree / onLocalChanges) is preserved across the reload by
 // refModel.ResetForReload — no per-ref persist handle needed now that the
-// refs LIST is gone.
+// refs LIST is gone. Worktree inventory + its dirty fan-out are refreshed
+// here too — sidebarWorktreesReqID bumps before dispatch so any in-flight
+// fan-out from the previous load is invalidated by stale-drop.
 func (m *Model) reloadCmd() tea.Cmd {
 	m.cancelStream()
 	m.streamReqID++
+	m.sidebarWorktreesReqID++
 	resetCmd := m.graph.ResetForReload()
 	m.refs.ResetForReload()
 	return tea.Batch(
@@ -1387,6 +1400,7 @@ func (m *Model) reloadCmd() tea.Cmd {
 		loadCommitsCmd(m.workdir, m.currentRefs, m.streamReqID),
 		loadRefsCmd(m.workdir),
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
+		loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 	)
 }
 

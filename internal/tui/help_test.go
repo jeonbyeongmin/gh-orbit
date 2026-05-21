@@ -6,12 +6,11 @@ import (
 )
 
 // TestHelpDataCoverage guards against silently dropping a binding from the
-// expanded panel. The list mirrors the keys that the previous one-line
-// helpTextNormal carried — every refactor of the panel must keep them all.
+// expanded panel. The list mirrors the keys that the focused-pane bottom
+// hint carries — every refactor of the panel must keep them all.
 func TestHelpDataCoverage(t *testing.T) {
 	required := []string{
-		"tab", "h/l", "j/k", "ctrl+↑/↓", "enter",
-		"y", "d", "F", "p", "r", "q", ",", "space", "b",
+		"j/k", "enter", "y", "d", "F", "p", "r", "q", ",", "space", "b",
 	}
 
 	var have []string
@@ -28,24 +27,13 @@ func TestHelpDataCoverage(t *testing.T) {
 	}
 }
 
-func TestPaneHintsContainGlobalSuffix(t *testing.T) {
+func TestGraphHintContainsGlobalSuffix(t *testing.T) {
 	const suffix = "? help · q quit"
-	for p, hint := range paneHints() {
-		if !strings.HasSuffix(hint, suffix) {
-			t.Errorf("paneHints[%v] = %q; want suffix %q", p, hint, suffix)
-		}
+	if !strings.HasSuffix(graphHintText, suffix) {
+		t.Errorf("graphHintText = %q; want suffix %q", graphHintText, suffix)
 	}
-}
-
-// TestPaneHintsCoverEveryPane keeps renderHelpStatus from silently falling
-// back to "" when a new pane constant is added. paneCount is the sentinel,
-// so we walk [0, paneCount).
-func TestPaneHintsCoverEveryPane(t *testing.T) {
-	hints := paneHints()
-	for p := pane(0); p < paneCount; p++ {
-		if hints[p] == "" {
-			t.Errorf("paneHints missing entry for pane %v", p)
-		}
+	if !strings.HasSuffix(localChangesHintText, suffix) {
+		t.Errorf("localChangesHintText = %q; want suffix %q", localChangesHintText, suffix)
 	}
 }
 
@@ -65,7 +53,7 @@ func TestRenderHelpPanelLineCount(t *testing.T) {
 	if got > helpExpandedHeight {
 		t.Errorf("renderHelpPanel emitted %d lines, want ≤ %d", got, helpExpandedHeight)
 	}
-	for _, want := range []string{"[Global]", "[Graph]", "[Tab]", "[Local Changes]"} {
+	for _, want := range []string{"[Global]", "[Graph]", "[Local Changes]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("renderHelpPanel missing category header %q\n--- panel ---\n%s", want, out)
 		}

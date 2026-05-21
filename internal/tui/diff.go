@@ -11,14 +11,9 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
-const (
-	diffStatTimeout    = 30 * time.Second
-	diffPatchTimeout   = 60 * time.Second
-	diffDebounceWindow = 200 * time.Millisecond
-)
+const diffPatchTimeout = 60 * time.Second
 
-// diffModel hosts the full-screen patch overlay opened with `d`. The Changes
-// tab owns per-file stats and the follower patch viewport (changesModel).
+// diffModel hosts the full-screen patch overlay opened with `d`.
 type diffModel struct {
 	viewport     viewport.Model
 	currentHash  string
@@ -30,18 +25,12 @@ type diffModel struct {
 	// before that, viewport has zero dims and SetContent's truncation gives
 	// nothing back.
 	patchViewportInit bool
-	width, height     int
 }
 
 func newDiffModel() diffModel {
 	return diffModel{
 		viewport: viewport.New(0, 0),
 	}
-}
-
-func (d *diffModel) SetSize(w, h int) {
-	d.width = w
-	d.height = h
 }
 
 func (d *diffModel) SetPatchViewportSize(w, h int) {
@@ -126,18 +115,6 @@ func firstLine(s string) string {
 	return s
 }
 
-type diffStatLoadedMsg struct {
-	reqID uint64
-	hash  string
-	files []git.FileStat
-}
-
-type diffStatFailedMsg struct {
-	reqID uint64
-	hash  string
-	err   error
-}
-
 type diffPatchLoadedMsg struct {
 	reqID uint64
 	hash  string
@@ -148,36 +125,6 @@ type diffPatchFailedMsg struct {
 	reqID uint64
 	hash  string
 	err   error
-}
-
-type diffDebounceMsg struct {
-	reqID uint64
-	hash  string
-}
-
-type commitSelectedMsg struct {
-	hash string
-}
-
-// scheduleDiffStatCmd uses tea.Tick (not time.AfterFunc) because pending ticks
-// can't be cancelled mid-flight; the reqID guard in Update drops all but the
-// freshest one when the user keeps moving the cursor inside the window.
-func scheduleDiffStatCmd(reqID uint64, hash string) tea.Cmd {
-	return tea.Tick(diffDebounceWindow, func(time.Time) tea.Msg {
-		return diffDebounceMsg{reqID: reqID, hash: hash}
-	})
-}
-
-func loadDiffStatCmd(dir, hash string, reqID uint64) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), diffStatTimeout)
-		defer cancel()
-		files, err := git.Stat(ctx, dir, hash)
-		if err != nil {
-			return diffStatFailedMsg{reqID: reqID, hash: hash, err: err}
-		}
-		return diffStatLoadedMsg{reqID: reqID, hash: hash, files: files}
-	}
 }
 
 func loadDiffPatchCmd(dir, hash string, reqID uint64) tea.Cmd {

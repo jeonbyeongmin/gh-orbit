@@ -12,23 +12,20 @@ type helpEntry struct {
 	keys, action string
 }
 
-// helpCategory groups entries under a pane label (Global / Refs / Graph / Tab).
-// Categories mirror CLAUDE.md's key-bindings "Pane" column: global rows
-// fold into Global; focused-pane / Changes-tab / Commit-tab rows fold into
-// Tab; refs and graph each take their own category.
+// helpCategory groups entries under a pane label. Categories mirror
+// docs/architecture.md's key-bindings table.
 type helpCategory struct {
 	title   string
 	entries []helpEntry
 }
 
 // helpCategories is the source of truth for the expanded `?` panel. Keep
-// row order in sync with the CLAUDE.md table — the panel and the doc are
-// supposed to be readable side-by-side.
+// row order in sync with the docs/architecture.md table — the panel and
+// the doc are supposed to be readable side-by-side.
 var helpCategories = []helpCategory{
 	{
 		title: "Global",
 		entries: []helpEntry{
-			{"tab", "focus graph/tab"},
 			{"?", "help"},
 			{"q", "quit"},
 			{"F", "fetch"},
@@ -38,24 +35,16 @@ var helpCategories = []helpCategory{
 			{"w", "worktrees modal"},
 			{"b", "branches modal"},
 			{"Z", "zombie cleanup"},
-			{"ctrl+↑/↓", "resize"},
 		},
 	},
 	{
 		title: "Graph",
 		entries: []helpEntry{
-			{"enter", "checkout / ff / detach"},
-			{"d", "patch overlay"},
-		},
-	},
-	{
-		title: "Tab",
-		entries: []helpEntry{
-			{"h/l", "switch"},
 			{"j/k", "nav"},
 			{"g/G", "top/bot"},
-			{"y", "copy"},
-			{"ctrl+d/u", "scroll patch"},
+			{"enter", "checkout / ff / detach"},
+			{"d", "patch overlay"},
+			{"y", "copy hash"},
 		},
 	},
 	{
@@ -73,24 +62,15 @@ var helpCategories = []helpCategory{
 
 func helpData() []helpCategory { return helpCategories }
 
-// paneHintTexts is the focus-aware single-line bottom hint per pane. Every
-// hint ends with `? help · q quit` so the user always sees how to expand
-// the panel or quit, regardless of which pane has focus.
-var paneHintTexts = map[pane]string{
-	paneGraph: "enter checkout/ff/detach · d patch · w worktrees · b branches · Z zombies · ? help · q quit",
-	paneTab:   "h/l switch · y copy · w worktrees · b branches · ? help · q quit",
-}
+// graphHintText is the single-line bottom hint for the graph pane (the
+// only outer focus after the bottom tab pane retired). Ends with `? help
+// · q quit` so the user always sees how to expand the panel or quit.
+const graphHintText = "enter checkout/ff/detach · d patch · y copy · w worktrees · b branches · Z zombies · ? help · q quit"
 
-// paneHintsRendered is the pre-styled form of paneHintTexts. View() runs on
-// every Update so re-applying the help style per frame would burn a Lipgloss
-// render and a 3-entry map allocation for nothing.
-var paneHintsRendered = func() map[pane]string {
-	m := make(map[pane]string, len(paneHintTexts))
-	for p, t := range paneHintTexts {
-		m[p] = help.Render(t)
-	}
-	return m
-}()
+// graphHintRendered is the pre-styled form of graphHintText. View() runs
+// on every Update so re-applying the help style per frame would burn a
+// Lipgloss render for nothing.
+var graphHintRendered = help.Render(graphHintText)
 
 // localChangesHintText is the mode-specific bottom hint shown while
 // viewModeLocalChanges owns the right column. It overrides the focused
@@ -99,8 +79,6 @@ var paneHintsRendered = func() map[pane]string {
 const localChangesHintText = "space stage/unstage · tab focus · r reload · , exit · ? help · q quit"
 
 var localChangesHintRendered = help.Render(localChangesHintText)
-
-func paneHints() map[pane]string { return paneHintTexts }
 
 // fitHelpLine truncates text to width with an ellipsis when the rendered
 // content overflows, then applies the help style. Shared by the focus-aware

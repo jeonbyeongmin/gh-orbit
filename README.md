@@ -43,9 +43,10 @@ Concretely, the design assumes:
 replacement, agent-diff review); PR review/merge is the next milestone.
 Today the build wires up:
 
-- Fork-style layout — refs sidebar on the left, commit graph filling
-  the top of the right column, and a tab area below it
-  (`Commit` · `Changes`)
+- Stacked layout — top dashboard (worktrees + Local Changes meta +
+  fetch freshness) above the commit graph, which fills the rest of
+  the terminal; the per-commit diff lives in the full-screen `d`
+  patch overlay
 - Local Changes view — a dedicated `● Local Changes` row at the top
   of the refs pane, with an inline meta `N files · +X -Y · Zm ago`
   when the working tree is dirty (numstat against HEAD); `enter`
@@ -63,36 +64,22 @@ Today the build wires up:
   column
 - ref pane: lazy auto-scroll on j/k/g/G with overflow clipping (no fold
   or sticky-header — those were tried and removed)
-- `Commit` tab: author/email, ISO 8601 dates, parent hashes, `%G?`
-  sign-status (`Signed (good)`, `Unsigned`, …), full message body —
-  the agent-attribution view, basically
-- `Changes` tab: file-list cursor on the left (own colored `+N -M`
-  rendering parsed from `git show --numstat`) plus a follower patch
-  viewport on the right that reloads each time the file cursor moves
-- `d` opens a full-screen patch overlay for the focused commit;
-  `esc` / `q` close it without quitting the app
+- `d` opens a full-screen patch overlay for the focused commit
+  (entire `git show -p` body); `esc` / `q` close it without quitting
+  the app
 - vim-style key bindings (full table in [docs/architecture.md](./docs/architecture.md)):
-  - `tab` — cycle pane focus (refs → graph → tab, wraps)
-  - `j` / `k` / `g` / `G` — navigate within the focused pane
-  - `h` / `l` — switch between the Commit and Changes tabs (only when
-    the tab pane is focused)
-  - `ctrl+↑` / `ctrl+↓` — resize the graph / tab split (5% per press)
-  - `ctrl+d` / `ctrl+u` — scroll the Changes-tab patch viewport
-  - `enter` — context-sensitive on refs pane: checkout cursor ref /
-    switch to cursor worktree / open Local Changes view on the
-    `● Local Changes` sticky row
-  - `d` — delete branch (refs pane, branch row) / remove worktree
-    (refs pane, worktree row) / open patch overlay (graph / tab focus);
-    see [docs/branches.md](./docs/branches.md) and
-    [docs/worktrees.md](./docs/worktrees.md)
-  - `a` — add worktree (refs pane, only on a worktree row); see
-    [docs/worktrees.md](./docs/worktrees.md)
-  - `o` — jump graph cursor to the focused ref tip (refs pane)
-  - `Z` — bulk-clean zombie branches (refs pane): every local branch
-    merged into the default branch with `upstream:track [gone]` and
-    not checked out anywhere is offered for delete in a single confirm
-    modal; see [docs/branches.md](./docs/branches.md)
-  - `y` — copy the focused commit's hash to the clipboard (Commit tab)
+  - `j` / `k` / `g` / `G` — navigate the commit graph
+  - `enter` — context-sensitive on the graph: checkout / FF / detach
+  - `d` — open the focused commit's patch overlay
+  - `,` — open the Local Changes view (working-tree diff)
+  - `w` / `b` — open the worktrees / branches modal; see
+    [docs/worktrees.md](./docs/worktrees.md) and
+    [docs/branches.md](./docs/branches.md)
+  - `Z` — bulk-clean zombie branches (every local branch merged into
+    the default branch with `upstream:track [gone]` and not checked
+    out anywhere is offered for delete in a single confirm modal);
+    see [docs/branches.md](./docs/branches.md)
+  - `y` — copy the focused commit's hash to the clipboard
   - `F` — `git fetch --all` in the background
   - `p` — `git pull` in the background; strategy from
     `~/.config/gh-orbit/config.toml` (`[pull] strategy = "ff-only" |
@@ -116,8 +103,8 @@ Ordered by current intent, not commitment:
    unstage with per-hunk operations so reviewing an agent's working
    tree doesn't require dropping to a second shell.
 2. **PR review pane** — the original Fork+`gh dash` half: pull a PR
-   into the same three-pane layout, read its diff with the Changes
-   tab, approve / request-changes / merge inline.
+   into the same layout, read its diff in the patch overlay, approve
+   / request-changes / merge inline.
 
 Neither is wired up yet — they're listed so the project's trajectory
 is legible from the README.

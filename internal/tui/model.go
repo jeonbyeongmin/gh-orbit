@@ -1,5 +1,6 @@
 // Package tui hosts the Bubble Tea models, panes, and key bindings for the
-// Fork-style layout (refs sidebar · commit graph on top · tab area on bottom).
+// stacked layout (top dashboard · commit graph filling the rest). The
+// per-commit diff lives in the full-screen `d` patch overlay.
 package tui
 
 import (
@@ -37,17 +38,6 @@ type pane int
 
 const (
 	paneGraph pane = iota
-	paneTab
-	paneCount
-)
-
-// splitRatioDefault, splitRatioMin, splitRatioMax bound the graph/tab vertical
-// split. ctrl+up / ctrl+down step by 5 inside [min, max].
-const (
-	splitRatioDefault = 60
-	splitRatioMin     = 20
-	splitRatioMax     = 80
-	splitRatioStep    = 5
 )
 
 // refsAllSentinel is the git revision spec that means "every ref". Used as the
@@ -92,11 +82,10 @@ const (
 	// worktree-remove pattern and keep the cursor anchored on the row being
 	// acted upon. Only y/Y/esc/ctrl+c are accepted.
 	viewModeRefDeleteConfirm
-	// viewModeLocalChanges replaces the right column (graph + tab) with a
-	// file-tree + diff layout for working-tree work. refs sidebar stays
-	// put so the branch context is unchanged across the toggle. Entered
-	// via the `,` keybind or by `enter` on the sticky `● Local Changes`
-	// row in the refs pane.
+	// viewModeLocalChanges replaces the graph view with a file-tree + diff
+	// layout for working-tree work. The top dashboard stays put so the
+	// branch context is unchanged across the toggle. Entered via the `,`
+	// keybind.
 	viewModeLocalChanges
 	// viewModeWorktreeAddInput hosts the branch-name textinput for the
 	// add-worktree action, triggered by `a` on a worktree row in the
@@ -130,9 +119,9 @@ const (
 
 // helpExpandedHeight is the row count reserved for the bottom area when
 // the `?` help panel is open. Each helpData category renders as a 1-line
-// header + 1-line entries row, so 5 categories × 2 rows = 10. paneSizes
+// header + 1-line entries row, so 3 categories × 2 rows = 6. paneSizes
 // clamps this on small terminals.
-const helpExpandedHeight = 8
+const helpExpandedHeight = 6
 
 // pendingCheckout remembers what the user was trying to check out so the
 // confirm modal's hint can name the chain it's aborting. detached=true
@@ -175,19 +164,13 @@ type Model struct {
 	refs          refModel
 	graph         graphModel
 	diff          diffModel
-	changes       changesModel
-	commitDetail  commitDetailModel
-	tabs          tabsModel
-	// splitRatio is the percentage of the right-column height allocated to the
-	// graph; the tab area takes the remainder. Bounded by splitRatioMin/Max.
-	splitRatio int
 	// statusTickSeq counts every status line that arms a tea.Tick auto-clear
 	// (today: the switch-confirmation in switchWorktree). The dispatcher
 	// captures the value at send time; on receipt the handler only clears
 	// when m.statusTickSeq still matches, so a follow-up action that bumps
 	// the counter can't be wiped by a stale tick.
 	statusTickSeq uint64
-	// diffReqID counts every diff dispatch (cursor change, `d` press). Stale
+	// diffReqID counts every patch-overlay dispatch (`d` press). Stale
 	// in-flight git show responses compare their reqID against this and drop
 	// themselves if they no longer match.
 	diffReqID uint64
@@ -279,10 +262,10 @@ type Model struct {
 	// detect-or-delete cmd is running so a second press can't fork a
 	// parallel scan or double-delete the same list.
 	zombieInFlight bool
-	// localChanges hosts the file-tree + diff viewport that the right
-	// column renders when mode == viewModeLocalChanges. The graph / tab
-	// models are left untouched across the toggle so exiting the mode
-	// snaps back to the exact previous state.
+	// localChanges hosts the file-tree + diff viewport rendered in place
+	// of the graph when mode == viewModeLocalChanges. The graph model is
+	// left untouched across the toggle so exiting the mode snaps back to
+	// the exact previous state.
 	localChanges localChangesModel
 	// localChangesReqID counts every diff dispatch inside the Local
 	// Changes mode. ApplyDiffLoaded compares against this + (path,
@@ -307,11 +290,7 @@ func New() Model {
 		refs:                  newRefsModel(),
 		graph:                 newGraphModel(),
 		diff:                  newDiffModel(),
-		changes:               newChangesModel(),
-		commitDetail:          newCommitDetailModel(),
-		tabs:                  newTabsModel(),
 		localChanges:          newLocalChangesModel(),
-		splitRatio:            splitRatioDefault,
 		currentRefs:           []string{refsAllSentinel},
 		streamReqID:           1,
 		sidebarWorktreesReqID: 1,
@@ -542,46 +521,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 
-	case commitSelectedMsg:
-		return m, m.beginDiffStat(msg.hash)
-
-	case diffDebounceMsg:
-		// Drop stale ticks — if the user kept moving the cursor inside the
-		// 200ms window, m.diffReqID has already advanced past this tick's
-		// reqID and the latest tick wins. Stat (Changes) and metadata
-		// (Commit) fan out from the same tick so a fast j-mash spawns one
-		// pair of git processes per stop, not one per cursor row.
-		if msg.reqID != m.diffReqID {
-			return m, nil
-		}
-		return m, tea.Batch(
-			loadDiffStatCmd(m.workdir, msg.hash, msg.reqID),
-			loadCommitDetailCmd(m.workdir, msg.hash, msg.reqID),
-		)
-
-	case diffStatLoadedMsg:
-		if msg.reqID != m.diffReqID {
-			return m, nil
-		}
-		return m, m.changes.SetFiles(msg.hash, msg.files)
-	case diffStatFailedMsg:
-		if msg.reqID != m.diffReqID {
-			return m, nil
-		}
-		m.changes.ApplyStatFailed(msg.hash, msg.err)
-		return m, nil
-	case filePatchLoadedMsg:
-		m.changes.ApplyFilePatchLoaded(msg.reqID, msg.hash, msg.path, msg.text)
-		return m, nil
-	case filePatchFailedMsg:
-		m.changes.ApplyFilePatchFailed(msg.reqID, msg.hash, msg.path, msg.err)
-		return m, nil
-	case commitDetailLoadedMsg:
-		m.commitDetail.ApplyDetailLoaded(msg.reqID, msg.hash, msg.detail)
-		return m, nil
-	case commitDetailFailedMsg:
-		m.commitDetail.ApplyDetailFailed(msg.reqID, msg.hash, msg.err)
-		return m, nil
 	case diffPatchLoadedMsg:
 		m.diff.ApplyPatchLoaded(msg.reqID, msg.hash, msg.text)
 		return m, nil
@@ -1120,9 +1059,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.applyPaneSizes()
 			return m, nil
-		case "tab":
-			m.focused = (m.focused + 1) % paneCount
-			return m, nil
 		case "F":
 			if m.fetchInFlight {
 				return m, nil
@@ -1148,14 +1084,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "local changes"
 			m.statusStyle = statusOkS
 			return m, cmd
-		case "ctrl+up":
-			m.adjustSplit(-splitRatioStep)
-			return m, nil
-		case "ctrl+down":
-			m.adjustSplit(splitRatioStep)
-			return m, nil
 		case "y":
-			m = m.copyHashFromCommitTab()
+			m = m.copyHashFromGraph()
 			return m, nil
 		case "R":
 			// Swallow so capital R doesn't fall through to the focused
@@ -1174,13 +1104,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusBusyS
 			return m, detectZombieBranchesCmd(m.workdir)
 		case "enter":
-			// Graph focus only — tab focus falls through to its own
-			// sub-model below. The sidebar is retired in PR B2; worktree
-			// switch + Local Changes enter no longer come from a sidebar
-			// row (`,` global and `w` modal cover those entries).
-			if m.focused != paneGraph {
-				break
-			}
+			// Graph is the only focused pane. The sidebar was retired in
+			// PR B2; the bottom tab pane was retired with the subtract-
+			// bottom-pane change. Worktree switch + Local Changes enter
+			// come from `w` modal and `,` global.
 			if m.actionInFlight || m.checkoutInFlight || m.ffInFlight {
 				return m, nil
 			}
@@ -1225,69 +1152,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// rows used to host these actions on cursor row).
 			return m.beginWorktreesModal()
 		}
-		switch m.focused {
-		case paneGraph:
-			var cmd tea.Cmd
-			m.graph, cmd = m.graph.Update(msg)
-			return m, cmd
-		case paneTab:
-			switch msg.String() {
-			case "h", "left":
-				m.tabs.Prev()
-				return m, nil
-			case "l", "right":
-				m.tabs.Next()
-				return m, nil
-			case "ctrl+d", "ctrl+u":
-				// Changes-tab patch viewport only — Commit tab intentionally
-				// no-ops on these so the bindings stay unambiguous between
-				// the two tabs (viewport's default keymap would otherwise
-				// claim them).
-				if m.tabs.Active() == tabChanges {
-					m.changes.ScrollPatch(msg)
-				}
-				return m, nil
-			case "j", "k", "down", "up", "pgdown", "pgup", "g", "G":
-				// Commit tab → body viewport scroll; Changes tab → file-list
-				// cursor (which loads a fresh patch inside changesModel.Update).
-				// pgdown/pgup live here rather than with ctrl+d/u above so the
-				// Commit tab honors them too.
-				if m.tabs.Active() == tabCommit {
-					return m, m.commitDetail.ScrollContent(msg)
-				}
-				var cmd tea.Cmd
-				m.changes, cmd = m.changes.Update(msg)
-				return m, cmd
-			}
-		}
+		var cmd tea.Cmd
+		m.graph, cmd = m.graph.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
 
 // applyPaneSizes recomputes the inner content dimensions for every sub-model
-// from the current width/height/splitRatio. refs is a pure storage model
+// from the current width/height. refs is a pure storage model
 // post-sidebar-shell-subtract, so it owns no size of its own — the
 // dashboard reads m.refs directly with the width handed to it by View.
 func (m *Model) applyPaneSizes() {
 	s := m.paneSizes()
 	m.graph.SetSize(s.graphW, s.graphH)
-	m.diff.SetSize(s.tabW, s.tabH)
-	// tabBody renders header + spacer (2 lines) above the tab content.
-	tabBodyH := s.tabH - 2
-	if tabBodyH < 1 {
-		tabBodyH = 1
-	}
-	m.changes.SetSize(s.tabW, tabBodyH)
-	m.commitDetail.SetSize(s.tabW, tabBodyH)
 	if m.mode == viewModeLocalChanges {
 		m.localChanges.SetSize(s.lcTreeW, s.lcTreeH, s.lcDiffW, s.lcDiffH)
 	}
 }
 
 // enterLocalChangesMode flips into the working-tree view and kicks off the
-// first status load. refs / graph / tab models are left untouched so exit
-// returns to the exact prior state. focused is parked on paneGraph (= "right
-// column has focus") and the sub-focus inside that column starts on the tree.
+// first status load. refs / graph models are left untouched so exit returns
+// to the exact prior state. focused stays on paneGraph (the only outer
+// focus); the sub-focus inside the mode starts on the tree.
 func (m *Model) enterLocalChangesMode() tea.Cmd {
 	m.mode = viewModeLocalChanges
 	m.focused = paneGraph
@@ -1382,40 +1269,21 @@ func (m Model) dispatchLocalChangesStage() (tea.Model, tea.Cmd) {
 	return m, addCmd(m.workdir, e.Path)
 }
 
-// adjustSplit nudges the graph/tab split ratio by delta percent and reflows
-// the panes if the value actually moved (clamped to [splitRatioMin, Max]).
-func (m *Model) adjustSplit(delta int) {
-	next := m.splitRatio + delta
-	if next < splitRatioMin {
-		next = splitRatioMin
-	} else if next > splitRatioMax {
-		next = splitRatioMax
-	}
-	if next == m.splitRatio {
-		return
-	}
-	m.splitRatio = next
-	m.applyPaneSizes()
-}
-
-// copyHashFromCommitTab handles `y`: only acts when paneTab is focused and
-// the Commit tab is the active sub-tab; surfaces success ("copied <short>")
-// or the OS error (typical: xclip/xsel missing on Linux) through the status
-// line so the user always knows whether the clipboard was actually written.
-func (m Model) copyHashFromCommitTab() Model {
-	if m.focused != paneTab || m.tabs.Active() != tabCommit {
+// copyHashFromGraph handles `y`: copies the focused commit's full hash to
+// the OS clipboard. Surfaces success ("copied <short>") or the OS error
+// (typical: xclip/xsel missing on Linux) through the status line so the
+// user always knows whether the clipboard was actually written.
+func (m Model) copyHashFromGraph() Model {
+	c, ok := m.graph.Selected()
+	if !ok {
 		return m
 	}
-	hash := m.commitDetail.CurrentHash()
-	if hash == "" {
-		return m
-	}
-	if err := clipboardWrite(hash); err != nil {
+	if err := clipboardWrite(c.Hash); err != nil {
 		m.status = "clipboard unavailable: " + firstLine(err.Error())
 		m.statusStyle = statusErrS
 		return m
 	}
-	m.status = "copied " + shortHash(hash)
+	m.status = "copied " + shortHash(c.Hash)
 	m.statusStyle = statusOkS
 	return m
 }
@@ -1469,18 +1337,6 @@ func ffLabel(branch string, advance int) string {
 	return fmt.Sprintf("fast-forward: %s +%d", branch, advance)
 }
 
-// beginDiffStat advances the request id, marks both Changes and Commit
-// panes loading for the given hash, and schedules a single debounced tick
-// that fans out to the stat (Changes) and metadata (Commit) git calls. Used
-// by graph cursor moves (commitSelectedMsg) and ref-tip jumps
-// (refSelectedMsg).
-func (m *Model) beginDiffStat(hash string) tea.Cmd {
-	m.diffReqID++
-	m.changes.MarkPending(hash)
-	m.commitDetail.MarkLoading(hash, m.diffReqID)
-	return scheduleDiffStatCmd(m.diffReqID, hash)
-}
-
 // tryHEADJump attempts to point the graph cursor at HEAD using the hash
 // captured from the post-pull refsLoadedMsg. JumpToHash returns false until
 // the matching commit has actually streamed in, so the caller invokes this
@@ -1525,16 +1381,14 @@ func (m *Model) reloadCmd() tea.Cmd {
 }
 
 // paneSizes holds the inner content dimensions for each rendered box. The
-// outer (bordered) widths/heights are content + 2 along each axis. The new
-// layout stacks graph above the tab area in the right column; refs is a
-// full-height left sidebar.
+// outer (bordered) widths/heights are content + 2 along each axis. The
+// layout stacks the top dashboard above the graph, full terminal width.
 type paneSizes struct {
 	dashW, dashH   int
 	graphW, graphH int
-	tabW, tabH     int
-	// lcTreeW/H, lcDiffW/H carry the right-column split when mode ==
-	// viewModeLocalChanges. Zero in any other mode — graphW/H and tabW/H
-	// stay authoritative there.
+	// lcTreeW/H, lcDiffW/H carry the in-mode split when mode ==
+	// viewModeLocalChanges. Zero in any other mode — graphW/H stays
+	// authoritative there.
 	lcTreeW, lcTreeH int
 	lcDiffW, lcDiffH int
 }
@@ -1558,36 +1412,32 @@ func (m Model) paneSizes() paneSizes {
 	if mainH < 1 {
 		mainH = 1
 	}
-	// Sidebar retired in PR B2 — the dashboard (top) + graph + tab now
-	// stack vertically across the full terminal width. Each box claims 2
-	// cols of border around its content.
-	rightOuterW := m.width
+	// Sidebar retired in PR B2; the bottom tab pane retired with the
+	// subtract-bottom-pane change. The dashboard (top) + graph now stack
+	// vertically across the full terminal width. Each box claims 2 cols
+	// of border around its content.
+	outerW := m.width
 
 	// Dashboard: header + N worktree rows + separator + 2 border rows.
 	// Data-driven; 0 (no dashboard) when there are no worktrees yet.
 	var dashOuterH int
 	if inner := dashboardLines(m); inner > 0 {
 		dashOuterH = inner + 2
-		if dashOuterH > mainH-6 {
-			// Never starve graph + tab; cap dashboard at mainH-6 so each
-			// of graph/tab gets ≥3 outer rows.
-			dashOuterH = mainH - 6
+		if dashOuterH > mainH-3 {
+			// Never starve the graph; cap the dashboard so the graph
+			// gets ≥3 outer rows.
+			dashOuterH = mainH - 3
 			if dashOuterH < 0 {
 				dashOuterH = 0
 			}
 		}
 	}
-	rightRemain := mainH - dashOuterH
-	graphOuterH := rightRemain * m.splitRatio / 100
+	graphOuterH := mainH - dashOuterH
 	if graphOuterH < 3 {
 		graphOuterH = 3
 	}
-	if graphOuterH > rightRemain-3 {
-		graphOuterH = rightRemain - 3
-	}
-	tabOuterH := rightRemain - graphOuterH
 
-	s.dashW = rightOuterW - 2
+	s.dashW = outerW - 2
 	s.dashH = dashOuterH - 2
 	if s.dashW < 1 {
 		s.dashW = 1
@@ -1596,35 +1446,26 @@ func (m Model) paneSizes() paneSizes {
 		s.dashH = 0
 	}
 
-	s.graphW = rightOuterW - 2
-	s.tabW = rightOuterW - 2
+	s.graphW = outerW - 2
 	if s.graphW < 1 {
 		s.graphW = 1
 	}
-	if s.tabW < 1 {
-		s.tabW = 1
-	}
 	s.graphH = graphOuterH - 2
-	s.tabH = tabOuterH - 2
 	if s.graphH < 1 {
 		s.graphH = 1
 	}
-	if s.tabH < 1 {
-		s.tabH = 1
-	}
 
-	// Local Changes mode subdivides the right column horizontally
-	// (tree | diff) instead of vertically (graph / tab). Reuse the
-	// Changes-tab ratio (35% to the file list) for layout consistency.
+	// Local Changes mode replaces the graph with a horizontal tree | diff
+	// split (35% to the file list). Reuses the full outer width.
 	if m.mode == viewModeLocalChanges {
-		treeOuterW := rightOuterW * changesFileListRatio / 100
+		treeOuterW := outerW * localChangesTreeRatio / 100
 		if treeOuterW < 12 {
 			treeOuterW = 12
 		}
-		if treeOuterW > rightOuterW-12 {
-			treeOuterW = rightOuterW - 12
+		if treeOuterW > outerW-12 {
+			treeOuterW = outerW - 12
 		}
-		diffOuterW := rightOuterW - treeOuterW
+		diffOuterW := outerW - treeOuterW
 		s.lcTreeW = treeOuterW - 2
 		s.lcTreeH = mainH - 2
 		s.lcDiffW = diffOuterW - 2
@@ -1644,6 +1485,11 @@ func (m Model) paneSizes() paneSizes {
 	}
 	return s
 }
+
+// localChangesTreeRatio is the percent of the full width given to the
+// tree column in viewModeLocalChanges; the diff viewport takes the
+// remainder. Tuned so paths still breathe on a typical 120-col terminal.
+const localChangesTreeRatio = 35
 
 // helpReservedRows returns how many bottom rows the `?` help panel
 // claims. Defaults to helpExpandedHeight; small terminals halve it.
@@ -1803,12 +1649,11 @@ func (m Model) View() string {
 		main = lipgloss.JoinHorizontal(lipgloss.Top, treeBox, diffBox)
 	} else {
 		graphBox := boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
-		tabBox := boxStyle(m.focused == paneTab).Width(s.tabW).Height(s.tabH).Render(m.tabBody())
 		if s.dashH > 0 {
 			dashBox := boxStyle(false).Width(s.dashW).Height(s.dashH).Render(renderTopDashboard(m, s.dashW))
-			main = lipgloss.JoinVertical(lipgloss.Left, dashBox, graphBox, tabBox)
+			main = lipgloss.JoinVertical(lipgloss.Left, dashBox, graphBox)
 		} else {
-			main = lipgloss.JoinVertical(lipgloss.Left, graphBox, tabBox)
+			main = graphBox
 		}
 	}
 	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
@@ -1839,19 +1684,6 @@ func boxStyle(focused bool) lipgloss.Style {
 	return borderUnfocused
 }
 
-// tabBody renders the active tab's body underneath the tabsModel header.
-func (m Model) tabBody() string {
-	header := m.tabs.HeaderView()
-	var body string
-	switch m.tabs.Active() {
-	case tabCommit:
-		body = m.commitDetail.View()
-	case tabChanges:
-		body = m.changes.View()
-	}
-	return header + "\n\n" + body
-}
-
 // renderHelpStatus lays out the bottom line as "help … status". When the
 // terminal is too narrow to fit both, status wins — the user just triggered
 // an action and seeing its outcome matters more than the help reminder.
@@ -1880,8 +1712,8 @@ func (m Model) renderHelpStatus() string {
 	case viewModeHelp:
 		return renderHelpPanel(m.width, m.helpReservedRows())
 	}
-	hint := paneHintTexts[m.focused]
-	hintRendered := paneHintsRendered[m.focused]
+	hint := graphHintText
+	hintRendered := graphHintRendered
 	if m.mode == viewModeLocalChanges {
 		hint = localChangesHintText
 		hintRendered = localChangesHintRendered

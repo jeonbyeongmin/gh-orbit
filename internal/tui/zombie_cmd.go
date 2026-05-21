@@ -21,12 +21,6 @@ var (
 	zombieBaselineExec = git.ResolveDefaultBranch
 )
 
-// zombieDetectRequestedMsg fires when refs.go observes `Z` on the refs
-// pane and dispatches a background detect run. Kept as a distinct seam
-// (rather than calling git directly from refs.Update) so the cleanup flow
-// stays consistent with the refsaction.go / local_changes_cmd.go pattern.
-type zombieDetectRequestedMsg struct{}
-
 // zombieDetectedMsg carries the detection result back to the root model.
 // branches is empty when nothing qualifies; the root model surfaces a
 // "no zombies" status line instead of opening the confirm modal.

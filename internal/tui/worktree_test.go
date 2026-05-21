@@ -29,29 +29,6 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// stripANSI removes ANSI escape sequences (CSI ... letter) so renderRow
-// output can be compared against plain strings.
-func stripANSI(s string) string {
-	var b strings.Builder
-	in := false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == 0x1b && i+1 < len(s) && s[i+1] == '[' {
-			in = true
-			i++
-			continue
-		}
-		if in {
-			if c >= 0x40 && c <= 0x7e {
-				in = false
-			}
-			continue
-		}
-		b.WriteByte(c)
-	}
-	return b.String()
-}
-
 func TestSwitchWorktreeRejectsMissingPath(t *testing.T) {
 	m := New()
 	prevWorkdir := m.workdir

@@ -3,19 +3,16 @@
 Multi-worktree is a first-class cockpit concept. The shape it's built
 for: an AI agent occupies worktree A and is mid-task; the reviewer pops
 into gh-orbit, sees every tree in the top dashboard at a glance,
-switches to worktree B for a quick read via the `w` modal, and switches
-back — all in-process, no second terminal, no disturbance to the
-agent's session.
+presses `w` to grab the cursor in the dashboard, picks worktree B,
+hits `enter` to switch — all in-process, no second terminal, no
+disturbance to the agent's session.
 
-Two surfaces share the worktree state, in different roles:
-
-- **Top dashboard** — read-only band rendered above the graph pane on
-  every frame. Lists every entry from `git worktree list --porcelain`,
-  marks the current entry with `▶`, paints a `●` dirty marker (`?` on
-  timeout). The dashboard is always visible; it never grabs the cursor.
-- **`w` modal** — centered overlay listing every worktree with a
-  cursor. The single entry for the worktree workflow (switch / add /
-  remove). Opens via the global `w` keybind.
+The top dashboard is the single worktree surface. Rendered above the
+graph pane on every frame, it lists every entry from
+`git worktree list --porcelain`, marks the current entry with `▶`, and
+paints a `●` dirty marker (`?` on timeout). The dashboard is always
+visible. By default it's read-only; pressing `w` toggles focus on so
+the dashboard grabs the cursor and j/k/enter/a/d/esc route to it.
 
 ## Dashboard rendering
 
@@ -51,13 +48,15 @@ Dirty marker on each row:
   the dashboard never silently lies about a slow / stuck worktree.
 - (none) — clean, OR not yet loaded.
 
-The dashboard is read-only — no cursor, no key handling. `refModel.SetWorktrees(entries, currentPath)` populates the state; per-tree fan-out fires after every `worktreesLoadedMsg` and tags each row's `worktreeDirty` / `worktreeTimedOut` state.
+The dashboard is read-only by default; pressing `w` toggles focus on
+so j/k/enter/a/d/esc route to the dashboard's cursor. `refModel.SetWorktrees(entries, currentPath)` populates the state; per-tree fan-out fires after every `worktreesLoadedMsg` and tags each row's `worktreeDirty` / `worktreeTimedOut` state.
 
-## `w` modal (`viewModeWorktreesModal`)
+## Dashboard focus mode (`paneDashboard`)
 
-The cursor surface for worktree actions. Opens via the global `w`
-keybind from `viewModeNormal`. Mirrors the branches modal (`b`)
-pattern.
+The cursor surface for worktree actions. Toggled by the global `w`
+keybind from `viewModeNormal`. Press `w` again or `esc` to exit;
+switching / add / remove all keep focus on so a follow-up action can
+fire from the same surface (only `esc` / `w` exits).
 
 | Key       | Action                                                              |
 | --------- | ------------------------------------------------------------------- |
@@ -65,11 +64,25 @@ pattern.
 | `enter`   | switch to the worktree under the cursor                             |
 | `a`       | open the add-worktree input sub-modal                               |
 | `d`       | open the remove-worktree confirm sub-modal (refuses main + current entry) |
-| `esc` / `q` | close modal                                                       |
+| `esc` / `w` | exit focus (cursor reset, dashboard returns to read-only)         |
 
-Modal opens with the cursor parked on the current worktree. Empty
-inventory rejects entry with a status line; on entry success the modal
-closes and the action sub-modal takes over.
+Visual cues while focused:
+
+- The dashboard's outer box border switches to the focused accent color
+  (same as the graph pane's focused border) so the user can tell at a
+  glance which surface owns the cursor.
+- The cursor row gets a background tint (`colorCursorRowBg`, xterm 237)
+  layered behind whatever foreground styling the row already has. On
+  the `▶` current row, the bold + accent fg survives the bg overlay so
+  both signals (current + cursor) read independently.
+- The bottom hint line replaces the graph hint with `dashboard: j/k
+  이동 · enter switch · a add · d remove · esc 종료` while focused.
+
+Focus on lands the cursor on the current worktree row if found, else
+on row 0. Empty inventory rejects entry with a status line; focus
+stays on `paneGraph`. Other normal-mode global keys (`r`, `F`, `p`,
+`?`, `,`, `b`, `Z`, ...) keep working while focused — only j/k/enter/
+a/d/esc are claimed by the dashboard.
 
 ## Add input sub-modal (`viewModeWorktreeAddInput`)
 
@@ -109,8 +122,8 @@ user never burns a switch on a target that's permanently unremovable.
 ## In-process switch
 
 `switchWorktreeMsg{path}` is the seam every "go to a different worktree"
-surface dispatches through (today: `enter` inside the `w` modal). On
-switch:
+surface dispatches through (today: `enter` while the dashboard owns the
+cursor). On switch:
 
 1. Validate path (directory containing `.git`); fail surfaces on status.
 2. Same-path → no-op + "already on this worktree".
@@ -176,7 +189,7 @@ load drops on arrival:
 
 - App startup (initial batch).
 - `worktree add` / `worktree remove` success.
-- `w`-modal switch (via `reloadCmd`).
+- dashboard-focus switch (via `reloadCmd`).
 - `r` global reload key (via `reloadCmd`).
 - `fetch` / `pull` / `checkout` / `ff-only` / `checkoutThenFF` /
   `branchDelete` success — all route through `reloadCmd`, which bumps

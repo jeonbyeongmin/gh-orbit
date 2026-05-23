@@ -171,6 +171,71 @@ func TestRenderTopDashboardFooterPlainWhenNeverFetched(t *testing.T) {
 	}
 }
 
+// TestRenderTopDashboardCursorRowWhenFocused — when paneDashboard owns
+// the cursor, the cursor row carries the colorCursorRowBg ANSI escape
+// (background 237). Locks in Decision 4's cursor row tint.
+func TestRenderTopDashboardCursorRowWhenFocused(t *testing.T) {
+	m := withModel(t,
+		[]git.Worktree{
+			{Path: "/tmp/wt-a", Branch: "main"},
+			{Path: "/tmp/wt-b", Branch: "feat/foo"},
+		},
+		"/tmp/wt-a",
+	)
+	m.focused = paneDashboard
+	m.dashboardFocus.cursor = 1
+	raw := renderTopDashboard(m, 80)
+	if !strings.Contains(raw, "48;5;237") {
+		t.Errorf("focused dashboard should contain cursorRowBgStyle escape (48;5;237), got %q", raw)
+	}
+}
+
+// TestRenderTopDashboardNoCursorWhenUnfocused — paneGraph (default)
+// → no cursorRowBgStyle escape anywhere; the band stays read-only.
+func TestRenderTopDashboardNoCursorWhenUnfocused(t *testing.T) {
+	m := withModel(t,
+		[]git.Worktree{
+			{Path: "/tmp/wt-a", Branch: "main"},
+			{Path: "/tmp/wt-b", Branch: "feat/foo"},
+		},
+		"/tmp/wt-a",
+	)
+	// focused defaults to paneGraph; do not flip it.
+	raw := renderTopDashboard(m, 80)
+	if strings.Contains(raw, "48;5;237") {
+		t.Errorf("unfocused dashboard should not contain cursorRowBgStyle escape (48;5;237), got %q", raw)
+	}
+}
+
+// TestRenderTopDashboardCurrentMarkerSurvivesCursor — when the cursor
+// row coincides with the current ▶ row, the selectedStyle (fg 205 +
+// bold) on the body survives the cursorRowBgStyle (bg 237) overlay.
+// Both escape sequences appear in the output. Locks in Decision 4's
+// "▶ + bold+select 표시는 focus 와 무관하게 항상 유지".
+func TestRenderTopDashboardCurrentMarkerSurvivesCursor(t *testing.T) {
+	m := withModel(t,
+		[]git.Worktree{
+			{Path: "/tmp/wt-a", Branch: "main"},
+			{Path: "/tmp/wt-b", Branch: "feat/foo"},
+		},
+		"/tmp/wt-b",
+	)
+	m.focused = paneDashboard
+	m.dashboardFocus.cursor = 1 // same as current
+	raw := renderTopDashboard(m, 80)
+	if !strings.Contains(raw, "38;5;205") {
+		t.Errorf("current row body should carry selectedStyle fg (38;5;205), got %q", raw)
+	}
+	if !strings.Contains(raw, "48;5;237") {
+		t.Errorf("cursor row should carry cursorRowBgStyle bg (48;5;237), got %q", raw)
+	}
+	// ▶ glyph (prefix) survives independently of body styling.
+	plain := ansi.Strip(raw)
+	if !strings.Contains(plain, "▶") {
+		t.Errorf("▶ marker should still appear in plain text, got %q", plain)
+	}
+}
+
 func TestModelViewWithDashboardDoesNotPanic(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(initWindowSize(120, 40))

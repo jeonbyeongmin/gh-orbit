@@ -245,7 +245,11 @@ func TestDirtyFanoutTimeoutMarksWorktreeMap(t *testing.T) {
 // TestWorktreesModalEnterDispatchesSwitch verifies the post-PR-B2 entry:
 // `w` opens the worktrees modal, j moves to a non-current entry, enter
 // emits switchWorktreeMsg.
-func TestWorktreesModalEnterDispatchesSwitch(t *testing.T) {
+// TestDashboardFocusEnterDispatchesSwitch — `w` flips focused to
+// paneDashboard with cursor on the current worktree; j moves the cursor
+// to the next row; enter dispatches switchWorktreeMsg for the cursor
+// entry. Focus stays on paneDashboard after enter (Decision 1: 지속형).
+func TestDashboardFocusEnterDispatchesSwitch(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -255,18 +259,15 @@ func TestWorktreesModalEnterDispatchesSwitch(t *testing.T) {
 		{Path: "/r/feat", Branch: "feat"},
 	}, "/r/main")
 
-	// `w` → modal opens with cursor on the current worktree (/r/main).
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
 	m = updated.(Model)
-	if m.mode != viewModeWorktreesModal {
-		t.Fatalf("w should open viewModeWorktreesModal, mode = %v", m.mode)
+	if m.focused != paneDashboard {
+		t.Fatalf("w should focus paneDashboard, focused = %v", m.focused)
 	}
-	// j → cursor to /r/feat.
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m = updated.(Model)
-	// enter → emits switchWorktreeMsg for /r/feat.
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	_ = updated.(Model)
+	m = updated.(Model)
 	if cmd == nil {
 		t.Fatal("enter should dispatch switchWorktreeMsg")
 	}
@@ -278,11 +279,14 @@ func TestWorktreesModalEnterDispatchesSwitch(t *testing.T) {
 	if sw.path != "/r/feat" {
 		t.Errorf("path = %q, want /r/feat", sw.path)
 	}
+	if m.focused != paneDashboard {
+		t.Errorf("focus should persist across enter (Decision 1: 지속형), focused = %v", m.focused)
+	}
 }
 
-// TestWorktreesModalDOpensRemoveConfirm — d on a non-current cursor entry
-// inside the modal arms viewModeWorktreeRemoveConfirm for that path.
-func TestWorktreesModalDOpensRemoveConfirm(t *testing.T) {
+// TestDashboardFocusDOpensRemoveConfirm — d on a non-current cursor entry
+// while paneDashboard owns the cursor arms viewModeWorktreeRemoveConfirm.
+func TestDashboardFocusDOpensRemoveConfirm(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -299,19 +303,19 @@ func TestWorktreesModalDOpensRemoveConfirm(t *testing.T) {
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)
 	if m.mode != viewModeWorktreeRemoveConfirm {
-		t.Errorf("d in modal on non-current entry should open remove confirm, mode = %v", m.mode)
+		t.Errorf("d on non-current entry should open remove confirm, mode = %v", m.mode)
 	}
 	if m.worktreeAction.removeTarget.Path != "/r/feat" {
 		t.Errorf("removeTarget = %+v, want /r/feat", m.worktreeAction.removeTarget)
 	}
 }
 
-// TestWorktreesModalDOnCurrentRejects — d on a non-main current worktree
+// TestDashboardFocusDOnCurrentRejects — d on a non-main current worktree
 // (cockpit lives in a linked entry) is rejected with the current-guard
-// status line; modal closes (worktreesModalRemove resets state). The
-// main-on-main and main-from-linked cases are covered by sibling tests
-// so this one isolates the current-guard's single responsibility.
-func TestWorktreesModalDOnCurrentRejects(t *testing.T) {
+// status line; mode stays viewModeNormal. The main-on-main and
+// main-from-linked cases are covered by sibling tests so this one
+// isolates the current-guard's single responsibility.
+func TestDashboardFocusDOnCurrentRejects(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -323,8 +327,6 @@ func TestWorktreesModalDOnCurrentRejects(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)
 	if m.mode == viewModeWorktreeRemoveConfirm {
@@ -335,11 +337,11 @@ func TestWorktreesModalDOnCurrentRejects(t *testing.T) {
 	}
 }
 
-// TestWorktreesModalDOnMainRejects — d on a main-and-current entry
+// TestDashboardFocusDOnMainRejects — d on a main-and-current entry
 // (fresh checkout, no linked worktrees) is rejected with the main-guard
-// status line. Pairs with TestWorktreesModalDOnMainFromLinkedRejects to
+// status line. Pairs with TestDashboardFocusDOnMainFromLinkedRejects to
 // lock in the main-first guard order from both directions.
-func TestWorktreesModalDOnMainRejects(t *testing.T) {
+func TestDashboardFocusDOnMainRejects(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -360,13 +362,13 @@ func TestWorktreesModalDOnMainRejects(t *testing.T) {
 	}
 }
 
-// TestWorktreesModalDOnMainFromLinkedRejects — cockpit lives in a linked
+// TestDashboardFocusDOnMainFromLinkedRejects — cockpit lives in a linked
 // worktree; d on the main row (not current) still gets rejected by the
 // main-guard before the current-guard ever runs. This is the load-bearing
 // case for the main-first guard order: it stops the user from doing a
 // switch-then-retry round trip when the underlying constraint is
 // permanent.
-func TestWorktreesModalDOnMainFromLinkedRejects(t *testing.T) {
+func TestDashboardFocusDOnMainFromLinkedRejects(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -390,9 +392,9 @@ func TestWorktreesModalDOnMainFromLinkedRejects(t *testing.T) {
 	}
 }
 
-// TestWorktreesModalAOpensAddInput — a inside the modal opens the
+// TestDashboardFocusAOpensAddInput — a in dashboard focus opens the
 // add-input sub-modal regardless of cursor position.
-func TestWorktreesModalAOpensAddInput(t *testing.T) {
+func TestDashboardFocusAOpensAddInput(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -401,15 +403,123 @@ func TestWorktreesModalAOpensAddInput(t *testing.T) {
 		{Path: "/r/main", Branch: "main", IsMain: true},
 	}, "/r/main")
 
-	// `w` → modal, then `a` → add-input. The modal closes (worktreesModal
-	// state resets in worktreesModalAdd) and viewModeWorktreeAddInput
-	// takes over.
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	m = updated.(Model)
 	if m.mode != viewModeWorktreeAddInput {
-		t.Errorf("a in modal should open add input, mode = %v", m.mode)
+		t.Errorf("a in dashboard focus should open add input, mode = %v", m.mode)
+	}
+}
+
+// TestDashboardFocusToggleOnOff — `w` toggles paneDashboard on; a second
+// `w` toggles it off and resets the cursor.
+func TestDashboardFocusToggleOnOff(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/r/main"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+	}, "/r/main")
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	if m.focused != paneDashboard {
+		t.Fatalf("first w should focus paneDashboard, focused = %v", m.focused)
+	}
+	// Move cursor so we can check the reset on toggle off.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+	if m.dashboardFocus.cursor != 1 {
+		t.Fatalf("j should move cursor to 1, cursor = %d", m.dashboardFocus.cursor)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	if m.focused != paneGraph {
+		t.Errorf("second w should toggle back to paneGraph, focused = %v", m.focused)
+	}
+	if m.dashboardFocus != (dashboardFocusState{}) {
+		t.Errorf("toggle off should reset dashboardFocus, got %+v", m.dashboardFocus)
+	}
+}
+
+// TestDashboardFocusEscExits — `esc` exits paneDashboard back to
+// paneGraph with the cursor reset.
+func TestDashboardFocusEscExits(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/r/main"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+	}, "/r/main")
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.focused != paneGraph {
+		t.Errorf("esc should exit to paneGraph, focused = %v", m.focused)
+	}
+	if m.dashboardFocus != (dashboardFocusState{}) {
+		t.Errorf("esc should reset dashboardFocus, got %+v", m.dashboardFocus)
+	}
+}
+
+// TestDashboardFocusCursorStartsOnCurrent — the cursor lands on the
+// worktree row whose Path equals m.workdir; missing match → 0.
+func TestDashboardFocusCursorStartsOnCurrent(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/r/feat"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+		{Path: "/r/qa", Branch: "qa"},
+	}, "/r/feat")
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	if m.dashboardFocus.cursor != 1 {
+		t.Errorf("cursor should start on /r/feat (index 1), got %d", m.dashboardFocus.cursor)
+	}
+}
+
+// TestDashboardFocusJKBoundedClamp — j at the bottom row stays put (no
+// wrap), k at the top row stays put. Decision 3: bounded clamp.
+func TestDashboardFocusJKBoundedClamp(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/r/main"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+	}, "/r/main")
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	// j j j → still 1 (last row), no wrap.
+	for i := 0; i < 3; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = updated.(Model)
+	}
+	if m.dashboardFocus.cursor != 1 {
+		t.Errorf("j past bottom should clamp at last row, cursor = %d", m.dashboardFocus.cursor)
+	}
+	// k k k → back to 0 and stays.
+	for i := 0; i < 3; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+		m = updated.(Model)
+	}
+	if m.dashboardFocus.cursor != 0 {
+		t.Errorf("k past top should clamp at first row, cursor = %d", m.dashboardFocus.cursor)
 	}
 }
 

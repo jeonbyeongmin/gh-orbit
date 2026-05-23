@@ -65,7 +65,7 @@ func helpData() []helpCategory { return helpCategories }
 // graphHintText is the single-line bottom hint for the graph pane (the
 // only outer focus after the bottom tab pane retired). Ends with `? help
 // · q quit` so the user always sees how to expand the panel or quit.
-const graphHintText = "enter checkout/ff/detach · d patch · y copy · w worktrees · b branches · Z zombies · ? help · q quit"
+const graphHintText = "enter checkout/ff/detach · d patch · y copy · w worktree focus · b branches · Z zombies · ? help · q quit"
 
 // graphHintRendered is the pre-styled form of graphHintText. View() runs
 // on every Update so re-applying the help style per frame would burn a
@@ -79,6 +79,13 @@ var graphHintRendered = help.Render(graphHintText)
 const localChangesHintText = "space stage/unstage · tab focus · r reload · , exit · ? help · q quit"
 
 var localChangesHintRendered = help.Render(localChangesHintText)
+
+// dashboardFocusHintText is the bottom hint shown while paneDashboard
+// owns the cursor. Replaces the graph hint so the user can see the
+// dashboard-scoped key matrix instead of repeating the graph one.
+const dashboardFocusHintText = "dashboard: j/k 이동 · enter switch · a add · d remove · esc 종료"
+
+var dashboardFocusHintRendered = help.Render(dashboardFocusHintText)
 
 // fitHelpLine truncates text to width with an ellipsis when the rendered
 // content overflows, then applies the help style. Shared by the focus-aware

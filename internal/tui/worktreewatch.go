@@ -104,7 +104,7 @@ func (w *worktreeWatcher) run() {
 			if !ok {
 				return
 			}
-			w.onRawEvent(ev.Name)
+			w.onRawEvent(ev.Name, ev.Op)
 		case err, ok := <-w.fw.Errors:
 			if !ok {
 				return
@@ -114,12 +114,22 @@ func (w *worktreeWatcher) run() {
 	}
 }
 
-// onRawEvent applies the file-name filter (HEAD/index only) and starts
-// or resets the per-worktree debounce timer. Exposed at package level
-// (not exported) so tests can drive the debounce path without setting
-// up a real fsnotify producer. Safe to call concurrently from the
-// fsnotify goroutine and from tests.
-func (w *worktreeWatcher) onRawEvent(eventName string) {
+// onRawEvent applies the op filter (content changes only) and the
+// file-name filter (HEAD/index only), then starts or resets the
+// per-worktree debounce timer. Exposed at package level (not exported)
+// so tests can drive the debounce path without setting up a real
+// fsnotify producer. Safe to call concurrently from the fsnotify
+// goroutine and from tests.
+func (w *worktreeWatcher) onRawEvent(eventName string, op fsnotify.Op) {
+	// Chmod-only events (attribute / timestamp touches) are never a real
+	// HEAD/index content change. `git status` — which the dashboard dirty
+	// fan-out runs on every reload — touches .git/index's metadata even with
+	// --no-optional-locks, emitting a lone Chmod. Reacting to it would feed a
+	// reload → status → Chmod → reload flicker loop. Real commits / checkouts
+	// / merges arrive as Create/Write/Remove/Rename, which pass this gate.
+	if op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) == 0 {
+		return
+	}
 	base := filepath.Base(eventName)
 	if base != "HEAD" && base != "index" {
 		return

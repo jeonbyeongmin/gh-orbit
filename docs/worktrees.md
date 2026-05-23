@@ -215,6 +215,14 @@ load drops on arrival:
   handler also fires `reloadCmd` so graph + refs follow the new HEAD,
   not just the dashboard row.
 
+  `onRawEvent` only reacts to **content** ops (Create/Write/Remove/Rename);
+  Chmod-only events are dropped. This closes the other half of the
+  status-induced flicker loop: even with `--no-optional-locks` (see Dirty
+  fan-out), `git status` touches `.git/index`'s metadata and emits a lone
+  Chmod on every reload. Without the op filter that Chmod re-fired the
+  watcher → `reloadCmd` → graph "loading…" flicker. Real commits / checkouts
+  / merges always carry a content op, so they still surface.
+
 If `fsnotify.NewWatcher()` fails at startup (rare — inotify limit,
 sandboxed env), the cockpit silent-degrades: status paints `external
 watch unavailable — use 'r' to refresh` once, and the rest of the

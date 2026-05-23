@@ -1779,6 +1779,14 @@ func (m Model) renderHelpStatus() string {
 		hint = localChangesHintText
 		hintRendered = localChangesHintRendered
 	}
+	// paneDashboard owns the cursor → replace the graph hint with the
+	// dashboard-scoped key matrix. Local Changes is mutually exclusive
+	// (enterLocalChangesMode resets focused to paneGraph) so the order
+	// doesn't matter, but keep this last for explicit precedence.
+	if m.focused == paneDashboard {
+		hint = dashboardFocusHintText
+		hintRendered = dashboardFocusHintRendered
+	}
 	if m.status == "" {
 		return hintRendered
 	}

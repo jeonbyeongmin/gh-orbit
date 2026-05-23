@@ -80,6 +80,13 @@ const localChangesHintText = "space stage/unstage · tab focus · r reload · , 
 
 var localChangesHintRendered = help.Render(localChangesHintText)
 
+// dashboardFocusHintText is the bottom hint shown while paneDashboard
+// owns the cursor. Replaces the graph hint so the user can see the
+// dashboard-scoped key matrix instead of repeating the graph one.
+const dashboardFocusHintText = "dashboard: j/k 이동 · enter switch · a add · d remove · esc 종료"
+
+var dashboardFocusHintRendered = help.Render(dashboardFocusHintText)
+
 // fitHelpLine truncates text to width with an ellipsis when the rendered
 // content overflows, then applies the help style. Shared by the focus-aware
 // bottom hint (renderHelpStatus) and the expanded panel (renderHelpPanel)

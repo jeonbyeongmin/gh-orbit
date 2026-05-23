@@ -72,6 +72,13 @@ type worktreeDirtyResultMsg struct {
 	path     string
 	dirty    bool
 	timedOut bool
+	// subject / when carry the row's last-commit metadata, fetched in the
+	// same goroutine as the dirty probe so they land in one msg (no
+	// incremental jitter between the `●` marker and the subject/time
+	// columns). Both stay zero-valued when the tree has no commits yet or
+	// the probe timed out — the dashboard renders a blank last-commit column.
+	subject string
+	when    time.Time
 }
 
 // worktreeAddSucceededMsg / worktreeAddFailedMsg report the outcome of
@@ -117,15 +124,25 @@ func loadWorktreesCmd(dir string, reqID uint64) tea.Cmd {
 }
 
 // worktreeDirtyFanoutCmd dispatches one cmd per path; each emits its own
-// worktreeDirtyResultMsg as the per-worktree `git status` returns. Using
-// tea.Batch lets Bubble Tea schedule them concurrently — the rows light
-// up incrementally instead of waiting for the slowest tree.
+// worktreeDirtyResultMsg as the per-worktree probes return. Using tea.Batch
+// lets Bubble Tea schedule them concurrently — the rows light up
+// incrementally instead of waiting for the slowest tree.
 //
-// Each goroutine gets a worktreeDirtyBudget deadline (3s). On timeout the
-// msg carries timedOut=true so the sidebar can render a `?` placeholder
-// instead of trusting the (effectively unknown) dirty value. Without the
-// budget, a stuck NFS / network mount could leave the sidebar visually
-// stalled — E3 eng-review iron rule.
+// Each goroutine gets a worktreeDirtyBudget deadline (3s) shared across both
+// probes it runs: the dirty `git status` and the last-commit `git log -1`.
+// Folding the two into one goroutine keeps a single reqID-tagged msg and
+// makes the `●` marker and the subject/time columns appear together. On
+// timeout the msg carries timedOut=true so the sidebar can render a `?`
+// dirty placeholder instead of trusting the (effectively unknown) value;
+// the last-commit columns just stay blank. Without the budget, a stuck NFS
+// / network mount could leave the sidebar visually stalled — E3 eng-review
+// iron rule.
+//
+// Order matters: the dirty probe runs first so it owns the budget — dirty is
+// the more critical signal. WorktreeLastCommit runs with the remaining time
+// and its error is intentionally dropped (blank columns), since a missing
+// subject is non-fatal and a genuine repo failure already surfaces via the
+// dirty probe.
 func worktreeDirtyFanoutCmd(reqID uint64, paths []string) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(paths))
 	for _, p := range paths {
@@ -134,11 +151,12 @@ func worktreeDirtyFanoutCmd(reqID uint64, paths []string) tea.Cmd {
 			ctx, cancel := context.WithTimeout(context.Background(), worktreeDirtyBudget)
 			defer cancel()
 			entries, err := git.Status(ctx, path)
+			subject, when, _ := git.WorktreeLastCommit(ctx, path)
 			if err != nil {
 				timedOut := errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded
-				return worktreeDirtyResultMsg{reqID: reqID, path: path, dirty: false, timedOut: timedOut}
+				return worktreeDirtyResultMsg{reqID: reqID, path: path, dirty: false, timedOut: timedOut, subject: subject, when: when}
 			}
-			return worktreeDirtyResultMsg{reqID: reqID, path: path, dirty: len(entries) > 0}
+			return worktreeDirtyResultMsg{reqID: reqID, path: path, dirty: len(entries) > 0, subject: subject, when: when}
 		})
 	}
 	return tea.Batch(cmds...)

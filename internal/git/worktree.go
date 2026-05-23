@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Worktree is one entry from `git worktree list --porcelain -z`. Path is
@@ -171,4 +173,47 @@ func isWorktreeDirty(stderr string) bool {
 func isWorktreeLocked(stderr string) bool {
 	return strings.Contains(stderr, "locked working tree") ||
 		strings.Contains(stderr, "is locked")
+}
+
+// WorktreeLastCommit returns the subject + committer time of a worktree's
+// HEAD commit via `git -C <dir> log -1 --format=%s%x00%ct`. The %x00 NUL
+// separates the (space-containing) subject from the committer unix time.
+//
+// A worktree with no commits yet (unborn HEAD — a fresh `worktree add -b`)
+// or a bare worktree makes `git log -1` exit non-zero; that is reported as
+// an empty result (`"", time.Time{}, nil`), not a failure, so the dashboard
+// renders a blank last-commit column instead of spamming the status bar.
+// The callers here only ever pass paths that came from `git worktree list`,
+// so a non-deadline exit is the no-commits / bare case rather than a broken
+// repo. A context deadline still surfaces as an error.
+//
+// Read-only: unlike `git status` (see status.go), `git log` never rewrites
+// .git/index, so it is watcher-safe on the dirty fan-out loop and needs no
+// --no-optional-locks guard.
+func WorktreeLastCommit(ctx context.Context, dir string) (subject string, when time.Time, err error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "log", "-1", "--format=%s%x00%ct")
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if runErr := cmd.Run(); runErr != nil {
+		if ctx.Err() != nil {
+			return "", time.Time{}, ctx.Err()
+		}
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			// Unborn HEAD / bare worktree: no commit to report.
+			return "", time.Time{}, nil
+		}
+		return "", time.Time{}, wrapGitErr("git log -1", runErr, stderr.String())
+	}
+	subj, tsStr, ok := strings.Cut(stdout.String(), "\x00")
+	if !ok {
+		return "", time.Time{}, nil
+	}
+	sec, parseErr := strconv.ParseInt(strings.TrimSpace(tsStr), 10, 64)
+	if parseErr != nil {
+		return subj, time.Time{}, nil
+	}
+	return subj, time.Unix(sec, 0), nil
 }

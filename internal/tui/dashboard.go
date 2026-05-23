@@ -69,7 +69,8 @@ func renderTopDashboard(m Model, width int) string {
 		// When focus is off, all rows render selected=false → the original
 		// read-only band styling.
 		selected := focused && i == m.dashboardFocus.cursor
-		b.WriteString(renderWorktreeSidebarRow(wt, isCurrent, selected, dirtyMark, width))
+		subject, when := m.refs.WorktreeLastCommit(wt.Path)
+		b.WriteString(renderWorktreeSidebarRow(wt, isCurrent, selected, dirtyMark, subject, when, now, width))
 		b.WriteByte('\n')
 	}
 

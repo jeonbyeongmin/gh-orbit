@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
@@ -114,7 +116,7 @@ func TestOnRawEventDebouncesBurst(t *testing.T) {
 
 	// Burst: 5 raw events within the debounce window. Only one send.
 	for i := 0; i < 5; i++ {
-		w.onRawEvent("/wt/.git/HEAD")
+		w.onRawEvent("/wt/.git/HEAD", fsnotify.Write)
 		time.Sleep(2 * time.Millisecond)
 	}
 	select {
@@ -148,7 +150,7 @@ func TestOnRawEventFiltersByBasename(t *testing.T) {
 
 	// Files git also rewrites that are NOT HEAD or index — must be ignored.
 	for _, name := range []string{"COMMIT_EDITMSG", "ORIG_HEAD", "FETCH_HEAD", "packed-refs", "HEAD.lock"} {
-		w.onRawEvent("/wt/.git/" + name)
+		w.onRawEvent("/wt/.git/"+name, fsnotify.Write)
 	}
 	time.Sleep(40 * time.Millisecond)
 	mu.Lock()
@@ -163,7 +165,7 @@ func TestOnRawEventIndexBasenameTriggers(t *testing.T) {
 	w := newTestWatcher(15*time.Millisecond, func(p string) { done <- p })
 	w.byGitDir["/wt/.git"] = "/wt"
 
-	w.onRawEvent("/wt/.git/index")
+	w.onRawEvent("/wt/.git/index", fsnotify.Write)
 	select {
 	case p := <-done:
 		if p != "/wt" {
@@ -174,12 +176,35 @@ func TestOnRawEventIndexBasenameTriggers(t *testing.T) {
 	}
 }
 
+// TestOnRawEventIgnoresChmod pins the loop-breaking op filter: a Chmod-only
+// event on .git/index must NOT trigger the debounce. `git status` (run by the
+// dashboard dirty fan-out on every reload) touches the index's metadata even
+// with --no-optional-locks, emitting a lone Chmod; reacting to it feeds a
+// reload → status → Chmod → reload flicker loop. Real changes arrive as
+// Write/Create/Remove/Rename (covered by the sibling tests) and still fire.
+func TestOnRawEventIgnoresChmod(t *testing.T) {
+	w := newTestWatcher(10*time.Millisecond, func(string) {
+		t.Errorf("Chmod-only event must not trigger sender")
+	})
+	w.byGitDir["/wt/.git"] = "/wt"
+
+	w.onRawEvent("/wt/.git/index", fsnotify.Chmod)
+	w.onRawEvent("/wt/.git/HEAD", fsnotify.Chmod)
+	time.Sleep(40 * time.Millisecond)
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.timers) != 0 {
+		t.Errorf("Chmod-only events armed %d debounce timer(s), want 0", len(w.timers))
+	}
+}
+
 func TestOnRawEventUnknownGitDir(t *testing.T) {
 	w := newTestWatcher(10*time.Millisecond, func(string) {
 		t.Errorf("sender should not fire for unregistered gitDir")
 	})
 	// byGitDir empty.
-	w.onRawEvent("/somewhere/.git/HEAD")
+	w.onRawEvent("/somewhere/.git/HEAD", fsnotify.Write)
 	time.Sleep(40 * time.Millisecond)
 }
 

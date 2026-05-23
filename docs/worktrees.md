@@ -64,7 +64,7 @@ pattern.
 | `j` / `k` | move cursor within the list (bounded; no wrap)                      |
 | `enter`   | switch to the worktree under the cursor                             |
 | `a`       | open the add-worktree input sub-modal                               |
-| `d`       | open the remove-worktree confirm sub-modal (refuses current entry)  |
+| `d`       | open the remove-worktree confirm sub-modal (refuses main + current entry) |
 | `esc` / `q` | close modal                                                       |
 
 Modal opens with the cursor parked on the current worktree. Empty
@@ -98,6 +98,13 @@ Invalid branch names surface git's stderr verbatim via
 Removing the current worktree is rejected before the confirm opens —
 the user must switch first. Git would refuse anyway, but the friendly
 status surface saves a round trip.
+
+Removing the main worktree is also rejected up-front — git tracks it
+specially (the entry that owns the `.git` directory) and refuses
+regardless of dirty state. Main + current is a common overlap on a
+fresh checkout; the guard order surfaces the stronger constraint
+(main, permanent) before the weaker one (current, switch-able) so the
+user never burns a switch on a target that's permanently unremovable.
 
 ## In-process switch
 

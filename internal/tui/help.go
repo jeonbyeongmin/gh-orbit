@@ -65,7 +65,7 @@ func helpData() []helpCategory { return helpCategories }
 // graphHintText is the single-line bottom hint for the graph pane (the
 // only outer focus after the bottom tab pane retired). Ends with `? help
 // · q quit` so the user always sees how to expand the panel or quit.
-const graphHintText = "enter checkout/ff/detach · d patch · y copy · w worktrees · b branches · Z zombies · ? help · q quit"
+const graphHintText = "enter checkout/ff/detach · d patch · y copy · w worktree focus · b branches · Z zombies · ? help · q quit"
 
 // graphHintRendered is the pre-styled form of graphHintText. View() runs
 // on every Update so re-applying the help style per frame would burn a

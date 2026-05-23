@@ -62,7 +62,15 @@ func Status(ctx context.Context, dir string) ([]StatusEntry, error) {
 }
 
 func runStatus(ctx context.Context, dir string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v2", "-z", "--untracked-files=all")
+	// --no-optional-locks keeps this read-only probe from taking the index
+	// lock to refresh the stat cache, which would rewrite .git/index. The
+	// worktree dirty fan-out runs status on a loop and the external-change
+	// watcher (internal/tui/worktreewatch.go) watches .git/index — without
+	// this flag a single git op (merge/checkout) triggers status → index
+	// write → fsnotify event → reload → status …, a self-sustaining flicker
+	// loop. The cockpit only ever reads working-tree state here; it never
+	// needs the opportunistic index refresh.
+	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "status", "--porcelain=v2", "-z", "--untracked-files=all")
 	cmd.Dir = dir
 	cmd.Env = gitEnv()
 	stdout, err := cmd.StdoutPipe()

@@ -1,12 +1,14 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStatusCleanTree(t *testing.T) {
@@ -165,6 +167,44 @@ func TestStatusConflict(t *testing.T) {
 	e := got[0]
 	if e.Path != "f.txt" || !e.Conflict || e.IndexState != 'U' || e.WorktreeState != 'U' {
 		t.Fatalf("unexpected conflict entry: %+v", e)
+	}
+}
+
+// TestStatusDoesNotWriteIndex pins the --no-optional-locks guard in runStatus.
+// A refreshing `git status` rewrites .git/index to update its stat cache; the
+// external-change watcher (internal/tui/worktreewatch.go) watches .git/index,
+// so a self-induced index write here feeds a status → write → fsnotify event →
+// reload → status flicker loop. Status must leave the index byte-identical.
+func TestStatusDoesNotWriteIndex(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepoWithFile(t, "f.txt", "a\n")
+
+	// Perturb only the file's mtime (content stays clean) so a stat-cache
+	// refresh is the sole reason a non-guarded `git status` would rewrite the
+	// index.
+	past := time.Now().Add(-1 * time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, "f.txt"), past, past); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	idx := filepath.Join(dir, ".git", "index")
+	before, err := os.ReadFile(idx)
+	if err != nil {
+		t.Fatalf("read index before: %v", err)
+	}
+
+	if _, err := Status(context.Background(), dir); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+
+	after, err := os.ReadFile(idx)
+	if err != nil {
+		t.Fatalf("read index after: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("git status rewrote .git/index; runStatus must pass --no-optional-locks so the external-change watcher doesn't see a self-induced index write")
 	}
 }
 

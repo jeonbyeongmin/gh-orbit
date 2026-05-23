@@ -181,6 +181,15 @@ Stale-drop: a `worktreeDirtyResultMsg` whose `reqID` doesn't match the
 live `sidebarWorktreesReqID` is dropped — a worktree switch in the
 middle of a fan-out can't bleed dirty state from the previous tree.
 
+**No self-induced events**: the fan-out runs `git --no-optional-locks
+status` (see `internal/git/status.go`). A plain `git status` opportunistically
+refreshes its stat cache by rewriting `.git/index`; since the external-change
+watcher below watches `.git/index`, that write would fire a fresh
+`worktreeWatchedChangeMsg`, re-running the fan-out — a status → index write →
+event → reload → status loop that flickers the dashboard after any working-tree
+mutation (merge, checkout). `--no-optional-locks` makes the probe read-only so
+it never feeds the watcher.
+
 ## Refresh triggers
 
 `loadWorktreesCmd` is dispatched from these sites — each one bumps

@@ -38,6 +38,11 @@ type pane int
 
 const (
 	paneGraph pane = iota
+	// paneDashboard is the top worktree band when it grabs the cursor.
+	// Toggled by `w` from paneGraph; j/k/enter/a/d/esc route to dashboard
+	// handlers while the focus is on, all other keys fall through to the
+	// normal-mode switch so global shortcuts (r, F, p, ?, ,) still work.
+	paneDashboard
 )
 
 // refsAllSentinel is the git revision spec that means "every ref". Used as the
@@ -109,12 +114,6 @@ const (
 	// arms viewModeRefDeleteConfirm against that branch — the delete-branch
 	// chain stays single-codepath with the refs-pane inline d.
 	viewModeBranchesModal
-	// viewModeWorktreesModal hosts the centered overlay listing every
-	// worktree. Entered via `w` from viewModeNormal. `enter` switches to
-	// the cursor entry, `a` opens add-input, `d` opens remove-confirm.
-	// Post-sidebar-shell-subtract this modal is the entry point for the
-	// worktree workflow that used to live on the refs-pane worktree rows.
-	viewModeWorktreesModal
 )
 
 // helpExpandedHeight is the row count reserved for the bottom area when
@@ -243,9 +242,10 @@ type Model struct {
 	// branchesModal backs viewModeBranchesModal. Cursor indexes into
 	// m.refs.LocalRefs() at modal-open time. Reset on esc/q.
 	branchesModal branchesModalState
-	// worktreesModal backs viewModeWorktreesModal. Cursor indexes into
-	// m.refs.Worktrees() at modal-open time.
-	worktreesModal worktreesModalState
+	// dashboardFocus backs the top-dashboard focus mode (paneDashboard).
+	// Cursor indexes into m.refs.Worktrees() at focus-on time. Reset to
+	// zero on focus-off.
+	dashboardFocus dashboardFocusState
 	// pendingRefDelete backs viewModeRefDeleteConfirm. Stamped on `d`
 	// keypress with the cursor's local-branch name; the inline-confirm
 	// renderer / key router reads it without re-deriving from refs.
@@ -968,27 +968,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.mode == viewModeWorktreesModal {
+		if m.focused == paneDashboard && m.mode == viewModeNormal {
 			switch msg.String() {
 			case "j", "down":
-				return m.worktreesModalMoveCursor(1), nil
+				return m.dashboardMoveCursor(1), nil
 			case "k", "up":
-				return m.worktreesModalMoveCursor(-1), nil
+				return m.dashboardMoveCursor(-1), nil
 			case "enter":
-				return m.worktreesModalEnter()
+				return m.dashboardEnter()
 			case "a":
-				return m.worktreesModalAdd()
+				return m.dashboardAdd()
 			case "d":
-				return m.worktreesModalRemove()
-			case "esc", "q":
-				m.mode = viewModeNormal
-				m.worktreesModal = worktreesModalState{}
+				return m.dashboardRemove()
+			case "esc":
+				m.focused = paneGraph
+				m.dashboardFocus = dashboardFocusState{}
 				return m, nil
 			case "ctrl+c":
 				m.cancelStream()
 				return m, tea.Quit
 			}
-			return m, nil
+			// `w` and any other key fall through to the normal-mode
+			// switch so the toggle-off case in `case "w"` fires and
+			// global shortcuts (r, F, p, ?, ,) still work.
 		}
 		if m.mode == viewModeZombieCleanupConfirm {
 			// While the bulk-delete cmd is in flight, only ctrl+c (quit)
@@ -1166,11 +1168,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// entry. Global, independent of focused pane.
 			return m.beginBranchesModal()
 		case "w":
-			// Worktrees modal — worktree list with cursor + `enter` switch,
-			// `a` add, `d` remove. Post-sidebar-shell-subtract this is the
-			// single entry for worktree workflow (the sidebar's worktree
-			// rows used to host these actions on cursor row).
-			return m.beginWorktreesModal()
+			// Toggle the top dashboard's focus mode. While focused, the
+			// dashboard owns j/k/enter/a/d/esc; everything else (r, F, p,
+			// ?, ,) still falls through to the normal-mode switch.
+			if m.focused == paneDashboard {
+				m.focused = paneGraph
+				m.dashboardFocus = dashboardFocusState{}
+				return m, nil
+			}
+			return m.enterDashboardFocus()
 		}
 		var cmd tea.Cmd
 		m.graph, cmd = m.graph.Update(msg)
@@ -1707,7 +1713,7 @@ func (m Model) View() string {
 	} else {
 		graphBox := boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
 		if s.dashH > 0 {
-			dashBox := boxStyle(false).Width(s.dashW).Height(s.dashH).Render(renderTopDashboard(m, s.dashW))
+			dashBox := boxStyle(m.focused == paneDashboard).Width(s.dashW).Height(s.dashH).Render(renderTopDashboard(m, s.dashW))
 			main = lipgloss.JoinVertical(lipgloss.Left, dashBox, graphBox)
 		} else {
 			main = graphBox
@@ -1720,8 +1726,6 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderBranchPickerInner()), m.width, m.height)
 	case viewModeBranchesModal:
 		return composeOverlay(base, renderModalBox(m.renderBranchesModalInner()), m.width, m.height)
-	case viewModeWorktreesModal:
-		return composeOverlay(base, renderModalBox(m.renderWorktreesModalInner()), m.width, m.height)
 	case viewModeCheckoutConfirm:
 		return composeOverlay(base, renderModalBox(m.renderCheckoutConfirmInner()), m.width, m.height)
 	case viewModeWorktreeAddInput:
@@ -1760,7 +1764,7 @@ func boxStyle(focused bool) lipgloss.Style {
 // shortcut reference can fit the full key matrix.
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
-	case viewModeBranchPicker, viewModeBranchesModal, viewModeWorktreesModal,
+	case viewModeBranchPicker, viewModeBranchesModal,
 		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
 		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm:
 		return " "

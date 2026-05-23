@@ -56,7 +56,8 @@ func renderTopDashboard(m Model, width int) string {
 	b.WriteString(renderDashboardHeader(m, len(wts), width, now))
 	b.WriteByte('\n')
 
-	for _, wt := range wts {
+	focused := m.focused == paneDashboard
+	for i, wt := range wts {
 		isCurrent := wt.Path == m.refs.currentWorktreePath
 		dirtyMark := ""
 		if m.refs.worktreeTimedOut[wt.Path] {
@@ -64,8 +65,11 @@ func renderTopDashboard(m Model, width int) string {
 		} else if m.refs.worktreeDirty[wt.Path] {
 			dirtyMark = "●"
 		}
-		// selected=false: dashboard is read-only, no cursor selection.
-		b.WriteString(renderWorktreeSidebarRow(wt, isCurrent, false, dirtyMark, width))
+		// selected highlights the row under the dashboard-focus cursor.
+		// When focus is off, all rows render selected=false → the original
+		// read-only band styling.
+		selected := focused && i == m.dashboardFocus.cursor
+		b.WriteString(renderWorktreeSidebarRow(wt, isCurrent, selected, dirtyMark, width))
 		b.WriteByte('\n')
 	}
 

@@ -406,21 +406,18 @@ func validateWorktreePath(path string) error {
 	return nil
 }
 
-// worktreesModalState backs viewModeWorktreesModal — the global `w`
-// overlay listing every git worktree with a cursor + ▶ current marker.
-// Mirrors branchesModalState (branches.go): an int cursor into
-// m.refs.Worktrees() at open time; reloads (after add / remove) clamp
-// via beginWorktreesModal on re-entry.
-type worktreesModalState struct {
+// dashboardFocusState backs paneDashboard — the top dashboard band's
+// cursor mode toggled by `w`. An int cursor into m.refs.Worktrees() at
+// focus-on time; reloads (after add / remove) clamp via
+// enterDashboardFocus on re-entry.
+type dashboardFocusState struct {
 	cursor int
 }
 
-const helpTextWorktreesModal = "[j/k] nav · [enter] switch · [a] add · [d] remove · [esc] close"
-
-// beginWorktreesModal opens viewModeWorktreesModal. Cursor lands on the
-// current worktree if found, else 0. Empty inventory surfaces an inline
-// error and stays in viewModeNormal (consistent with beginBranchesModal).
-func (m Model) beginWorktreesModal() (Model, tea.Cmd) {
+// enterDashboardFocus flips m.focused to paneDashboard. Cursor lands on
+// the current worktree if found, else 0. Empty inventory surfaces an
+// inline error and leaves focus on paneGraph.
+func (m Model) enterDashboardFocus() (Model, tea.Cmd) {
 	wts := m.refs.Worktrees()
 	if len(wts) == 0 {
 		m.status = "worktrees: none loaded yet"
@@ -434,39 +431,38 @@ func (m Model) beginWorktreesModal() (Model, tea.Cmd) {
 			break
 		}
 	}
-	m.worktreesModal.cursor = cursor
-	m.mode = viewModeWorktreesModal
+	m.dashboardFocus.cursor = cursor
+	m.focused = paneDashboard
 	m.status = ""
 	return m, nil
 }
 
-func (m Model) worktreesModalMoveCursor(delta int) Model {
+func (m Model) dashboardMoveCursor(delta int) Model {
 	wts := m.refs.Worktrees()
 	if len(wts) == 0 {
 		return m
 	}
-	c := m.worktreesModal.cursor + delta
+	c := m.dashboardFocus.cursor + delta
 	if c < 0 {
 		c = 0
 	}
 	if c >= len(wts) {
 		c = len(wts) - 1
 	}
-	m.worktreesModal.cursor = c
+	m.dashboardFocus.cursor = c
 	return m
 }
 
-// worktreesModalEnter dispatches a switchWorktreeMsg for the cursor
-// entry. The Model's existing switchWorktree handler does the validate +
-// retarget + reload chain; the modal closes on entry to viewModeNormal.
-func (m Model) worktreesModalEnter() (Model, tea.Cmd) {
+// dashboardEnter dispatches a switchWorktreeMsg for the cursor entry.
+// The Model's existing switchWorktree handler does the validate +
+// retarget + reload chain. Focus stays on paneDashboard so the user can
+// keep moving / acting from the same surface.
+func (m Model) dashboardEnter() (Model, tea.Cmd) {
 	wts := m.refs.Worktrees()
-	if m.worktreesModal.cursor < 0 || m.worktreesModal.cursor >= len(wts) {
+	if m.dashboardFocus.cursor < 0 || m.dashboardFocus.cursor >= len(wts) {
 		return m, nil
 	}
-	wt := wts[m.worktreesModal.cursor]
-	m.mode = viewModeNormal
-	m.worktreesModal = worktreesModalState{}
+	wt := wts[m.dashboardFocus.cursor]
 	if wt.Path == m.workdir {
 		m.status = "already on this worktree"
 		m.statusStyle = statusOkS
@@ -475,87 +471,22 @@ func (m Model) worktreesModalEnter() (Model, tea.Cmd) {
 	return m, func() tea.Msg { return switchWorktreeMsg{path: wt.Path} }
 }
 
-// worktreesModalAdd opens the existing add-input sub-modal. The modal
-// flow takes over (viewModeWorktreeAddInput); on cancel the user returns
-// to viewModeNormal, not the worktrees modal, matching how branches
-// modal hands off to viewModeRefDeleteConfirm.
-func (m Model) worktreesModalAdd() (Model, tea.Cmd) {
-	m.worktreesModal = worktreesModalState{}
+// dashboardAdd opens the existing add-input sub-modal. The sub-modal
+// owns key routing while open; on cancel / success the user returns to
+// viewModeNormal with focus still on paneDashboard.
+func (m Model) dashboardAdd() (Model, tea.Cmd) {
 	return m.beginWorktreeAdd()
 }
 
-// worktreesModalRemove arms the existing remove-confirm sub-modal for
-// the cursor entry. beginWorktreeRemove already rejects removing the
-// current worktree with a status line.
-func (m Model) worktreesModalRemove() (Model, tea.Cmd) {
+// dashboardRemove arms the existing remove-confirm sub-modal for the
+// cursor entry. beginWorktreeRemove already rejects removing the
+// current worktree with a status line. Focus stays on paneDashboard.
+func (m Model) dashboardRemove() (Model, tea.Cmd) {
 	wts := m.refs.Worktrees()
-	if m.worktreesModal.cursor < 0 || m.worktreesModal.cursor >= len(wts) {
+	if m.dashboardFocus.cursor < 0 || m.dashboardFocus.cursor >= len(wts) {
 		return m, nil
 	}
-	target := wts[m.worktreesModal.cursor]
-	m.worktreesModal = worktreesModalState{}
+	target := wts[m.dashboardFocus.cursor]
 	m = m.beginWorktreeRemove(target)
 	return m, nil
-}
-
-// renderWorktreesModalInner — header + scroll-windowed worktree list
-// with ▶ on the current entry and `>` on the cursor.
-func (m Model) renderWorktreesModalInner() string {
-	wts := m.refs.Worktrees()
-	header := modalHeaderS.Render("[Worktrees]")
-	if len(wts) == 0 {
-		return strings.Join([]string{
-			header,
-			help.Render("(no worktrees loaded)"),
-			help.Render(helpTextWorktreesModal),
-		}, "\n")
-	}
-
-	const visibleBudget = 16
-	visibleRows := visibleBudget
-	if len(wts) < visibleRows {
-		visibleRows = len(wts)
-	}
-	top := m.worktreesModal.cursor - visibleRows/2
-	if top < 0 {
-		top = 0
-	}
-	end := top + visibleRows
-	if end > len(wts) {
-		end = len(wts)
-		top = end - visibleRows
-		if top < 0 {
-			top = 0
-		}
-	}
-
-	lines := []string{header}
-	if top > 0 {
-		lines = append(lines, help.Render(fmt.Sprintf("↑ %d more", top)))
-	}
-	for i := top; i < end; i++ {
-		wt := wts[i]
-		base := filepath.Base(wt.Path)
-		label := base
-		if wt.Branch != "" {
-			label = label + " · " + wt.Branch
-		} else if wt.Detached {
-			label = label + " · (detached)"
-		}
-		if wt.Path == m.workdir {
-			label = "▶ " + label
-		} else {
-			label = "  " + label
-		}
-		if i == m.worktreesModal.cursor {
-			lines = append(lines, selectedStyle.Render("> "+label))
-		} else {
-			lines = append(lines, "  "+label)
-		}
-	}
-	if rest := len(wts) - end; rest > 0 {
-		lines = append(lines, help.Render(fmt.Sprintf("↓ %d more", rest)))
-	}
-	lines = append(lines, help.Render(helpTextWorktreesModal))
-	return strings.Join(lines, "\n")
 }

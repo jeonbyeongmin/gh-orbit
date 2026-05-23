@@ -78,8 +78,8 @@ func (r *refModel) ResetForReload() {
 
 // Update only consumes refsLoaded* messages. KeyMsg handling lived here
 // when the sidebar owned a cursor; the cursor moved into branchesModal
-// and worktreesModal, so refModel.Update is purely about ingesting fresh
-// for-each-ref output.
+// and the top-dashboard focus mode, so refModel.Update is purely about
+// ingesting fresh for-each-ref output.
 func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	switch m := msg.(type) {
 	case refsLoadedMsg:

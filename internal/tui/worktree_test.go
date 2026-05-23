@@ -306,19 +306,24 @@ func TestWorktreesModalDOpensRemoveConfirm(t *testing.T) {
 	}
 }
 
-// TestWorktreesModalDOnCurrentRejects — d on the current worktree (the
-// one m.workdir lives in) is rejected with a status line; modal closes
-// (worktreesModalRemove resets state).
+// TestWorktreesModalDOnCurrentRejects — d on a non-main current worktree
+// (cockpit lives in a linked entry) is rejected with the current-guard
+// status line; modal closes (worktreesModalRemove resets state). The
+// main-on-main and main-from-linked cases are covered by sibling tests
+// so this one isolates the current-guard's single responsibility.
 func TestWorktreesModalDOnCurrentRejects(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
-	m.workdir = "/r/main"
+	m.workdir = "/r/feat"
 	m.refs.SetWorktrees([]git.Worktree{
 		{Path: "/r/main", Branch: "main", IsMain: true},
-	}, "/r/main")
+		{Path: "/r/feat", Branch: "feat"},
+	}, "/r/feat")
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)

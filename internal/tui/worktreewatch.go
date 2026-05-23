@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )

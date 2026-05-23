@@ -21,10 +21,10 @@ Layout (N=4 example):
 ```
 ┌──────────────────────────────────────────────────────────┐
 │ Worktrees (4)              ◆ Local Changes 3 files…      │
-│ ▶ main · develop ●                                       │
-│   feat-auth · feat/auth                                  │
-│   feat-qa · feat/qa                                      │
-│   refactor · feat/refactor ●                             │
+│ ▶ main · develop ● · sync watcher fix · 2m               │
+│   feat-auth · feat/auth · add login form · 1h            │
+│   feat-qa · feat/qa · run tests green · 3d               │
+│   refactor · feat/refactor ● · wip                       │
 │ ────────────────────────────── fetched 14m ago           │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -33,10 +33,13 @@ Layout (N=4 example):
   The Local Changes meta carries `N files · +X -Y · Zm ago` when the
   working tree is dirty (numstat against HEAD + load wall clock); empty
   working tree drops the meta. On narrow widths the label wins.
-- **Worktree row** — `name · branch · dirty`. `name` is the basename of
-  the worktree path. The current entry (the one `m.workdir` lives in)
-  prefixes with `▶` + bold + select color so the user knows which
-  context the rest of the cockpit describes.
+- **Worktree row** — `name · branch · ● · subject · time`. `name` is the
+  basename of the worktree path. The current entry (the one `m.workdir`
+  lives in) prefixes with `▶` + bold + select color so the user knows
+  which context the rest of the cockpit describes. `subject` + `time` are
+  the worktree HEAD's last-commit summary (see **Last-commit column**) —
+  graph only ever shows the *current* tree's commits, so the row carries
+  the others' last activity without a switch.
 - **Separator line** — horizontal rule with `fetched Xm ago` right-
   aligned. The freshness clock for fetch attempts; blank rule before
   the first fetch.
@@ -48,8 +51,33 @@ Dirty marker on each row:
   the dashboard never silently lies about a slow / stuck worktree.
 - (none) — clean, OR not yet loaded.
 
+### Last-commit column
+
+`subject` (truncated) + `time` (relative, e.g. `2m`, `3d` — the same
+`relativeShortAt` vocabulary as the footer, no ` ago` suffix) show the
+worktree HEAD's last commit. Both come from the dirty fan-out (one
+`git log -1` per tree, folded into the same goroutine as the dirty
+probe — see **Dirty fan-out**).
+
+Width-adaptive degradation, since the band shares the right column with
+the graph. Display order is `▶ name · branch · ● · subject · time`; when
+the row is too narrow the columns drop **whole** (no leftover `…`
+fragment) in priority order:
+
+1. `subject` — dropped first, and hidden whenever fewer than **12**
+   columns remain for it (a 1–2 char fragment is useless). When shown it
+   takes the leftover width, capped at **30**.
+2. `branch`
+3. `time`
+4. `●` dirty marker — dropped last.
+
+`▶ name` always survives. A worktree with no commits yet (unborn HEAD /
+bare) or a still-loading / timed-out row renders the `subject` + `time`
+slots **blank** — never `?`. The `?` placeholder is reserved for the
+dirty marker; a `?` in the time slot would read as a literal value.
+
 The dashboard is read-only by default; pressing `w` toggles focus on
-so j/k/enter/a/d/esc route to the dashboard's cursor. `refModel.SetWorktrees(entries, currentPath)` populates the state; per-tree fan-out fires after every `worktreesLoadedMsg` and tags each row's `worktreeDirty` / `worktreeTimedOut` state.
+so j/k/enter/a/d/esc route to the dashboard's cursor. `refModel.SetWorktrees(entries, currentPath)` populates the state; per-tree fan-out fires after every `worktreesLoadedMsg` and tags each row's `worktreeDirty` / `worktreeTimedOut` / `worktreeLastCommit` state.
 
 ## Dashboard focus mode (`paneDashboard`)
 
@@ -167,14 +195,28 @@ are user-facing rejections that should persist until the next action.
 ## Dirty fan-out
 
 `worktreeDirtyFanoutCmd(reqID, paths)` dispatches N concurrent
-`git status --porcelain` calls, one per worktree path. Each one's
-result lands as a separate `worktreeDirtyResultMsg` so rows light up
-incrementally instead of waiting for the slowest tree.
+goroutines, one per worktree path. Each one's result lands as a
+separate `worktreeDirtyResultMsg` so rows light up incrementally
+instead of waiting for the slowest tree.
+
+Each goroutine runs **two** probes and ships them in one msg: the dirty
+`git status` and the last-commit `git log -1` (subject + committer
+time). Folding the last-commit fetch into the dirty goroutine — rather
+than a second independent fan-out — keeps a single `reqID`-tagged msg,
+halves the goroutine count, makes the `●` marker and the subject/time
+columns appear in the same frame (no jitter between them), and means
+last-commit inherits every dirty refresh trigger below for free (its
+data goes stale on exactly the same events). The dirty probe runs first
+so it owns the budget; `WorktreeLastCommit`'s error is dropped (blank
+columns) since a missing subject is non-fatal. Unlike `git status`,
+`git log` never rewrites `.git/index`, so the fold adds no
+watcher-flicker risk (see below).
 
 **E3 budget**: each per-row goroutine has a 3-second
-`context.WithTimeout`. On timeout the msg carries `timedOut=true`; the
-dashboard renders `?` for that row instead of trusting the
-(effectively unknown) dirty bit. Without the budget a stuck NFS / slow
+`context.WithTimeout` shared by both probes. On timeout the msg carries
+`timedOut=true`; the dashboard renders `?` for that row's dirty marker
+instead of trusting the (effectively unknown) dirty bit, and leaves the
+last-commit columns blank. Without the budget a stuck NFS / slow
 network mount could leave the dashboard visually stalled.
 
 Stale-drop: a `worktreeDirtyResultMsg` whose `reqID` doesn't match the
@@ -237,7 +279,6 @@ into its own backlog so the policy decisions get a dedicated interview:
 - `git worktree lock` / `unlock` — lock-recommendation policy.
 - `git worktree move` — path-input UX + post-move workdir reconciliation.
 - `git worktree prune` — auto vs. manual trigger, prunable display.
-- last commit subject / time on each row (per-wt HEAD fan-out).
 - Claude Code agent-session hint per row (requires Claude Code internals
   research before the detection method can be chosen).
 

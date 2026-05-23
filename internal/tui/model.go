@@ -443,6 +443,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.refs.SetWorktreeDirty(msg.path, msg.dirty, msg.timedOut)
+		m.refs.SetWorktreeLastCommit(msg.path, msg.subject, msg.when)
 		return m, nil
 
 	case worktreeAddSucceededMsg:

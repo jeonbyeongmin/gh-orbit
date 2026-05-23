@@ -41,11 +41,21 @@ type refModel struct {
 	currentWorktreePath string
 	worktreeDirty       map[string]bool
 	worktreeTimedOut    map[string]bool
+	worktreeLastCommit  map[string]worktreeCommitMeta
 
 	localChangesSummary         git.LocalChangesSummary
 	localChangesSummaryLoadedAt time.Time
 
 	lastFetchAt time.Time
+}
+
+// worktreeCommitMeta caches one worktree's last-commit subject + time for
+// the dashboard row. The zero value (empty subject, zero time) renders as a
+// blank last-commit column — used both while the fan-out is in flight and
+// when the worktree has no commits yet (unborn HEAD / bare).
+type worktreeCommitMeta struct {
+	subject string
+	when    time.Time
 }
 
 func newRefsModel() refModel { return refModel{} }
@@ -115,6 +125,9 @@ func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 	if r.worktreeTimedOut == nil {
 		r.worktreeTimedOut = make(map[string]bool)
 	}
+	if r.worktreeLastCommit == nil {
+		r.worktreeLastCommit = make(map[string]worktreeCommitMeta)
+	}
 	live := make(map[string]struct{}, len(entries))
 	for _, e := range entries {
 		live[e.Path] = struct{}{}
@@ -127,6 +140,11 @@ func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 	for p := range r.worktreeTimedOut {
 		if _, ok := live[p]; !ok {
 			delete(r.worktreeTimedOut, p)
+		}
+	}
+	for p := range r.worktreeLastCommit {
+		if _, ok := live[p]; !ok {
+			delete(r.worktreeLastCommit, p)
 		}
 	}
 }
@@ -146,9 +164,28 @@ func (r *refModel) SetWorktreeDirty(path string, dirty, timedOut bool) {
 	}
 }
 
+// SetWorktreeLastCommit stores one path's last-commit subject + time from the
+// fan-out. Paired with SetWorktreeDirty in the worktreeDirtyResultMsg handler
+// (one msg feeds both) so the `●` marker and the subject/time columns update
+// in the same frame.
+func (r *refModel) SetWorktreeLastCommit(path, subject string, when time.Time) {
+	if r.worktreeLastCommit == nil {
+		r.worktreeLastCommit = make(map[string]worktreeCommitMeta)
+	}
+	r.worktreeLastCommit[path] = worktreeCommitMeta{subject: subject, when: when}
+}
+
 func (r refModel) Worktrees() []git.Worktree { return r.worktrees }
 func (r refModel) WorktreeDirty(path string) bool {
 	return r.worktreeDirty[path]
+}
+
+// WorktreeLastCommit returns the cached last-commit subject + time for a
+// worktree path. Missing / not-yet-loaded paths return the zero value, which
+// the dashboard row renders as a blank last-commit column.
+func (r refModel) WorktreeLastCommit(path string) (string, time.Time) {
+	m := r.worktreeLastCommit[path]
+	return m.subject, m.when
 }
 
 // SetLocalChangesSummary publishes the latest numstat + reload time so

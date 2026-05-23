@@ -405,7 +405,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, e := range msg.entries {
 			paths = append(paths, e.Path)
 		}
+		// Reconcile the external-change watcher with the fresh inventory.
+		// add/remove/switch all funnel through this case, so Sync sees every
+		// gitDir set change. nil-safe for the silent-degrade path.
+		m.watcher.Sync(msg.entries)
 		return m, worktreeDirtyFanoutCmd(m.sidebarWorktreesReqID, paths)
+
+	case worktreeWatchedChangeMsg:
+		// fsnotify saw HEAD or index settle on a watched worktree. Always
+		// refresh the inventory so the row's branch / dirty marker tracks
+		// the new state. If the event hit the current worktree, also fire
+		// reloadCmd so graph + refs stay coherent — an external commit on
+		// the tree we're viewing must surface as a new graph row, not just
+		// a relabeled dashboard line. reloadCmd bumps reqID a second time,
+		// which only burns one generation (stale-drop logic is reqID-equal,
+		// not monotonic).
+		m.sidebarWorktreesReqID++
+		cmds := []tea.Cmd{loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID)}
+		if msg.path == m.workdir {
+			cmds = append(cmds, m.reloadCmd())
+		}
+		return m, tea.Batch(cmds...)
 
 	case worktreesLoadFailedMsg:
 		if msg.reqID != m.sidebarWorktreesReqID {

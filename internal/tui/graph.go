@@ -179,12 +179,19 @@ func (d commitDelegate) shouldDim(index int, hash string) bool {
 	return !isAncestor
 }
 
+// colorCursorRowBg is xterm 237 — a dark grey one step above colorDim
+// (240). Used as the dashboard cursor row's background tint so it stays
+// visible against the default body fg without competing with the
+// colorSelected (205) accent that paints the `▶` current-row body.
+const colorCursorRowBg = "237"
+
 var (
-	hashStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorHash))
-	timeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime))
-	authorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAuthor))
-	cursorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected))
-	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected)).Bold(true)
+	hashStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color(colorHash))
+	timeStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime))
+	authorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAuthor))
+	cursorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected))
+	selectedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected)).Bold(true)
+	cursorRowBgStyle = lipgloss.NewStyle().Background(lipgloss.Color(colorCursorRowBg))
 )
 
 // shortHash truncates a 40-char object name to the conventional 7-char abbrev.

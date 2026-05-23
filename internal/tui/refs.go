@@ -284,11 +284,17 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMa
 		return prefix
 	}
 	body = runewidth.Truncate(body, avail, "…")
-	switch {
-	case selected:
+	// isCurrent paints the "you're here" body styling (bold + accent fg)
+	// independent of focus — Decision 4 keeps the ▶ row visually salient
+	// whether or not the dashboard has the cursor.
+	if isCurrent {
 		body = selectedStyle.Render(body)
-	case isCurrent:
-		body = cursorStyle.Render(body)
+	}
+	// selected overlays a background tint to mark the dashboard cursor
+	// row. fg / bg are independent channels in lipgloss, so the bold +
+	// accent fg above survives the bg overlay.
+	if selected {
+		body = cursorRowBgStyle.Render(body)
 	}
 	return prefix + body
 }

@@ -291,12 +291,32 @@ func composeLocalChangesRow(label, meta string, width int, selected bool) string
 	return labelStyle.Render(label) + sep + timeStyle.Render(metaOut)
 }
 
-// renderWorktreeSidebarRow formats one worktree entry inside the
-// dashboard row body. `▶` + bold for the current entry; 2-col indent
-// for the rest. The `Sidebar` in the name is a historical artifact —
-// the dashboard reuses the same row shape.
-func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMark string, width int) string {
+// worktreeSubjectFloor is the minimum leftover width (after the fixed
+// columns + separator) the last-commit subject needs before it renders at
+// all. Below it the subject column is dropped whole rather than chopped to a
+// useless "f…" fragment. worktreeSubjectCap bounds it on the other end so a
+// wide terminal can't let one verbose subject swallow the row.
+const (
+	worktreeSubjectFloor = 12
+	worktreeSubjectCap   = 30
+)
+
+// renderWorktreeSidebarRow formats one worktree entry inside the dashboard
+// row body. `▶` + bold for the current entry; 2-col indent for the rest. The
+// `Sidebar` in the name is a historical artifact — the dashboard reuses the
+// same row shape.
+//
+// Display order is `▶ name · branch · ● · subject · time`. When the band is
+// too narrow the columns drop whole (no leftover "…" fragment) in priority
+// order subject → branch → time → ●, with `▶ name` always preserved. subject
+// gets whatever width is left after the fixed columns fit, capped at
+// worktreeSubjectCap and hidden below worktreeSubjectFloor. A zero `when` /
+// empty `subject` (loading, timed-out, or unborn-HEAD worktree) simply omits
+// that column — the last-commit slots render blank, never `?`.
+func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMark, subject string, when, now time.Time, width int) string {
 	const prefixWidth = 2
+	const sep = " · "
+	sepW := runewidth.StringWidth(sep)
 	prefix := "  "
 	if isCurrent {
 		prefix = cursorStyle.Render("▶") + " "
@@ -305,22 +325,86 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMa
 	if i := strings.LastIndexByte(name, '/'); i >= 0 {
 		name = name[i+1:]
 	}
-	parts := []string{name}
-	switch {
-	case wt.Detached:
-		parts = append(parts, "(detached)")
-	case wt.Branch != "":
-		parts = append(parts, wt.Branch)
-	}
-	if dirtyMark != "" {
-		parts = append(parts, dirtyMark)
-	}
-	body := strings.Join(parts, " · ")
 	avail := width - prefixWidth
 	if avail < 1 {
 		return prefix
 	}
-	body = runewidth.Truncate(body, avail, "…")
+
+	branch := ""
+	switch {
+	case wt.Detached:
+		branch = "(detached)"
+	case wt.Branch != "":
+		branch = wt.Branch
+	}
+	timeStr := ""
+	if !when.IsZero() {
+		timeStr = relativeShortAt(when, now)
+	}
+
+	// Fixed (non-subject) columns, present-flag gated. Width is measured in
+	// display order: name · branch · ● · time.
+	hasBranch := branch != ""
+	hasDirty := dirtyMark != ""
+	hasTime := timeStr != ""
+	fixedWidth := func() int {
+		parts := []string{name}
+		if hasBranch {
+			parts = append(parts, branch)
+		}
+		if hasDirty {
+			parts = append(parts, dirtyMark)
+		}
+		if hasTime {
+			parts = append(parts, timeStr)
+		}
+		return runewidth.StringWidth(strings.Join(parts, sep))
+	}
+	// Drop fixed columns until they fit. subject is dropped before any of
+	// these (it's added afterward from the leftover), so the order here is
+	// branch → time → ● ; name is never dropped. The presence guard stops
+	// the loop once only name remains — the final Truncate clips that as a
+	// last resort.
+	for fixedWidth() > avail && (hasBranch || hasTime || hasDirty) {
+		switch {
+		case hasBranch:
+			hasBranch = false
+		case hasTime:
+			hasTime = false
+		default: // hasDirty
+			hasDirty = false
+		}
+	}
+
+	// subject takes the width left after the fixed columns + one separator,
+	// capped and floored. A negative leftover (name alone overflows) falls
+	// below the floor, so subject drops out here too.
+	if subject != "" {
+		if leftover := avail - fixedWidth() - sepW; leftover >= worktreeSubjectFloor {
+			budget := leftover
+			if budget > worktreeSubjectCap {
+				budget = worktreeSubjectCap
+			}
+			subject = runewidth.Truncate(subject, budget, "…")
+		} else {
+			subject = ""
+		}
+	}
+
+	parts := []string{name}
+	if hasBranch {
+		parts = append(parts, branch)
+	}
+	if hasDirty {
+		parts = append(parts, dirtyMark)
+	}
+	if subject != "" {
+		parts = append(parts, subject)
+	}
+	if hasTime {
+		parts = append(parts, timeStr)
+	}
+	body := runewidth.Truncate(strings.Join(parts, sep), avail, "…")
 	// isCurrent paints the "you're here" body styling (bold + accent fg)
 	// independent of focus — Decision 4 keeps the ▶ row visually salient
 	// whether or not the dashboard has the cursor.

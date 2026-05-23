@@ -164,11 +164,18 @@ func (m Model) beginWorktreeAdd() (Model, tea.Cmd) {
 }
 
 // beginWorktreeRemove opens the remove-confirm sub-modal triggered by
-// `d` on a worktree row in the sidebar. Rejects removing the current
-// worktree (the user must switch first — git refuses anyway, but we
-// surface a friendlier message before invoking the wrapper).
+// `d` on a worktree row in the sidebar. Rejects removing the main
+// worktree (permanent constraint — git refuses regardless of state)
+// or the current worktree (switch first). Guard order surfaces the
+// stronger constraint first so a main-on-main case doesn't mislead
+// the user into a switch-then-retry round trip.
 func (m Model) beginWorktreeRemove(target git.Worktree) Model {
 	if m.worktreeAction.actionInFlight {
+		return m
+	}
+	if target.IsMain {
+		m.status = "remove: cannot remove main worktree"
+		m.statusStyle = statusErrS
 		return m
 	}
 	if target.Path == m.workdir {

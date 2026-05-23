@@ -792,3 +792,53 @@ func TestSucceededMsgRefreshesWorktrees(t *testing.T) {
 		})
 	}
 }
+
+// TestWatchedChangeNonCurrent pins that an fsnotify event on a *different*
+// worktree triggers only the inventory refresh (one sidebarWorktreesReqID
+// bump) — graph + refs stay untouched because the user is still looking
+// at the current worktree's history.
+func TestWatchedChangeNonCurrent(t *testing.T) {
+	m := New()
+	m.workdir = "/repo/main"
+	prevStream := m.streamReqID
+	prevSidebar := m.sidebarWorktreesReqID
+
+	updated, cmd := m.Update(worktreeWatchedChangeMsg{path: "/repo/feat"})
+	got := updated.(Model)
+
+	if got.sidebarWorktreesReqID != prevSidebar+1 {
+		t.Errorf("non-current path: sidebarWorktreesReqID = %d, want %d", got.sidebarWorktreesReqID, prevSidebar+1)
+	}
+	if got.streamReqID != prevStream {
+		t.Errorf("non-current path must not bump streamReqID: got %d, was %d", got.streamReqID, prevStream)
+	}
+	if cmd == nil {
+		t.Errorf("expected non-nil cmd")
+	}
+}
+
+// TestWatchedChangeCurrent pins that an fsnotify event on the *current*
+// worktree fans out to the full reloadCmd — streamReqID bumps (graph
+// reload) and sidebarWorktreesReqID bumps twice (once at handler entry,
+// once inside reloadCmd). Without this, an external commit to the tree
+// the cockpit is viewing would relabel the dashboard row but leave the
+// graph silently stale.
+func TestWatchedChangeCurrent(t *testing.T) {
+	m := New()
+	m.workdir = "/repo/main"
+	prevStream := m.streamReqID
+	prevSidebar := m.sidebarWorktreesReqID
+
+	updated, cmd := m.Update(worktreeWatchedChangeMsg{path: "/repo/main"})
+	got := updated.(Model)
+
+	if got.streamReqID != prevStream+1 {
+		t.Errorf("current path must bump streamReqID once via reloadCmd: got %d, was %d", got.streamReqID, prevStream)
+	}
+	if got.sidebarWorktreesReqID != prevSidebar+2 {
+		t.Errorf("current path bumps sidebarWorktreesReqID twice (handler + reloadCmd): got %d, was %d", got.sidebarWorktreesReqID, prevSidebar)
+	}
+	if cmd == nil {
+		t.Errorf("expected non-nil cmd")
+	}
+}

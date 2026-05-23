@@ -38,7 +38,12 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.Printf("orbit start (version=%s)", version)
 
-	p := tea.NewProgram(tui.New(), tea.WithAltScreen(), tea.WithReportFocus())
+	m, w := tui.NewWithWatcher()
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithReportFocus())
+	if w != nil {
+		w.Bind(p)
+		defer func() { _ = w.Close() }()
+	}
 	if _, err := p.Run(); err != nil {
 		log.Printf("orbit exit error: %v", err)
 		fmt.Fprintf(os.Stderr, "orbit: %v\n", err)

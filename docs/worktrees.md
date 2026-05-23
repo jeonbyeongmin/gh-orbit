@@ -196,11 +196,21 @@ load drops on arrival:
   the worktree reqID and dispatches the inventory + fan-out together.
 - Local Changes `stage` / `unstage` success (explicit, in addition to
   their own status reload — needed for the dashboard `●` to flip).
+- **External git op** (another shell, another worktree's agent session)
+  — each known worktree's `.git/HEAD` and `.git/index` are watched via
+  fsnotify; a 200ms trailing debounce coalesces burst writes (commit,
+  rebase) into one refresh. The watcher emits
+  `worktreeWatchedChangeMsg{path}` into Update; the handler bumps the
+  reqID and dispatches `loadWorktreesCmd`. When the event path matches
+  `m.workdir` (i.e., the *current* worktree changed externally), the
+  handler also fires `reloadCmd` so graph + refs follow the new HEAD,
+  not just the dashboard row.
 
-Trees changed externally (another shell, another worktree's agent
-session) surface on the next such action, or whenever the user presses
-`r`. Automatic external-change detection (fsnotify / poll) is a
-separate backlog.
+If `fsnotify.NewWatcher()` fails at startup (rare — inotify limit,
+sandboxed env), the cockpit silent-degrades: status paints `external
+watch unavailable — use 'r' to refresh` once, and the rest of the
+refresh trigger list above keeps working. Manual `r` is always
+sufficient — the watcher is an *optional* convenience layer over it.
 
 ## Scope: v1 explicitly excludes
 

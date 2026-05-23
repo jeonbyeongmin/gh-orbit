@@ -282,6 +282,16 @@ type Model struct {
 	// triggered from a worktree row (a / d). Reset to zero on esc /
 	// success; while open the textinput owns key routing.
 	worktreeAction worktreeActionState
+	// watcher is the fsnotify-backed external-change detector. nil when
+	// NewWithWatcher was not used (tests, embedded usage) or when
+	// fsnotify.NewWatcher itself failed at startup; the worktreesLoadedMsg
+	// handler nil-guards every call. Owned by main.go (Bind + Close), the
+	// Model only borrows it.
+	watcher *worktreeWatcher
+	// externalWatchUnavailable is set by NewWithWatcher when fsnotify
+	// initialization failed. Init() paints a one-shot status line so the
+	// user knows automatic external refresh is off; `r` still works.
+	externalWatchUnavailable bool
 }
 
 func New() Model {
@@ -314,6 +324,29 @@ func New() Model {
 		m.pullPrefStrategy = prefs.Pull.Strategy
 	}
 	return m
+}
+
+// NewWithWatcher builds the Model plus an attached external-change
+// watcher. main.go uses this path so fsnotify init failure can flip the
+// silent-degrade flag without affecting any other call site that uses
+// the bare New() (tests, future embedders). The returned *worktreeWatcher
+// is nil when fsnotify.NewWatcher failed — callers must nil-check before
+// Bind / Close, mirroring the Model's own nil-guards.
+func NewWithWatcher() (Model, *worktreeWatcher) {
+	m := New()
+	w, err := newWorktreeWatcher()
+	if err != nil {
+		log.Printf("external watch unavailable: %v", err)
+		m.externalWatchUnavailable = true
+		// Don't stomp a workdir / prefs error from New() — those matter more.
+		if m.status == "" {
+			m.status = "external watch unavailable — use 'r' to refresh"
+			m.statusStyle = statusErrS
+		}
+		return m, nil
+	}
+	m.watcher = w
+	return m, w
 }
 
 func (m Model) Init() tea.Cmd {
@@ -372,7 +405,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, e := range msg.entries {
 			paths = append(paths, e.Path)
 		}
+		// Reconcile the external-change watcher with the fresh inventory.
+		// add/remove/switch all funnel through this case, so Sync sees every
+		// gitDir set change. nil-safe for the silent-degrade path.
+		m.watcher.Sync(msg.entries)
 		return m, worktreeDirtyFanoutCmd(m.sidebarWorktreesReqID, paths)
+
+	case worktreeWatchedChangeMsg:
+		// fsnotify saw HEAD or index settle on a watched worktree. Always
+		// refresh the inventory so the row's branch / dirty marker tracks
+		// the new state. If the event hit the current worktree, also fire
+		// reloadCmd so graph + refs stay coherent — an external commit on
+		// the tree we're viewing must surface as a new graph row, not just
+		// a relabeled dashboard line. reloadCmd bumps reqID a second time,
+		// which only burns one generation (stale-drop logic is reqID-equal,
+		// not monotonic).
+		m.sidebarWorktreesReqID++
+		cmds := []tea.Cmd{loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID)}
+		if msg.path == m.workdir {
+			cmds = append(cmds, m.reloadCmd())
+		}
+		return m, tea.Batch(cmds...)
 
 	case worktreesLoadFailedMsg:
 		if msg.reqID != m.sidebarWorktreesReqID {

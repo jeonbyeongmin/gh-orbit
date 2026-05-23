@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestParseWorktreePorcelainEmpty(t *testing.T) {
@@ -295,5 +296,37 @@ func TestWorktreeListShowsLocked(t *testing.T) {
 	}
 	if locked.LockReason != "on external drive" {
 		t.Errorf("LockReason: %q", locked.LockReason)
+	}
+}
+
+func TestWorktreeLastCommit(t *testing.T) {
+	main := setupWorktreeFixture(t)
+	subject, when, err := WorktreeLastCommit(context.Background(), main)
+	if err != nil {
+		t.Fatalf("WorktreeLastCommit: %v", err)
+	}
+	if subject != "init" {
+		t.Errorf("subject = %q, want %q", subject, "init")
+	}
+	if when.IsZero() {
+		t.Errorf("when is zero, want the commit's real time")
+	}
+	if d := time.Since(when); d < 0 || d > time.Hour {
+		t.Errorf("when = %v not within the last hour", when)
+	}
+}
+
+func TestWorktreeLastCommitUnbornHEAD(t *testing.T) {
+	// A repo with no commits yet makes `git log -1` exit non-zero. The
+	// wrapper must report a blank result (not an error) so the dashboard
+	// renders an empty last-commit column instead of spamming the status bar.
+	root := t.TempDir()
+	gitRun(t, root, "init", "--initial-branch=main")
+	subject, when, err := WorktreeLastCommit(context.Background(), root)
+	if err != nil {
+		t.Fatalf("WorktreeLastCommit on unborn HEAD: unexpected err %v", err)
+	}
+	if subject != "" || !when.IsZero() {
+		t.Errorf("unborn HEAD should yield empty result, got subject=%q when=%v", subject, when)
 	}
 }

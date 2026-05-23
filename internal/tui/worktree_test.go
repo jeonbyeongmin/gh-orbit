@@ -335,6 +335,61 @@ func TestWorktreesModalDOnCurrentRejects(t *testing.T) {
 	}
 }
 
+// TestWorktreesModalDOnMainRejects — d on a main-and-current entry
+// (fresh checkout, no linked worktrees) is rejected with the main-guard
+// status line. Pairs with TestWorktreesModalDOnMainFromLinkedRejects to
+// lock in the main-first guard order from both directions.
+func TestWorktreesModalDOnMainRejects(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/r/main"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+	}, "/r/main")
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.mode == viewModeWorktreeRemoveConfirm {
+		t.Error("d on main worktree should NOT open remove confirm")
+	}
+	if !strings.Contains(m.status, "cannot remove main worktree") {
+		t.Errorf("expected main rejection status, got %q", m.status)
+	}
+}
+
+// TestWorktreesModalDOnMainFromLinkedRejects — cockpit lives in a linked
+// worktree; d on the main row (not current) still gets rejected by the
+// main-guard before the current-guard ever runs. This is the load-bearing
+// case for the main-first guard order: it stops the user from doing a
+// switch-then-retry round trip when the underlying constraint is
+// permanent.
+func TestWorktreesModalDOnMainFromLinkedRejects(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.workdir = "/r/feat"
+	m.refs.SetWorktrees([]git.Worktree{
+		{Path: "/r/main", Branch: "main", IsMain: true},
+		{Path: "/r/feat", Branch: "feat"},
+	}, "/r/feat")
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.mode == viewModeWorktreeRemoveConfirm {
+		t.Error("d on main row from linked cockpit should NOT open remove confirm")
+	}
+	if !strings.Contains(m.status, "cannot remove main worktree") {
+		t.Errorf("expected main rejection status (guard order), got %q", m.status)
+	}
+}
+
 // TestWorktreesModalAOpensAddInput — a inside the modal opens the
 // add-input sub-modal regardless of cursor position.
 func TestWorktreesModalAOpensAddInput(t *testing.T) {

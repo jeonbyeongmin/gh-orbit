@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // agentSessionFreshness is how recent a worktree's newest session-transcript
@@ -82,4 +84,58 @@ func agentActiveForWorktree(projectsDir, worktreePath string, now time.Time, win
 		return false
 	}
 	return now.Sub(newest) <= window
+}
+
+// agentSessionPollInterval is the cadence of the agent-session poll. The
+// signal lives outside the worktree's .git (under ~/.claude/projects/), so
+// the fsnotify watcher that drives dirty / branch updates can't see it; a
+// lightweight stat-only tick re-derives every worktree's 🤖 state instead.
+// Fully decoupled from the git-status dirty fan-out (which owns a 3s budget
+// and touches git index locks) — this only stat()s transcript files.
+const agentSessionPollInterval = 30 * time.Second
+
+// agentSessionProjectsDir resolves ~/.claude/projects. A package-level var
+// so tests can repoint it at a fixture dir. Returns "" when the home dir is
+// unknown, which makes agentActiveForWorktree degrade to "no marker".
+var agentSessionProjectsDir = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude", "projects")
+}
+
+// agentSessionTickMsg fires on the poll cadence; its handler dispatches a
+// fresh agentSessionPollCmd for the current worktree set.
+type agentSessionTickMsg struct{}
+
+// agentSessionPollMsg carries one poll's result (worktree path → active).
+// Its handler writes the map into refModel and re-arms the tick.
+type agentSessionPollMsg struct {
+	active map[string]bool
+}
+
+// agentSessionTickCmd arms the next poll tick. Init fires it once; the
+// agentSessionPollMsg handler re-fires it after each poll, so exactly one
+// tick is ever in flight (the codebase has no other recurring tick — every
+// existing tea.Tick is one-shot, so this self-rearm is the whole loop).
+func agentSessionTickCmd() tea.Cmd {
+	return tea.Tick(agentSessionPollInterval, func(time.Time) tea.Msg {
+		return agentSessionTickMsg{}
+	})
+}
+
+// agentSessionPollCmd stats projectsDir/<slug>/*.jsonl for each path off the
+// main loop and reports the active set. Pure read-only stat: it never
+// mutates and carries no reqID — a stale result (e.g. computed across a
+// worktree switch) is harmless because the next tick re-derives from the
+// then-current inventory.
+func agentSessionPollCmd(projectsDir string, paths []string, now time.Time) tea.Cmd {
+	return func() tea.Msg {
+		active := make(map[string]bool, len(paths))
+		for _, p := range paths {
+			active[p] = agentActiveForWorktree(projectsDir, p, now, agentSessionFreshness)
+		}
+		return agentSessionPollMsg{active: active}
+	}
 }

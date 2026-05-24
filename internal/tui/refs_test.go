@@ -81,6 +81,7 @@ func TestRefModelSetWorktreesPrunesDirtyMaps(t *testing.T) {
 	r.SetWorktrees([]git.Worktree{{Path: "/a"}, {Path: "/b"}}, "/a")
 	r.SetWorktreeDirty("/a", true, false)
 	r.SetWorktreeDirty("/b", false, true)
+	r.SetAgentActive("/b", true)
 	if !r.WorktreeDirty("/a") {
 		t.Error("setup: /a should be dirty")
 	}
@@ -91,6 +92,9 @@ func TestRefModelSetWorktreesPrunesDirtyMaps(t *testing.T) {
 	}
 	if _, present := r.worktreeTimedOut["/b"]; present {
 		t.Error("SetWorktrees should prune timedOut entries for paths that disappeared")
+	}
+	if _, present := r.agentActive["/b"]; present {
+		t.Error("SetWorktrees should prune agentActive entries for paths that disappeared")
 	}
 }
 

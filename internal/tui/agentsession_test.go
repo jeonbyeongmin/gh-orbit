@@ -123,3 +123,43 @@ func TestAgentActiveForWorktree(t *testing.T) {
 		}
 	})
 }
+
+func TestAgentSessionPollCmdReportsActiveSet(t *testing.T) {
+	projects := t.TempDir()
+	now := time.Now()
+	writeTranscript(t, projects, "/wt/live", "a.jsonl", now.Add(-1*time.Minute))
+	writeTranscript(t, projects, "/wt/idle", "a.jsonl", now.Add(-30*time.Minute))
+
+	msg, ok := agentSessionPollCmd(projects, []string{"/wt/live", "/wt/idle"}, now)().(agentSessionPollMsg)
+	if !ok {
+		t.Fatal("poll cmd should produce agentSessionPollMsg")
+	}
+	if !msg.active["/wt/live"] {
+		t.Error("/wt/live (1m old) should be active")
+	}
+	if msg.active["/wt/idle"] {
+		t.Error("/wt/idle (30m old) should be inactive")
+	}
+}
+
+func TestAgentSessionPollMsgAppliesAndRearms(t *testing.T) {
+	m := New()
+	updated, cmd := m.Update(agentSessionPollMsg{active: map[string]bool{"/wt": true}})
+	if !updated.(Model).refs.AgentActive("/wt") {
+		t.Error("poll msg handler should set agentActive")
+	}
+	if cmd == nil {
+		t.Error("poll msg handler must re-arm the tick (non-nil cmd) — otherwise the poll dies after one cycle")
+	}
+}
+
+func TestAgentSessionTickMsgDispatchesPoll(t *testing.T) {
+	m := New()
+	_, cmd := m.Update(agentSessionTickMsg{})
+	if cmd == nil {
+		t.Fatal("tick msg handler should dispatch a poll cmd")
+	}
+	if _, ok := cmd().(agentSessionPollMsg); !ok {
+		t.Error("tick cmd should produce agentSessionPollMsg")
+	}
+}

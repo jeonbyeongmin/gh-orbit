@@ -356,6 +356,7 @@ func (m Model) Init() tea.Cmd {
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 		loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 		loadLocalChangesSummaryCmd(m.workdir),
+		agentSessionTickCmd(),
 	)
 }
 
@@ -445,6 +446,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refs.SetWorktreeDirty(msg.path, msg.dirty, msg.timedOut)
 		m.refs.SetWorktreeLastCommit(msg.path, msg.subject, msg.when)
 		return m, nil
+
+	case agentSessionTickMsg:
+		// Poll cadence fired. Stat the current worktree set off the main
+		// loop; the reply (agentSessionPollMsg) applies the result and
+		// re-arms the tick. Reading Worktrees() here keeps the poll scoped
+		// to the live inventory — pruned trees drop out automatically.
+		wts := m.refs.Worktrees()
+		paths := make([]string, 0, len(wts))
+		for _, wt := range wts {
+			paths = append(paths, wt.Path)
+		}
+		return m, agentSessionPollCmd(agentSessionProjectsDir(), paths, time.Now())
+
+	case agentSessionPollMsg:
+		for path, active := range msg.active {
+			m.refs.SetAgentActive(path, active)
+		}
+		return m, agentSessionTickCmd()
 
 	case worktreeAddSucceededMsg:
 		if msg.reqID != m.worktreeAction.reqID {

@@ -92,7 +92,8 @@ fire from the same surface (only `esc` / `w` exits).
 | `enter`   | switch to the worktree under the cursor                             |
 | `a`       | open the add-worktree input sub-modal                               |
 | `d`       | open the remove-worktree confirm sub-modal (refuses main + current entry) |
-| `esc` / `w` | exit focus (cursor reset, dashboard returns to read-only)         |
+| `s`       | toggle last-commit sort (main pinned, rest newest-first)            |
+| `esc` / `w` | exit focus (cursor + sort reset, dashboard returns to read-only)  |
 
 Visual cues while focused:
 
@@ -104,7 +105,25 @@ Visual cues while focused:
   the `▶` current row, the bold + accent fg survives the bg overlay so
   both signals (current + cursor) read independently.
 - The bottom hint line replaces the graph hint with `dashboard: j/k
-  이동 · enter switch · a add · d remove · esc 종료` while focused.
+  이동 · enter switch · a add · d remove · s sort · esc 종료` while focused.
+
+### Last-commit sort (`s`)
+
+While focused, `s` toggles the row order between git-natural (main
+first — the default) and last-commit time **descending**. The main
+worktree stays pinned at the top as an anchor; the rest sort
+newest-commit-first, and rows whose last-commit time hasn't loaded yet
+(or timed out — zero-value `when`) sink to the bottom. The cursor rides
+the same worktree across the reorder, so the highlight doesn't jump.
+
+The sort is a **snapshot** of the cache at keypress: rows don't re-jump
+as the dirty fan-out trickles in. A later `r` reload (or re-toggle)
+picks up fresh times. It's **session-local** — leaving focus (`esc` /
+`w`) zeroes `dashboardFocusState`, so the next entry starts in natural
+order again (no config persistence). While the sort is on, a `↓time`
+tag rides next to the `Worktrees (N)` header label; it sits in the
+left group so the narrow-width drop (which sheds the Local Changes meta
+first) keeps the mode indicator visible.
 
 Focus on lands the cursor on the current worktree row if found, else
 on row 0. Empty inventory rejects entry with a status line; focus

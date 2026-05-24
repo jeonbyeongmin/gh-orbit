@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -425,18 +426,49 @@ func validateWorktreePath(path string) error {
 }
 
 // dashboardFocusState backs paneDashboard — the top dashboard band's
-// cursor mode toggled by `w`. An int cursor into m.refs.Worktrees() at
-// focus-on time; reloads (after add / remove) clamp via
-// enterDashboardFocus on re-entry.
+// cursor mode toggled by `w`. An int cursor into m.dashboardWorktrees()
+// (the active display order) at focus-on time; reloads (after add /
+// remove) clamp via enterDashboardFocus on re-entry. sortByCommit is the
+// session-local last-commit sort toggle (`s`); it resets on focus exit
+// because the whole struct is zeroed there.
 type dashboardFocusState struct {
-	cursor int
+	cursor       int
+	sortByCommit bool
+}
+
+// dashboardWorktrees returns the worktrees in the dashboard's active
+// display order. With sortByCommit off it's the git natural order
+// (Worktrees() as-is, main first). On, the main worktree stays pinned at
+// the top and the rest sort by last-commit time descending, with unknown
+// rows (zero-value `when` — still loading / timed out / no commits) last.
+// The original slice is never mutated; render and the cursor helpers all
+// route through this so the cursor index and the rendered rows agree.
+func (m Model) dashboardWorktrees() []git.Worktree {
+	wts := m.refs.Worktrees()
+	if !m.dashboardFocus.sortByCommit || len(wts) < 2 {
+		return wts
+	}
+	sorted := make([]git.Worktree, len(wts))
+	copy(sorted, wts)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].IsMain != sorted[j].IsMain {
+			return sorted[i].IsMain // main pinned first
+		}
+		_, wi := m.refs.WorktreeLastCommit(sorted[i].Path)
+		_, wj := m.refs.WorktreeLastCommit(sorted[j].Path)
+		if wi.IsZero() != wj.IsZero() {
+			return !wi.IsZero() // unknown last-commit sinks to the bottom
+		}
+		return wi.After(wj) // newest first
+	})
+	return sorted
 }
 
 // enterDashboardFocus flips m.focused to paneDashboard. Cursor lands on
 // the current worktree if found, else 0. Empty inventory surfaces an
 // inline error and leaves focus on paneGraph.
 func (m Model) enterDashboardFocus() (Model, tea.Cmd) {
-	wts := m.refs.Worktrees()
+	wts := m.dashboardWorktrees()
 	if len(wts) == 0 {
 		m.status = "worktrees: none loaded yet"
 		m.statusStyle = statusErrS
@@ -456,7 +488,7 @@ func (m Model) enterDashboardFocus() (Model, tea.Cmd) {
 }
 
 func (m Model) dashboardMoveCursor(delta int) Model {
-	wts := m.refs.Worktrees()
+	wts := m.dashboardWorktrees()
 	if len(wts) == 0 {
 		return m
 	}
@@ -471,12 +503,31 @@ func (m Model) dashboardMoveCursor(delta int) Model {
 	return m
 }
 
+// dashboardToggleSort flips the last-commit sort (`s`) and keeps the cursor
+// on the same worktree across the reorder so the highlight doesn't jump to a
+// different tree under the user's hands.
+func (m Model) dashboardToggleSort() Model {
+	before := m.dashboardWorktrees()
+	curPath := ""
+	if m.dashboardFocus.cursor >= 0 && m.dashboardFocus.cursor < len(before) {
+		curPath = before[m.dashboardFocus.cursor].Path
+	}
+	m.dashboardFocus.sortByCommit = !m.dashboardFocus.sortByCommit
+	for i, wt := range m.dashboardWorktrees() {
+		if wt.Path == curPath {
+			m.dashboardFocus.cursor = i
+			break
+		}
+	}
+	return m
+}
+
 // dashboardEnter dispatches a switchWorktreeMsg for the cursor entry.
 // The Model's existing switchWorktree handler does the validate +
 // retarget + reload chain. Focus stays on paneDashboard so the user can
 // keep moving / acting from the same surface.
 func (m Model) dashboardEnter() (Model, tea.Cmd) {
-	wts := m.refs.Worktrees()
+	wts := m.dashboardWorktrees()
 	if m.dashboardFocus.cursor < 0 || m.dashboardFocus.cursor >= len(wts) {
 		return m, nil
 	}
@@ -500,7 +551,7 @@ func (m Model) dashboardAdd() (Model, tea.Cmd) {
 // cursor entry. beginWorktreeRemove already rejects removing the
 // current worktree with a status line. Focus stays on paneDashboard.
 func (m Model) dashboardRemove() (Model, tea.Cmd) {
-	wts := m.refs.Worktrees()
+	wts := m.dashboardWorktrees()
 	if m.dashboardFocus.cursor < 0 || m.dashboardFocus.cursor >= len(wts) {
 		return m, nil
 	}

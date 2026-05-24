@@ -83,7 +83,7 @@ var localChangesHintRendered = help.Render(localChangesHintText)
 // dashboardFocusHintText is the bottom hint shown while paneDashboard
 // owns the cursor. Replaces the graph hint so the user can see the
 // dashboard-scoped key matrix instead of repeating the graph one.
-const dashboardFocusHintText = "dashboard: j/k 이동 · enter switch · a add · d remove · esc 종료"
+const dashboardFocusHintText = "dashboard: j/k 이동 · enter switch · a add · d remove · s sort · esc 종료"
 
 var dashboardFocusHintRendered = help.Render(dashboardFocusHintText)
 

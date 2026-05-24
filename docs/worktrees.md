@@ -33,13 +33,14 @@ Layout (N=4 example):
   The Local Changes meta carries `N files · +X -Y · Zm ago` when the
   working tree is dirty (numstat against HEAD + load wall clock); empty
   working tree drops the meta. On narrow widths the label wins.
-- **Worktree row** — `name · branch · ● · subject · time`. `name` is the
-  basename of the worktree path. The current entry (the one `m.workdir`
+- **Worktree row** — `name · 🤖 · branch · ● · subject · time`. `name` is
+  the basename of the worktree path. The current entry (the one `m.workdir`
   lives in) prefixes with `▶` + bold + select color so the user knows
-  which context the rest of the cockpit describes. `subject` + `time` are
-  the worktree HEAD's last-commit summary (see **Last-commit column**) —
-  graph only ever shows the *current* tree's commits, so the row carries
-  the others' last activity without a switch.
+  which context the rest of the cockpit describes. `🤖` flags a live Claude
+  Code agent session on that tree (see **Agent-session hint**). `subject` +
+  `time` are the worktree HEAD's last-commit summary (see **Last-commit
+  column**) — graph only ever shows the *current* tree's commits, so the
+  row carries the others' last activity without a switch.
 - **Separator line** — horizontal rule with `fetched Xm ago` right-
   aligned. The freshness clock for fetch attempts; blank rule before
   the first fetch.
@@ -60,7 +61,7 @@ worktree HEAD's last commit. Both come from the dirty fan-out (one
 probe — see **Dirty fan-out**).
 
 Width-adaptive degradation, since the band shares the right column with
-the graph. Display order is `▶ name · branch · ● · subject · time`; when
+the graph. Display order is `▶ name · 🤖 · branch · ● · subject · time`; when
 the row is too narrow the columns drop **whole** (no leftover `…`
 fragment) in priority order:
 
@@ -69,7 +70,8 @@ fragment) in priority order:
    takes the leftover width, capped at **30**.
 2. `branch`
 3. `time`
-4. `●` dirty marker — dropped last.
+4. `●` dirty marker
+5. `🤖` agent-session marker — dropped last (highest-value review signal).
 
 `▶ name` always survives. A worktree with no commits yet (unborn HEAD /
 bare) or a still-loading / timed-out row renders the `subject` + `time`
@@ -290,6 +292,46 @@ watch unavailable — use 'r' to refresh` once, and the rest of the
 refresh trigger list above keeps working. Manual `r` is always
 sufficient — the watcher is an *optional* convenience layer over it.
 
+## Agent-session hint (🤖)
+
+A `🤖` on a worktree row means a Claude Code agent session has touched
+that tree within the last `agentSessionFreshness` (10m) — the cockpit's
+"which worktree is an agent in right now?" answer. It joins the row's
+`·`-separated columns right after the name: `▶ name · 🤖 · branch · ● ·
+subject · time`, and is the **last** fixed column dropped under width
+pressure (drop order subject → branch → time → ● → 🤖) because it's the
+highest-value review signal; `▶ name` always survives.
+
+**Detection** lives in `internal/tui/agentsession.go`, not `internal/git/`
+— it's not a git concern. The only filesystem signal that tracks activity
+is the mtime of the session transcripts Claude Code appends under
+`~/.claude/projects/<slug>/*.jsonl`, where `<slug>` is the worktree's
+absolute path with every non-alphanumeric byte replaced by `-`
+(`agentSessionSlug`). `agentActiveForWorktree` takes the newest such
+mtime and compares it against the freshness window. The window doubles as
+stale-correction: an ended session's marker ages out on its own once mtime
+passes 10m, so there's no separate false-positive cleanup. v1 counts only
+the slug dir's direct `*.jsonl` files — nested `…/subagents/*.jsonl` are
+deliberately ignored (a session-count / subagent badge is a separate
+backlog).
+
+**Refresh** is a dedicated `agentSessionPollInterval` (30s) self-rearming
+`tea.Tick` (`agentSessionTickCmd` → `agentSessionPollCmd` →
+`agentSessionPollMsg` re-arms the tick). It is **not** wired into the
+`loadWorktreesCmd` triggers above: the signal lives outside the worktree's
+`.git`, so the fsnotify watcher can't see it, and a stat-only poll keeps it
+fully decoupled from the `git status` dirty fan-out (no 3s budget, no index
+locks). The codebase has no other recurring tick — every other `tea.Tick`
+is one-shot — so the self-rearm in the poll handler *is* the loop.
+
+**Fragility / silent-degrade**: the `<slug>` scheme is an *undocumented*
+Claude Code internal convention. If it changes, the home dir is unreadable,
+or no transcript exists, `agentActiveForWorktree` returns `false` and the
+marker simply doesn't render — no error, no status line, no crash. Process
++ cwd matching was rejected: background-job and desktop-app sessions keep
+their process cwd at the repo root, never the worktree, so they're
+invisible to a cwd match.
+
 ## Scope: v1 explicitly excludes
 
 The following actions are intentionally out of v1 — each was split off
@@ -298,8 +340,6 @@ into its own backlog so the policy decisions get a dedicated interview:
 - `git worktree lock` / `unlock` — lock-recommendation policy.
 - `git worktree move` — path-input UX + post-move workdir reconciliation.
 - `git worktree prune` — auto vs. manual trigger, prunable display.
-- Claude Code agent-session hint per row (requires Claude Code internals
-  research before the detection method can be chosen).
 
 If you find yourself reaching for one of those, the answer is "not this
 PR" — see the spillover backlogs in the vault.

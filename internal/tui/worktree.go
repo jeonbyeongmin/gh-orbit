@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -425,11 +426,42 @@ func validateWorktreePath(path string) error {
 }
 
 // dashboardFocusState backs paneDashboard — the top dashboard band's
-// cursor mode toggled by `w`. An int cursor into m.refs.Worktrees() at
-// focus-on time; reloads (after add / remove) clamp via
-// enterDashboardFocus on re-entry.
+// cursor mode toggled by `w`. An int cursor into m.dashboardWorktrees()
+// (the active display order) at focus-on time; reloads (after add /
+// remove) clamp via enterDashboardFocus on re-entry. sortByCommit is the
+// session-local last-commit sort toggle (`s`); it resets on focus exit
+// because the whole struct is zeroed there.
 type dashboardFocusState struct {
-	cursor int
+	cursor       int
+	sortByCommit bool
+}
+
+// dashboardWorktrees returns the worktrees in the dashboard's active
+// display order. With sortByCommit off it's the git natural order
+// (Worktrees() as-is, main first). On, the main worktree stays pinned at
+// the top and the rest sort by last-commit time descending, with unknown
+// rows (zero-value `when` — still loading / timed out / no commits) last.
+// The original slice is never mutated; render and the cursor helpers all
+// route through this so the cursor index and the rendered rows agree.
+func (m Model) dashboardWorktrees() []git.Worktree {
+	wts := m.refs.Worktrees()
+	if !m.dashboardFocus.sortByCommit || len(wts) < 2 {
+		return wts
+	}
+	sorted := make([]git.Worktree, len(wts))
+	copy(sorted, wts)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].IsMain != sorted[j].IsMain {
+			return sorted[i].IsMain // main pinned first
+		}
+		_, wi := m.refs.WorktreeLastCommit(sorted[i].Path)
+		_, wj := m.refs.WorktreeLastCommit(sorted[j].Path)
+		if wi.IsZero() != wj.IsZero() {
+			return !wi.IsZero() // unknown last-commit sinks to the bottom
+		}
+		return wi.After(wj) // newest first
+	})
+	return sorted
 }
 
 // enterDashboardFocus flips m.focused to paneDashboard. Cursor lands on

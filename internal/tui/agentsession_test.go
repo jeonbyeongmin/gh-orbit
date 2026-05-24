@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestAgentSessionSlug(t *testing.T) {
@@ -130,9 +132,12 @@ func TestAgentSessionPollCmdReportsActiveSet(t *testing.T) {
 	writeTranscript(t, projects, "/wt/live", "a.jsonl", now.Add(-1*time.Minute))
 	writeTranscript(t, projects, "/wt/idle", "a.jsonl", now.Add(-30*time.Minute))
 
-	msg, ok := agentSessionPollCmd(projects, []string{"/wt/live", "/wt/idle"}, now)().(agentSessionPollMsg)
+	msg, ok := agentSessionPollCmd(projects, []string{"/wt/live", "/wt/idle"}, now, 42)().(agentSessionPollMsg)
 	if !ok {
 		t.Fatal("poll cmd should produce agentSessionPollMsg")
+	}
+	if msg.reqID != 42 {
+		t.Errorf("poll cmd should propagate reqID: got %d want 42", msg.reqID)
 	}
 	if !msg.active["/wt/live"] {
 		t.Error("/wt/live (1m old) should be active")
@@ -142,24 +147,39 @@ func TestAgentSessionPollCmdReportsActiveSet(t *testing.T) {
 	}
 }
 
-func TestAgentSessionPollMsgAppliesAndRearms(t *testing.T) {
+func TestAgentSessionPollMsgAppliesFreshReqID(t *testing.T) {
 	m := New()
-	updated, cmd := m.Update(agentSessionPollMsg{active: map[string]bool{"/wt": true}})
+	updated, cmd := m.Update(agentSessionPollMsg{reqID: m.sidebarWorktreesReqID, active: map[string]bool{"/wt": true}})
 	if !updated.(Model).refs.AgentActive("/wt") {
-		t.Error("poll msg handler should set agentActive")
+		t.Error("matching-reqID poll should set agentActive")
 	}
-	if cmd == nil {
-		t.Error("poll msg handler must re-arm the tick (non-nil cmd) — otherwise the poll dies after one cycle")
+	if cmd != nil {
+		t.Error("poll msg must NOT re-arm the tick — re-arm lives in the tick handler")
 	}
 }
 
-func TestAgentSessionTickMsgDispatchesPoll(t *testing.T) {
+func TestAgentSessionPollMsgDropsStaleReqID(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(agentSessionPollMsg{reqID: m.sidebarWorktreesReqID + 7, active: map[string]bool{"/gone": true}})
+	if updated.(Model).refs.AgentActive("/gone") {
+		t.Error("stale-reqID poll must be dropped, not applied — no orphan key for a pruned worktree")
+	}
+}
+
+func TestAgentSessionTickMsgPollsAndRearms(t *testing.T) {
 	m := New()
 	_, cmd := m.Update(agentSessionTickMsg{})
 	if cmd == nil {
-		t.Fatal("tick msg handler should dispatch a poll cmd")
+		t.Fatal("tick handler should dispatch a poll + re-arm")
 	}
-	if _, ok := cmd().(agentSessionPollMsg); !ok {
-		t.Error("tick cmd should produce agentSessionPollMsg")
+	// tea.Batch returns a BatchMsg of the sub-cmds without executing them, so
+	// this never blocks on the 30s tick. Expect exactly two: the poll + the
+	// re-armed tick.
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("tick handler should return a tea.Batch, got %T", cmd())
+	}
+	if len(batch) != 2 {
+		t.Errorf("tick handler should dispatch both a poll and a re-arm tick: got %d cmds", len(batch))
 	}
 }

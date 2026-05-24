@@ -106,19 +106,25 @@ var agentSessionProjectsDir = func() string {
 }
 
 // agentSessionTickMsg fires on the poll cadence; its handler dispatches a
-// fresh agentSessionPollCmd for the current worktree set.
+// fresh agentSessionPollCmd AND re-arms the next tick (the tick handler is
+// the sole re-arm site, so exactly one tick lineage is ever in flight even
+// though worktreesLoadedMsg also dispatches event-driven polls).
 type agentSessionTickMsg struct{}
 
-// agentSessionPollMsg carries one poll's result (worktree path → active).
-// Its handler writes the map into refModel and re-arms the tick.
+// agentSessionPollMsg carries one poll's result (worktree path → active),
+// tagged with the sidebarWorktreesReqID it was computed against. Its handler
+// applies the map only when the reqID still matches the live inventory — a
+// poll computed before a worktree was pruned/added is dropped so it can't
+// re-insert an orphan key. It does NOT re-arm the tick (that's the tick
+// handler's job), so dropping a stale poll never kills the loop.
 type agentSessionPollMsg struct {
+	reqID  uint64
 	active map[string]bool
 }
 
-// agentSessionTickCmd arms the next poll tick. Init fires it once; the
-// agentSessionPollMsg handler re-fires it after each poll, so exactly one
-// tick is ever in flight (the codebase has no other recurring tick — every
-// existing tea.Tick is one-shot, so this self-rearm is the whole loop).
+// agentSessionTickCmd arms one poll tick. Init fires it once; the
+// agentSessionTickMsg handler re-fires it every cadence (the codebase has no
+// other recurring tick — every existing tea.Tick is one-shot).
 func agentSessionTickCmd() tea.Cmd {
 	return tea.Tick(agentSessionPollInterval, func(time.Time) tea.Msg {
 		return agentSessionTickMsg{}
@@ -126,16 +132,15 @@ func agentSessionTickCmd() tea.Cmd {
 }
 
 // agentSessionPollCmd stats projectsDir/<slug>/*.jsonl for each path off the
-// main loop and reports the active set. Pure read-only stat: it never
-// mutates and carries no reqID — a stale result (e.g. computed across a
-// worktree switch) is harmless because the next tick re-derives from the
-// then-current inventory.
-func agentSessionPollCmd(projectsDir string, paths []string, now time.Time) tea.Cmd {
+// main loop and reports the active set tagged with reqID. Pure read-only
+// stat: it never mutates refModel. The reqID lets the handler drop a result
+// that raced an inventory change.
+func agentSessionPollCmd(projectsDir string, paths []string, now time.Time, reqID uint64) tea.Cmd {
 	return func() tea.Msg {
 		active := make(map[string]bool, len(paths))
 		for _, p := range paths {
 			active[p] = agentActiveForWorktree(projectsDir, p, now, agentSessionFreshness)
 		}
-		return agentSessionPollMsg{active: active}
+		return agentSessionPollMsg{reqID: reqID, active: active}
 	}
 }

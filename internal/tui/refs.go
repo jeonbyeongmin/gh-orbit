@@ -42,6 +42,7 @@ type refModel struct {
 	worktreeDirty       map[string]bool
 	worktreeTimedOut    map[string]bool
 	worktreeLastCommit  map[string]worktreeCommitMeta
+	agentActive         map[string]bool
 
 	localChangesSummary         git.LocalChangesSummary
 	localChangesSummaryLoadedAt time.Time
@@ -128,6 +129,9 @@ func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 	if r.worktreeLastCommit == nil {
 		r.worktreeLastCommit = make(map[string]worktreeCommitMeta)
 	}
+	if r.agentActive == nil {
+		r.agentActive = make(map[string]bool)
+	}
 	live := make(map[string]struct{}, len(entries))
 	for _, e := range entries {
 		live[e.Path] = struct{}{}
@@ -145,6 +149,11 @@ func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 	for p := range r.worktreeLastCommit {
 		if _, ok := live[p]; !ok {
 			delete(r.worktreeLastCommit, p)
+		}
+	}
+	for p := range r.agentActive {
+		if _, ok := live[p]; !ok {
+			delete(r.agentActive, p)
 		}
 	}
 }
@@ -178,6 +187,22 @@ func (r *refModel) SetWorktreeLastCommit(path, subject string, when time.Time) {
 func (r refModel) Worktrees() []git.Worktree { return r.worktrees }
 func (r refModel) WorktreeDirty(path string) bool {
 	return r.worktreeDirty[path]
+}
+
+// SetAgentActive records whether a worktree path currently hosts a live
+// Claude Code agent session. Written by the ~30s agent-session poll
+// (agentSessionPollMsg); read by the dashboard row to paint the 🤖 marker.
+func (r *refModel) SetAgentActive(path string, active bool) {
+	if r.agentActive == nil {
+		r.agentActive = make(map[string]bool)
+	}
+	r.agentActive[path] = active
+}
+
+// AgentActive reports the last polled agent-session state for a path. A
+// path the poll has never seen returns false → no marker.
+func (r refModel) AgentActive(path string) bool {
+	return r.agentActive[path]
 }
 
 // WorktreeLastCommit returns the cached last-commit subject + time for a
@@ -306,14 +331,16 @@ const (
 // `Sidebar` in the name is a historical artifact — the dashboard reuses the
 // same row shape.
 //
-// Display order is `▶ name · branch · ● · subject · time`. When the band is
-// too narrow the columns drop whole (no leftover "…" fragment) in priority
-// order subject → branch → time → ●, with `▶ name` always preserved. subject
+// Display order is `▶ name · 🤖 · branch · ● · subject · time`. When the band
+// is too narrow the columns drop whole (no leftover "…" fragment) in priority
+// order subject → branch → time → ● → 🤖, with `▶ name` always preserved. The
+// 🤖 (a live Claude Code agent session on this tree) drops last among the
+// fixed columns — it's the highest-value signal in a review cockpit. subject
 // gets whatever width is left after the fixed columns fit, capped at
 // worktreeSubjectCap and hidden below worktreeSubjectFloor. A zero `when` /
 // empty `subject` (loading, timed-out, or unborn-HEAD worktree) simply omits
 // that column — the last-commit slots render blank, never `?`.
-func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMark, subject string, when, now time.Time, width int) string {
+func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected, agentActive bool, dirtyMark, subject string, when, now time.Time, width int) string {
 	const prefixWidth = 2
 	const sep = " · "
 	sepW := runewidth.StringWidth(sep)
@@ -343,12 +370,17 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMa
 	}
 
 	// Fixed (non-subject) columns, present-flag gated. Width is measured in
-	// display order: name · branch · ● · time.
+	// display order: name · 🤖 · branch · ● · time.
+	const agentMark = "🤖"
+	hasAgent := agentActive
 	hasBranch := branch != ""
 	hasDirty := dirtyMark != ""
 	hasTime := timeStr != ""
 	fixedWidth := func() int {
 		parts := []string{name}
+		if hasAgent {
+			parts = append(parts, agentMark)
+		}
 		if hasBranch {
 			parts = append(parts, branch)
 		}
@@ -362,17 +394,19 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMa
 	}
 	// Drop fixed columns until they fit. subject is dropped before any of
 	// these (it's added afterward from the leftover), so the order here is
-	// branch → time → ● ; name is never dropped. The presence guard stops
-	// the loop once only name remains — the final Truncate clips that as a
-	// last resort.
-	for fixedWidth() > avail && (hasBranch || hasTime || hasDirty) {
+	// branch → time → ● → 🤖 ; name is never dropped. The presence guard
+	// stops the loop once only name remains — the final Truncate clips that
+	// as a last resort.
+	for fixedWidth() > avail && (hasBranch || hasTime || hasDirty || hasAgent) {
 		switch {
 		case hasBranch:
 			hasBranch = false
 		case hasTime:
 			hasTime = false
-		default: // hasDirty
+		case hasDirty:
 			hasDirty = false
+		default: // hasAgent — highest-value fixed column, dropped last
+			hasAgent = false
 		}
 	}
 
@@ -392,6 +426,9 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMa
 	}
 
 	parts := []string{name}
+	if hasAgent {
+		parts = append(parts, agentMark)
+	}
 	if hasBranch {
 		parts = append(parts, branch)
 	}

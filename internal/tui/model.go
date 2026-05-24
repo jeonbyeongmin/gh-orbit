@@ -356,6 +356,7 @@ func (m Model) Init() tea.Cmd {
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 		loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 		loadLocalChangesSummaryCmd(m.workdir),
+		agentSessionTickCmd(),
 	)
 }
 
@@ -409,7 +410,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// add/remove/switch all funnel through this case, so Sync sees every
 		// gitDir set change. nil-safe for the silent-degrade path.
 		m.watcher.Sync(msg.entries)
-		return m, worktreeDirtyFanoutCmd(m.sidebarWorktreesReqID, paths)
+		// Event-driven agent poll alongside the dirty fan-out: every inventory
+		// change (startup, add/remove, switch) lights the 🤖 column now instead
+		// of waiting up to one poll interval for the next tick. The 30s tick
+		// stays as the ongoing refresh + freshness-aging loop.
+		return m, tea.Batch(
+			worktreeDirtyFanoutCmd(m.sidebarWorktreesReqID, paths),
+			agentSessionPollCmd(agentSessionProjectsDir(), paths, time.Now(), m.sidebarWorktreesReqID),
+		)
 
 	case worktreeWatchedChangeMsg:
 		// fsnotify saw HEAD or index settle on a watched worktree. Always
@@ -444,6 +452,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refs.SetWorktreeDirty(msg.path, msg.dirty, msg.timedOut)
 		m.refs.SetWorktreeLastCommit(msg.path, msg.subject, msg.when)
+		return m, nil
+
+	case agentSessionTickMsg:
+		// Poll cadence fired. Stat the current worktree set off the main loop
+		// and re-arm the next tick in the same batch — the tick handler is the
+		// sole re-arm site, so the loop stays single-lineage and survives a
+		// dropped (stale) poll reply. Reading Worktrees() scopes the poll to
+		// the live inventory; the reqID lets the reply drop if it races a change.
+		wts := m.refs.Worktrees()
+		paths := make([]string, 0, len(wts))
+		for _, wt := range wts {
+			paths = append(paths, wt.Path)
+		}
+		return m, tea.Batch(
+			agentSessionPollCmd(agentSessionProjectsDir(), paths, time.Now(), m.sidebarWorktreesReqID),
+			agentSessionTickCmd(),
+		)
+
+	case agentSessionPollMsg:
+		// Drop a poll that raced an inventory change (mirrors the
+		// worktreeDirtyResultMsg reqID guard) so it can't re-insert a key for a
+		// pruned worktree. No re-arm here — the tick handler owns that.
+		if msg.reqID != m.sidebarWorktreesReqID {
+			return m, nil
+		}
+		for path, active := range msg.active {
+			m.refs.SetAgentActive(path, active)
+		}
 		return m, nil
 
 	case worktreeAddSucceededMsg:

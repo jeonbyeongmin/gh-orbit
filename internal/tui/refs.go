@@ -42,6 +42,7 @@ type refModel struct {
 	worktreeDirty       map[string]bool
 	worktreeTimedOut    map[string]bool
 	worktreeLastCommit  map[string]worktreeCommitMeta
+	agentActive         map[string]bool
 
 	localChangesSummary         git.LocalChangesSummary
 	localChangesSummaryLoadedAt time.Time
@@ -128,6 +129,9 @@ func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 	if r.worktreeLastCommit == nil {
 		r.worktreeLastCommit = make(map[string]worktreeCommitMeta)
 	}
+	if r.agentActive == nil {
+		r.agentActive = make(map[string]bool)
+	}
 	live := make(map[string]struct{}, len(entries))
 	for _, e := range entries {
 		live[e.Path] = struct{}{}
@@ -145,6 +149,11 @@ func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 	for p := range r.worktreeLastCommit {
 		if _, ok := live[p]; !ok {
 			delete(r.worktreeLastCommit, p)
+		}
+	}
+	for p := range r.agentActive {
+		if _, ok := live[p]; !ok {
+			delete(r.agentActive, p)
 		}
 	}
 }
@@ -178,6 +187,22 @@ func (r *refModel) SetWorktreeLastCommit(path, subject string, when time.Time) {
 func (r refModel) Worktrees() []git.Worktree { return r.worktrees }
 func (r refModel) WorktreeDirty(path string) bool {
 	return r.worktreeDirty[path]
+}
+
+// SetAgentActive records whether a worktree path currently hosts a live
+// Claude Code agent session. Written by the ~30s agent-session poll
+// (agentSessionPollMsg); read by the dashboard row to paint the 🤖 marker.
+func (r *refModel) SetAgentActive(path string, active bool) {
+	if r.agentActive == nil {
+		r.agentActive = make(map[string]bool)
+	}
+	r.agentActive[path] = active
+}
+
+// AgentActive reports the last polled agent-session state for a path. A
+// path the poll has never seen returns false → no marker.
+func (r refModel) AgentActive(path string) bool {
+	return r.agentActive[path]
 }
 
 // WorktreeLastCommit returns the cached last-commit subject + time for a

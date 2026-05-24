@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -111,6 +114,20 @@ func TestDashboardToggleSortPreservesCursorWorktree(t *testing.T) {
 	}
 	if got := m.dashboardWorktrees()[m.dashboardFocus.cursor].Path; got != "/old" {
 		t.Errorf("cursor should still point at /old after toggle-off, got %q", got)
+	}
+}
+
+func TestDashboardHeaderSortTagOnlyWhenSorting(t *testing.T) {
+	m := sortFixture(t)
+	header := func() string {
+		return strings.SplitN(ansi.Strip(renderTopDashboard(m, 100)), "\n", 2)[0]
+	}
+	if strings.Contains(header(), "↓time") {
+		t.Errorf("sort tag should be absent when sort off: %q", header())
+	}
+	m.dashboardFocus.sortByCommit = true
+	if !strings.Contains(header(), "↓time") {
+		t.Errorf("sort tag ↓time should appear in header when sorting: %q", header())
 	}
 }
 

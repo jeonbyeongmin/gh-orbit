@@ -84,6 +84,11 @@ func renderTopDashboard(m Model, width int) string {
 // sticky row on the sidebar, so dropping it here is non-fatal.
 func renderDashboardHeader(m Model, nWorktrees, width int, now time.Time) string {
 	leftPlain := fmt.Sprintf("Worktrees (%d)", nWorktrees)
+	if m.dashboardFocus.sortByCommit {
+		// Sort-mode tag rides with the label (left group) so it survives the
+		// narrow-width drop that sheds the Local Changes meta first.
+		leftPlain += "  ↓time"
+	}
 	left := refHeaderStyle.Render(leftPlain)
 	leftW := runewidth.StringWidth(leftPlain)
 

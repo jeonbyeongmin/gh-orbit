@@ -47,7 +47,7 @@ func renderTopDashboard(m Model, width int) string {
 		width = 1
 	}
 	now := time.Now()
-	wts := m.refs.Worktrees()
+	wts := m.dashboardWorktrees()
 	if len(wts) == 0 {
 		return ""
 	}

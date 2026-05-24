@@ -468,7 +468,7 @@ func (m Model) dashboardWorktrees() []git.Worktree {
 // the current worktree if found, else 0. Empty inventory surfaces an
 // inline error and leaves focus on paneGraph.
 func (m Model) enterDashboardFocus() (Model, tea.Cmd) {
-	wts := m.refs.Worktrees()
+	wts := m.dashboardWorktrees()
 	if len(wts) == 0 {
 		m.status = "worktrees: none loaded yet"
 		m.statusStyle = statusErrS
@@ -488,7 +488,7 @@ func (m Model) enterDashboardFocus() (Model, tea.Cmd) {
 }
 
 func (m Model) dashboardMoveCursor(delta int) Model {
-	wts := m.refs.Worktrees()
+	wts := m.dashboardWorktrees()
 	if len(wts) == 0 {
 		return m
 	}
@@ -508,7 +508,7 @@ func (m Model) dashboardMoveCursor(delta int) Model {
 // retarget + reload chain. Focus stays on paneDashboard so the user can
 // keep moving / acting from the same surface.
 func (m Model) dashboardEnter() (Model, tea.Cmd) {
-	wts := m.refs.Worktrees()
+	wts := m.dashboardWorktrees()
 	if m.dashboardFocus.cursor < 0 || m.dashboardFocus.cursor >= len(wts) {
 		return m, nil
 	}
@@ -532,7 +532,7 @@ func (m Model) dashboardAdd() (Model, tea.Cmd) {
 // cursor entry. beginWorktreeRemove already rejects removing the
 // current worktree with a status line. Focus stays on paneDashboard.
 func (m Model) dashboardRemove() (Model, tea.Cmd) {
-	wts := m.refs.Worktrees()
+	wts := m.dashboardWorktrees()
 	if m.dashboardFocus.cursor < 0 || m.dashboardFocus.cursor >= len(wts) {
 		return m, nil
 	}

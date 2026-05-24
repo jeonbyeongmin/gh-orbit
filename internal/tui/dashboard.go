@@ -70,7 +70,8 @@ func renderTopDashboard(m Model, width int) string {
 		// read-only band styling.
 		selected := focused && i == m.dashboardFocus.cursor
 		subject, when := m.refs.WorktreeLastCommit(wt.Path)
-		b.WriteString(renderWorktreeSidebarRow(wt, isCurrent, selected, dirtyMark, subject, when, now, width))
+		agentActive := m.refs.AgentActive(wt.Path)
+		b.WriteString(renderWorktreeSidebarRow(wt, isCurrent, selected, agentActive, dirtyMark, subject, when, now, width))
 		b.WriteByte('\n')
 	}
 

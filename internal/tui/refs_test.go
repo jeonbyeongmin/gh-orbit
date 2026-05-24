@@ -162,7 +162,7 @@ func TestComposeLocalChangesRowBareLabelWhenTooNarrowForMeta(t *testing.T) {
 func TestRenderWorktreeRowShowsCurrentMarker(t *testing.T) {
 	out := renderWorktreeSidebarRow(
 		git.Worktree{Path: "/tmp/wt-a", Branch: "main"},
-		true, false, "", "", time.Time{}, time.Time{}, 40,
+		true, false, false, "", "", time.Time{}, time.Time{}, 40,
 	)
 	if !strings.Contains(ansi.Strip(out), "▶") {
 		t.Errorf("current=true row should carry ▶ marker: %q", ansi.Strip(out))
@@ -173,7 +173,7 @@ func TestRenderWorktreeRowDirtyMarkerLast(t *testing.T) {
 	// With no last-commit data the dirty marker is still the trailing column.
 	out := renderWorktreeSidebarRow(
 		git.Worktree{Path: "/tmp/wt-a", Branch: "main"},
-		false, false, "●", "", time.Time{}, time.Time{}, 40,
+		false, false, false, "●", "", time.Time{}, time.Time{}, 40,
 	)
 	plain := ansi.Strip(out)
 	if !strings.HasSuffix(strings.TrimSpace(plain), "●") {
@@ -189,7 +189,7 @@ var lcWhen = lcNow.Add(-2 * time.Minute) // relativeShortAt → "2m"
 func TestRenderWorktreeRowAllColumns(t *testing.T) {
 	out := renderWorktreeSidebarRow(
 		git.Worktree{Path: "/repo/feat-auth", Branch: "feat/auth"},
-		false, false, "●", "fix login race", lcWhen, lcNow, 60,
+		false, false, false, "●", "fix login race", lcWhen, lcNow, 60,
 	)
 	plain := ansi.Strip(out)
 	wantOrder := []string{"feat-auth", "feat/auth", "●", "fix login race", "2m"}
@@ -210,7 +210,7 @@ func TestRenderWorktreeRowSubjectCappedAt30(t *testing.T) {
 	subject := "abcdefghijklmnopqrstuvwxyz0123456789" // 36 runes
 	out := renderWorktreeSidebarRow(
 		git.Worktree{Path: "/repo/wt", Branch: "br"},
-		false, false, "●", subject, lcWhen, lcNow, 120,
+		false, false, false, "●", subject, lcWhen, lcNow, 120,
 	)
 	plain := ansi.Strip(out)
 	if !strings.Contains(plain, "…") {
@@ -235,7 +235,7 @@ func TestRenderWorktreeRowDropOrder(t *testing.T) {
 		{4, false, false, false, false, true},
 	}
 	for _, c := range cases {
-		out := renderWorktreeSidebarRow(wt, false, false, "●", subject, lcWhen, lcNow, c.width)
+		out := renderWorktreeSidebarRow(wt, false, false, false, "●", subject, lcWhen, lcNow, c.width)
 		plain := ansi.Strip(out)
 		// Universal invariant: rendered display width never exceeds width.
 		if w := runewidth.StringWidth(plain); w > c.width {
@@ -259,16 +259,55 @@ func TestRenderWorktreeRowDropOrder(t *testing.T) {
 	}
 }
 
+func TestRenderWorktreeRowAgentMarker(t *testing.T) {
+	// agentActive=true paints 🤖 right after name, before branch.
+	out := renderWorktreeSidebarRow(
+		git.Worktree{Path: "/repo/wt", Branch: "br"},
+		false, false, true, "●", "", time.Time{}, time.Time{}, 40,
+	)
+	plain := ansi.Strip(out)
+	iName := strings.Index(plain, "wt")
+	iBot := strings.Index(plain, "🤖")
+	iBr := strings.Index(plain, "br")
+	if iBot < 0 {
+		t.Fatalf("active row should carry 🤖: %q", plain)
+	}
+	if iName < 0 || iName >= iBot || iBot >= iBr {
+		t.Errorf("want display order name < 🤖 < branch, got name=%d 🤖=%d br=%d in %q", iName, iBot, iBr, plain)
+	}
+}
+
+func TestRenderWorktreeRowAgentMarkerOutlastsDirty(t *testing.T) {
+	// 🤖 is the highest-value fixed column: at a width that forces ● out,
+	// 🤖 must still render (drop order …→ ● → 🤖) while name always survives.
+	// width 9 → avail 7 fits "wt · 🤖" (7) but not "wt · 🤖 · ●" (11).
+	wt := git.Worktree{Path: "/repo/wt"} // no branch keeps the row short
+	out := renderWorktreeSidebarRow(wt, false, false, true, "●", "", time.Time{}, time.Time{}, 9)
+	plain := ansi.Strip(out)
+	if w := runewidth.StringWidth(plain); w > 9 {
+		t.Fatalf("width 9 budget exceeded: %d in %q", w, plain)
+	}
+	if !strings.Contains(plain, "wt") {
+		t.Errorf("name must always survive: %q", plain)
+	}
+	if !strings.Contains(plain, "🤖") {
+		t.Errorf("🤖 should outlast ● under width pressure: %q", plain)
+	}
+	if strings.Contains(plain, "●") {
+		t.Errorf("● should drop before 🤖 at this width: %q", plain)
+	}
+}
+
 func TestRenderWorktreeRowSubjectFloor(t *testing.T) {
 	// name(1) · time(2): fixedWidth = "n · 2m" = 6. leftover = avail-6-sep(3).
 	// leftover>=12 needs avail>=21 → width>=23; width 22 → leftover 11 → hidden.
 	wt := git.Worktree{Path: "/repo/n"}
 	subject := "abcdefghijklmnop"
-	atFloor := renderWorktreeSidebarRow(wt, false, false, "", subject, lcWhen, lcNow, 23)
+	atFloor := renderWorktreeSidebarRow(wt, false, false, false, "", subject, lcWhen, lcNow, 23)
 	if !strings.Contains(ansi.Strip(atFloor), "abcde") {
 		t.Errorf("leftover==12 should show subject: %q", ansi.Strip(atFloor))
 	}
-	belowFloor := renderWorktreeSidebarRow(wt, false, false, "", subject, lcWhen, lcNow, 22)
+	belowFloor := renderWorktreeSidebarRow(wt, false, false, false, "", subject, lcWhen, lcNow, 22)
 	if strings.Contains(ansi.Strip(belowFloor), "abcde") {
 		t.Errorf("leftover==11 should hide subject whole: %q", ansi.Strip(belowFloor))
 	}
@@ -279,7 +318,7 @@ func TestRenderWorktreeRowBlankWhenNoCommit(t *testing.T) {
 	// columns, no `?`, but the row still renders name + branch.
 	out := renderWorktreeSidebarRow(
 		git.Worktree{Path: "/repo/fresh", Branch: "wip"},
-		false, false, "", "", time.Time{}, lcNow, 60,
+		false, false, false, "", "", time.Time{}, lcNow, 60,
 	)
 	plain := ansi.Strip(out)
 	if !strings.Contains(plain, "fresh") || !strings.Contains(plain, "wip") {
@@ -294,7 +333,7 @@ func TestRenderWorktreeRowWideRuneSubjectWidthSafe(t *testing.T) {
 	// Korean subject: each syllable is width 2. The width invariant must hold.
 	out := renderWorktreeSidebarRow(
 		git.Worktree{Path: "/repo/wt", Branch: "br"},
-		false, false, "●", "버그 수정 완료", lcWhen, lcNow, 40,
+		false, false, false, "●", "버그 수정 완료", lcWhen, lcNow, 40,
 	)
 	if w := runewidth.StringWidth(ansi.Strip(out)); w > 40 {
 		t.Errorf("wide-rune subject overflowed width: %d > 40: %q", w, ansi.Strip(out))

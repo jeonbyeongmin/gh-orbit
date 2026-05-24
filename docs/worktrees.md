@@ -332,6 +332,24 @@ marker simply doesn't render — no error, no status line, no crash. Process
 their process cwd at the repo root, never the worktree, so they're
 invisible to a cwd match.
 
+Two known limitations of the slug scheme, both inherent (not fixed in v1):
+
+- **Slug collision → false positive.** `agentSessionSlug` collapses *every*
+  non-alphanumeric byte to `-`, so two sibling worktrees whose paths differ
+  only by punctuation (e.g. `…/feat-x` and `…/feat+x`, which is exactly how
+  a `feat-x` branch and a `feat/x` branch's auto-named worktree dirs land)
+  map to the *same* `<slug>`. Both rows then read the same transcript dir
+  and both light 🤖 — the marker points at the wrong tree. Rare in practice
+  (needs two trees colliding under the punctuation rule); not worth the
+  speculative complexity of a collision detector in v1.
+- **Symlinked path → false negative.** The slug is computed from the path
+  `git worktree list` reports. If the repo lives under a symlink (macOS
+  `/tmp`→`/private/tmp`, `/var`→`/private/var`, a symlinked `$HOME` or
+  Volume) and Claude Code recorded its `~/.claude/projects/<slug>` from the
+  *resolved* cwd, the two slugs differ, `os.ReadDir` misses, and the marker
+  never renders for a live agent — indistinguishable from "no agent". This
+  is the silent-degrade path, just an invisible one.
+
 ## Scope: v1 explicitly excludes
 
 The following actions are intentionally out of v1 — each was split off

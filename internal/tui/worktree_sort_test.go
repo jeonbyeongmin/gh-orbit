@@ -90,6 +90,30 @@ func TestDashboardWorktreesSortStableTieBreak(t *testing.T) {
 	}
 }
 
+func TestDashboardToggleSortPreservesCursorWorktree(t *testing.T) {
+	m := sortFixture(t)
+	// Cursor on "/old" (natural index 1). After toggle the order becomes
+	// [/main, /new, /old, /unknown] → "/old" moves to index 2; the cursor
+	// must follow the same worktree, not stay on index 1.
+	m.dashboardFocus.cursor = 1
+	m = m.dashboardToggleSort()
+	if !m.dashboardFocus.sortByCommit {
+		t.Fatal("toggle should flip sortByCommit to true")
+	}
+	got := m.dashboardWorktrees()[m.dashboardFocus.cursor].Path
+	if got != "/old" {
+		t.Errorf("cursor should still point at /old after sort, got %q (cursor=%d)", got, m.dashboardFocus.cursor)
+	}
+	// Toggle back: order returns to natural, cursor stays on /old (index 1).
+	m = m.dashboardToggleSort()
+	if m.dashboardFocus.sortByCommit {
+		t.Fatal("second toggle should flip sortByCommit back to false")
+	}
+	if got := m.dashboardWorktrees()[m.dashboardFocus.cursor].Path; got != "/old" {
+		t.Errorf("cursor should still point at /old after toggle-off, got %q", got)
+	}
+}
+
 func TestDashboardWorktreesSortDoesNotMutateOriginal(t *testing.T) {
 	m := sortFixture(t)
 	m.dashboardFocus.sortByCommit = true

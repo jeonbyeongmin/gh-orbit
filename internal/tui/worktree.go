@@ -503,6 +503,25 @@ func (m Model) dashboardMoveCursor(delta int) Model {
 	return m
 }
 
+// dashboardToggleSort flips the last-commit sort (`s`) and keeps the cursor
+// on the same worktree across the reorder so the highlight doesn't jump to a
+// different tree under the user's hands.
+func (m Model) dashboardToggleSort() Model {
+	before := m.dashboardWorktrees()
+	curPath := ""
+	if m.dashboardFocus.cursor >= 0 && m.dashboardFocus.cursor < len(before) {
+		curPath = before[m.dashboardFocus.cursor].Path
+	}
+	m.dashboardFocus.sortByCommit = !m.dashboardFocus.sortByCommit
+	for i, wt := range m.dashboardWorktrees() {
+		if wt.Path == curPath {
+			m.dashboardFocus.cursor = i
+			break
+		}
+	}
+	return m
+}
+
 // dashboardEnter dispatches a switchWorktreeMsg for the cursor entry.
 // The Model's existing switchWorktree handler does the validate +
 // retarget + reload chain. Focus stays on paneDashboard so the user can

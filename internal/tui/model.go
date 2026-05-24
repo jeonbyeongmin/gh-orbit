@@ -1034,6 +1034,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.dashboardAdd()
 			case "d":
 				return m.dashboardRemove()
+			case "s":
+				return m.dashboardToggleSort(), nil
 			case "esc":
 				m.focused = paneGraph
 				m.dashboardFocus = dashboardFocusState{}

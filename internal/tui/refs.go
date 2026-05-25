@@ -455,14 +455,15 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, agentSt
 		parts = append(parts, timeStr)
 	}
 	body := runewidth.Truncate(strings.Join(parts, sep), avail, "…")
-	// Thread the agent marker's color back in (single replace of the plain
-	// glyph, which sits before subject so it's the first occurrence). Only on
-	// non-highlighted rows: the styled glyph carries its own SGR reset, which
-	// would truncate a row-level style (selected bold / cursor bg) mid-line —
-	// on those rows the row style wins and the glyph still conveys state by
-	// shape alone.
+	// Thread the agent marker's color back in. Anchor the replace on the
+	// preceding separator (the marker is always `name · <glyph>`, and a
+	// basename can't contain " · ") so a Braille glyph happening to appear in
+	// the name can't be styled instead. Only on non-highlighted rows: the
+	// styled glyph carries its own SGR reset, which would truncate a row-level
+	// style (selected bold / cursor bg) mid-line — on those rows the row style
+	// wins and the glyph still conveys state by shape alone.
 	if hasAgent && !isCurrent && !selected {
-		body = strings.Replace(body, agentGlyph, agentGlyphStyled, 1)
+		body = strings.Replace(body, sep+agentGlyph, sep+agentGlyphStyled, 1)
 	}
 	// isCurrent paints the "you're here" body styling (bold + accent fg)
 	// independent of focus — Decision 4 keeps the ▶ row visually salient

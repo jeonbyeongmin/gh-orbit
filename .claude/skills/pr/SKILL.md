@@ -44,17 +44,9 @@ ToolSearch(query="select:AskUserQuestion", max_results=1)
     - 동의 → 변경 성격을 보고 Angular type 을 추론해 한 줄 한국어 메시지로 커밋. scope 모호하면 생략.
     - 거부 → 중단.
 
-## 2. /code-review 호출 (opt-in only)
+## 2. /code-review 호출 (항상 실행)
 
-**기본은 skip**. `/code-review` 는 자체 SKILL 본문을 로드하고 base..HEAD diff 를 재분석한 뒤 추가 커밋을 만들어 PR diff 를 어지럽힌다. 토큰 비용이 크고 (diff 크기에 따라 3~30k), plan-driven 사이클 (`/execute-plan` → `/pr`) 의 step 커밋들은 이미 정돈된 상태라 ROI 가 낮다.
-
-다음 중 하나에 해당할 때만 실행:
-
-- `$ARGUMENTS` 에 `--code-review` 또는 `--cleanup` 포함
-- 사용자 prompt 가 명시적으로 cleanup 요청 ("code-review 도 같이", "정리도 부탁", "cleanup 도 돌려" 등)
-- 부모 호출이 `code-review: true` 를 명시 (드묾; `/execute-plan` 은 명시하지 않는다)
-
-opt-in 시:
+검증 4단계 전에 **항상** `/code-review` 를 실행한다. `/code-review` 는 자체 SKILL 본문을 로드하고 base..HEAD diff 를 재분석한 뒤, 발견한 문제가 있으면 추가 커밋으로 반영한다.
 
 ```
 Skill(skill="code-review")
@@ -68,8 +60,6 @@ git commit -m "refactor: /code-review 결과 반영"
 ```
 
 scope 가 명확하면 `refactor(<scope>): /code-review 결과 반영`. 변경 없으면 커밋 없이 다음 단계로.
-
-skip 한 경우 §최종 보고에 한 줄: "/code-review skipped (default — `--code-review` 로 opt-in)".
 
 ## 3. 검증 4단계
 
@@ -290,7 +280,7 @@ shopt -u nullglob
 
 ## 주의사항
 
-- **`/code-review` 는 기본 skip, opt-in 전용** (§2 참조). `gofmt` 자동 수정은 §3.1 의 default 동작으로 유지 — 형식 위반은 PR 머지 전에 정리되는 게 cleanup 비용보다 가치가 크기 때문. 사용자가 "정리 커밋 없이" 미리 요청했다면 §3.1 의 자동 수정·커밋도 건너뛰고 `gofmt -l .` 결과를 보여주고 중단 (검증 자체는 반드시 실행).
+- **`/code-review` 는 항상 실행** (§2 참조). `gofmt` 자동 수정은 §3.1 의 default 동작으로 유지 — 형식 위반은 PR 머지 전에 정리되는 게 cleanup 비용보다 가치가 크기 때문. 사용자가 "정리 커밋 없이" 미리 요청했다면 §3.1 의 자동 수정·커밋도 건너뛰고 `gofmt -l .` 결과를 보여주고 중단 (검증 자체는 반드시 실행).
 - 비-ff push 거부 / 검증 실패 / dirty tree 거부는 모두 사용자 결정 사항으로 위임. 자동 우회 금지.
 - 이 스킬은 `git push` 와 `gh pr create` 를 실행한다 — 외부 영향 (원격 갱신, 리뷰어 알림). pre-flight 다 통과한 뒤에야 push 하므로 사전 동의는 "PR 올려줘" 발화로 충분. dirty tree 포함 여부만 §1 에서 명시적으로 확인.
 - 첫 push 는 `-u origin <branch>` 로 upstream 등록. 작업 브랜치가 origin 에 없는 케이스 흔함.

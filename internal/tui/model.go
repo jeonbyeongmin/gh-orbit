@@ -1087,19 +1087,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.mode == viewModeHelp {
-			// Centered overlay reference modal: swallow everything but the
-			// close keys (and quit). Unlike the old inline panel, shortcuts
-			// do NOT pass through — read, then close, then act.
-			switch msg.String() {
-			case "?", "esc":
-				m.mode = viewModeNormal
-				return m, nil
-			case "ctrl+c":
-				return m.handleCtrlC()
-			}
-			return m, nil
-		}
 		if m.focused == paneDashboard && m.mode == viewModeNormal {
 			switch msg.String() {
 			case "j", "down":
@@ -1162,6 +1149,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "?":
 				m.mode = viewModeHelp
+				m.applyPaneSizes()
 				return m, nil
 			case "tab":
 				return m.cycleLocalChangesFocus(), nil
@@ -1201,10 +1189,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m.handleCtrlC()
 		case "?":
-			// Open the help reference modal. Closing is owned by the
-			// viewModeHelp key gate above; the overlay reserves no rows so
-			// pane sizes are unchanged.
-			m.mode = viewModeHelp
+			// Toggle the inline help reference panel. It grows out of the
+			// footer (not a modal) — other shortcuts keep working while it is
+			// open, so applyPaneSizes reflows the graph around the reserved
+			// rows on both expand and collapse.
+			if m.mode == viewModeHelp {
+				m.mode = viewModeNormal
+			} else {
+				m.mode = viewModeHelp
+			}
+			m.applyPaneSizes()
 			return m, nil
 		case "F":
 			if m.fetchInFlight {
@@ -1575,11 +1569,16 @@ func (m Model) paneSizes() paneSizes {
 	if m.width == 0 || m.height == 0 {
 		return s
 	}
-	// Reserve 1 row for the bottom help/status line. Every centered overlay
-	// modal mode — including viewModeHelp — is painted on top of the
-	// unchanged 3-pane base by composeOverlay, so none of them reserve extra
-	// rows here and paneSizes stays mode-agnostic.
-	mainH := m.height - 1
+	// Reserve 1 row for the bottom help/status line, or the full inline panel
+	// height when `?` is open. The centered overlay modal modes (branchPicker /
+	// branchesModal / checkoutConfirm / worktree sub-modals) are painted on top
+	// of the unchanged 3-pane base by composeOverlay, so they reserve no extra
+	// rows here — only viewModeHelp grows the bottom region.
+	helpReserved := 1
+	if m.mode == viewModeHelp {
+		helpReserved = m.helpReservedRows()
+	}
+	mainH := m.height - helpReserved
 	if mainH < 1 {
 		mainH = 1
 	}
@@ -1661,6 +1660,19 @@ func (m Model) paneSizes() paneSizes {
 // tree column in viewModeLocalChanges; the diff viewport takes the
 // remainder. Tuned so paths still breathe on a typical 120-col terminal.
 const localChangesTreeRatio = 35
+
+// helpReservedRows returns how many bottom rows the inline `?` help panel
+// claims. It's the column layout's natural height (tallest category +
+// header), clamped so the graph keeps priority: never more than half the
+// screen, and never so tall that the main area drops below 3 rows. Floor: 1.
+func (m Model) helpReservedRows() int {
+	want := lipgloss.Height(renderHelpColumns())
+	want = max(min(want, m.height/2), 3)
+	if upper := m.height - 3; upper > 0 {
+		want = min(want, upper)
+	}
+	return max(want, 1)
+}
 
 // modalHeaderS is the bold style applied to the header row of the branch
 // picker modal. Checkout confirm uses confirmPromptS (busy-color + bold);
@@ -1850,8 +1862,6 @@ func (m Model) View() string {
 	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
 
 	switch m.mode {
-	case viewModeHelp:
-		return composeOverlay(base, renderModalBox(renderHelpModalInner(m.width)), m.width, m.height)
 	case viewModeBranchPicker:
 		return composeOverlay(base, renderModalBox(m.renderBranchPickerInner()), m.width, m.height)
 	case viewModeBranchesModal:
@@ -1900,10 +1910,13 @@ func (m Model) renderHelpStatus() string {
 		return " "
 	case viewModeRefDeleteConfirm:
 		return m.refDeleteInlineHint()
+	case viewModeHelp:
+		// Inline column reference panel, grown out of the footer over the rows
+		// helpReservedRows() carved from the graph.
+		return renderHelpExpanded(m.width, m.helpReservedRows())
 	}
-	// Normal operation (incl. viewModeHelp, whose modal is painted over this
-	// base by View()): a single `? help` token + the status message. The full
-	// key reference lives behind the `?` overlay modal.
+	// Normal operation: a single pressable `? help` token + the status
+	// message. The full key reference lives behind the `?` inline panel.
 	if m.status == "" {
 		return collapsedHintRendered
 	}

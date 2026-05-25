@@ -45,14 +45,14 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `,`            | global | enter Local Changes mode                                                            |
 | `Z`            | global | zombie-branch cleanup — see [branches.md](branches.md)                              |
 | `^C ^C`        | global | quit (press twice; closes patch overlay first)                                      |
-| `?`            | global | open help reference modal (`esc` / `?` close)                                       |
+| `?`            | global | toggle inline help reference panel (column layout)                                  |
 | `R`            | global | reserved for future Rebase                                                          |
 
 Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `[` / `]` / `esc`. `[` jumps to the previous file header, `]` to the next; both are no-ops past the first / last file (no wrap — surprise jumps make the cockpit harder to read, not easier). The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md).
 
-`?` opens a centered overlay help modal listing every binding grouped into side-by-side columns (`[Global] / [Graph] / [Local Changes]`). It is a real modal — all other shortcuts are swallowed while it is open; `esc` / `?` close it. Narrow terminals that can't fit three columns fall back to the stacked one-row-per-category layout. The overlay paints over the unchanged 3-pane base, so it reserves no rows and never shrinks the graph.
+`?` toggles an inline help reference panel that grows out of the footer, laying every binding into side-by-side columns (`Global` / `Graph` / `Local Changes`). Reference, not modal — every shortcut keeps working while it is open, and a second `?` collapses it. The panel reserves `helpReservedRows()` rows (the tallest column's height, clamped to ≤ half the screen and never starving the graph below 3 rows), so the graph shrinks by that much while it's open. Narrow terminals that can't fit three columns fall back to the stacked one-row-per-category layout.
 
-Bottom hint, single line — just a pressable `? help` token plus the status message; the full reference lives behind the `?` modal:
+Bottom hint, single line — just a pressable `? help` token plus the status message; the full reference grows out of the footer only while `?` is open:
 
 - `? help`
 

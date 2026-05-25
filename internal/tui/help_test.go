@@ -60,28 +60,37 @@ func TestRenderHelpPanelHandlesNarrowWidth(t *testing.T) {
 	}
 }
 
-// TestRenderHelpModalColumnsWide verifies the wide-terminal layout puts all
+// TestRenderHelpExpandedColumnsWide verifies the wide-terminal layout puts all
 // three category titles on the same (first) row — the side-by-side columns.
-func TestRenderHelpModalColumnsWide(t *testing.T) {
-	out := renderHelpModalInner(200)
+func TestRenderHelpExpandedColumnsWide(t *testing.T) {
+	out := renderHelpExpanded(200, 12)
 	firstLine := strings.SplitN(out, "\n", 2)[0]
 	for _, title := range []string{"Global", "Graph", "Local Changes"} {
 		if !strings.Contains(firstLine, title) {
-			t.Errorf("wide help modal: first row missing %q (want all titles on one row)\n--- first row ---\n%s", title, firstLine)
+			t.Errorf("wide help panel: first row missing %q (want all titles on one row)\n--- first row ---\n%s", title, firstLine)
 		}
 	}
 }
 
-// TestRenderHelpModalNarrowFallback verifies that when the columns can't fit
-// the content budget, renderHelpModalInner falls back to the stacked-rows
+// TestRenderHelpExpandedNarrowFallback verifies that when the columns are wider
+// than the terminal, renderHelpExpanded falls back to the stacked-rows
 // renderHelpPanel form (bracketed headers on separate lines).
-func TestRenderHelpModalNarrowFallback(t *testing.T) {
-	out := renderHelpModalInner(20)
+func TestRenderHelpExpandedNarrowFallback(t *testing.T) {
+	out := renderHelpExpanded(20, 8)
 	if !strings.Contains(out, "[Global]") {
-		t.Errorf("narrow help modal should fall back to stacked rows ([Global] header), got:\n%s", out)
+		t.Errorf("narrow help panel should fall back to stacked rows ([Global] header), got:\n%s", out)
 	}
 	firstLine := strings.SplitN(out, "\n", 2)[0]
 	if strings.Contains(firstLine, "Graph") {
 		t.Errorf("narrow fallback should not place Graph on the first row (that's the column layout):\n%s", firstLine)
+	}
+}
+
+// TestRenderHelpExpandedClampsToHeight verifies the column layout is clamped to
+// the reserved row budget (small terminals show fewer rows, not overflow).
+func TestRenderHelpExpandedClampsToHeight(t *testing.T) {
+	out := renderHelpExpanded(200, 4)
+	if got := strings.Count(out, "\n") + 1; got > 4 {
+		t.Errorf("renderHelpExpanded(_, 4) emitted %d rows, want ≤ 4", got)
 	}
 }

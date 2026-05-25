@@ -92,8 +92,8 @@ const helpTextBranchPicker = "j/k navigate · enter checkout · esc cancel"
 // renderHelpPanel composes the stacked-rows help layout as a multi-line
 // string capped at `height` rows. Each category emits a `[Title]` header
 // row plus a single entries row joined inline with `·`. Rows past the cap
-// are dropped. This is the narrow-terminal fallback for renderHelpModalInner
-// when the side-by-side columns don't fit the content budget.
+// are dropped. This is the narrow-terminal fallback for renderHelpExpanded
+// when the side-by-side columns are wider than the terminal.
 func renderHelpPanel(width, height int) string {
 	if width < 1 || height < 1 {
 		return ""
@@ -118,7 +118,7 @@ func renderHelpPanel(width, height int) string {
 }
 
 // helpColumnGutter is the blank-space width between adjacent columns in the
-// modal's side-by-side layout.
+// expanded panel's side-by-side layout.
 const helpColumnGutter = 2
 
 // renderHelpColumns lays the categories out as side-by-side vertical lists:
@@ -142,20 +142,23 @@ func renderHelpColumns() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, blocks...)
 }
 
-// renderHelpModalInner renders the `?` reference for the centered overlay
-// modal. Wide terminals get the side-by-side column layout; when the columns
-// don't fit the content budget it falls back to the stacked renderHelpPanel
-// form. termWidth is the full terminal width — the modal box frame is
-// subtracted to get the content budget.
-func renderHelpModalInner(termWidth int) string {
-	avail := termWidth - modalBoxStyle.GetHorizontalFrameSize()
-	if avail < 1 {
-		avail = 1
+// renderHelpExpanded renders the `?` reference for the inline bottom panel
+// that grows out of the footer (it is not a modal — the base view stays put
+// and shortcuts keep working). Wide terminals get the side-by-side column
+// layout, clamped to `height` rows; when the columns are wider than the
+// terminal it falls back to the stacked renderHelpPanel form. The graph above
+// shrinks by `height` rows (see paneSizes / helpReservedRows).
+func renderHelpExpanded(width, height int) string {
+	if width < 1 || height < 1 {
+		return ""
 	}
-	if columns := renderHelpColumns(); lipgloss.Width(columns) <= avail {
-		return columns
+	if columns := renderHelpColumns(); lipgloss.Width(columns) <= width {
+		lines := strings.Split(columns, "\n")
+		if len(lines) > height {
+			lines = lines[:height]
+		}
+		return strings.Join(lines, "\n")
 	}
-	// Narrow terminal: reuse the stacked-rows layout. Height is content-driven
-	// (header + entries row per category) since the modal reserves no rows.
-	return renderHelpPanel(avail, 2*len(helpCategories))
+	// Too narrow for columns: reuse the stacked-rows layout.
+	return renderHelpPanel(width, height)
 }

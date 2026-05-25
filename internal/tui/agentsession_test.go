@@ -214,3 +214,51 @@ func TestAgentSessionTickMsgPollsAndRearms(t *testing.T) {
 		t.Errorf("tick handler should dispatch both a poll and a re-arm tick: got %d cmds", len(batch))
 	}
 }
+
+func TestAgentSessionPollMsgStartsSpinnerWhenRunning(t *testing.T) {
+	m := New()
+	updated, cmd := m.Update(agentSessionPollMsg{reqID: m.sidebarWorktreesReqID, states: map[string]agentState{"/wt": agentStateRunning}})
+	if !updated.(Model).spinnerTicking {
+		t.Error("a running worktree should start the spinner lineage")
+	}
+	if cmd == nil {
+		t.Error("running state should arm a spinner tick cmd")
+	}
+}
+
+func TestAgentSessionPollMsgNoSpinnerWhenIdle(t *testing.T) {
+	m := New()
+	updated, cmd := m.Update(agentSessionPollMsg{reqID: m.sidebarWorktreesReqID, states: map[string]agentState{"/wt": agentStateParked}})
+	if updated.(Model).spinnerTicking {
+		t.Error("a parked-only inventory must not start the spinner")
+	}
+	if cmd != nil {
+		t.Error("no running worktree → no spinner tick armed")
+	}
+}
+
+func TestAgentSpinnerTickAdvancesWhileRunning(t *testing.T) {
+	m := New()
+	m.refs.SetAgentState("/wt", agentStateRunning)
+	m.spinnerTicking = true
+	updated, cmd := m.Update(agentSpinnerTickMsg{})
+	if got := updated.(Model).spinnerFrame; got != m.spinnerFrame+1 {
+		t.Errorf("tick should advance frame: got %d want %d", got, m.spinnerFrame+1)
+	}
+	if cmd == nil {
+		t.Error("tick should re-arm while a worktree is running")
+	}
+}
+
+func TestAgentSpinnerTickStopsWhenIdle(t *testing.T) {
+	m := New()
+	m.refs.SetAgentState("/wt", agentStateParked) // fresh but not running
+	m.spinnerTicking = true
+	updated, cmd := m.Update(agentSpinnerTickMsg{})
+	if updated.(Model).spinnerTicking {
+		t.Error("tick should clear spinnerTicking when nothing is running")
+	}
+	if cmd != nil {
+		t.Error("tick must NOT re-arm when idle — the lineage dies so the cockpit goes idle")
+	}
+}

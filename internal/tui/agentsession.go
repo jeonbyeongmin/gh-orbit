@@ -290,6 +290,26 @@ func agentSessionTickCmd() tea.Cmd {
 	})
 }
 
+// agentSpinnerInterval is the cadence the running marker advances frames at.
+// It is a SEPARATE lineage from the 30s state poll: state detection stays at
+// agentSessionPollInterval (a parked transition surfaces on the next poll),
+// while this fast tick only re-renders the spinner glyph. Critically it is
+// gated — armed only while a worktree is actually running and never re-armed
+// once none are (see the agentSpinnerTickMsg handler), so an idle cockpit
+// re-renders zero times.
+const agentSpinnerInterval = 100 * time.Millisecond
+
+// agentSpinnerTickMsg advances the running-marker spinner frame. Its handler
+// is the sole re-arm site, and it only re-arms while AnyAgentRunning holds, so
+// exactly one spinner lineage is ever in flight and it dies on idle.
+type agentSpinnerTickMsg struct{}
+
+func agentSpinnerTickCmd() tea.Cmd {
+	return tea.Tick(agentSpinnerInterval, func(time.Time) tea.Msg {
+		return agentSpinnerTickMsg{}
+	})
+}
+
 // agentSessionPollCmd reads projectsDir/<slug>/*.jsonl for each path off the
 // main loop and reports the state set tagged with reqID. Read-only (stat +
 // bounded seek-read): it never mutates refModel. The reqID lets the handler

@@ -167,6 +167,11 @@ type Model struct {
 	// Read by the dashboard row; advanced by the gated agentSpinnerTickMsg
 	// (which only runs while a worktree is actually running).
 	spinnerFrame int
+	// spinnerTicking guards the spinner tick lineage: the gated start (in the
+	// agentSessionPollMsg handler) arms a new tick only when this is false, and
+	// the tick handler is the sole re-arm site — so exactly one lineage is ever
+	// in flight, mirroring the agentSessionTickMsg discipline.
+	spinnerTicking bool
 	// statusTickSeq counts every status line that arms a tea.Tick auto-clear
 	// (today: the switch-confirmation in switchWorktree). The dispatcher
 	// captures the value at send time; on receipt the handler only clears
@@ -484,7 +489,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for path, state := range msg.states {
 			m.refs.SetAgentState(path, state)
 		}
+		// Gated spinner start: if a worktree is now running and the spinner
+		// lineage isn't already live, arm it. The tick handler owns stop + re-arm.
+		if !m.spinnerTicking && m.refs.AnyAgentRunning() {
+			m.spinnerTicking = true
+			return m, agentSpinnerTickCmd()
+		}
 		return m, nil
+
+	case agentSpinnerTickMsg:
+		// Advance the frame and re-arm only while something is still running;
+		// otherwise drop spinnerTicking and let the lineage die so the cockpit
+		// goes idle (zero re-renders). The poll handler re-arms it next time a
+		// worktree starts running.
+		if !m.refs.AnyAgentRunning() {
+			m.spinnerTicking = false
+			return m, nil
+		}
+		m.spinnerFrame++
+		return m, agentSpinnerTickCmd()
 
 	case worktreeAddSucceededMsg:
 		if msg.reqID != m.worktreeAction.reqID {

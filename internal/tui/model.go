@@ -163,6 +163,10 @@ type Model struct {
 	refs          refModel
 	graph         graphModel
 	diff          diffModel
+	// spinnerFrame is the Braille frame index for "running" agent markers.
+	// Read by the dashboard row; advanced by the gated agentSpinnerTickMsg
+	// (which only runs while a worktree is actually running).
+	spinnerFrame int
 	// statusTickSeq counts every status line that arms a tea.Tick auto-clear
 	// (today: the switch-confirmation in switchWorktree). The dispatcher
 	// captures the value at send time; on receipt the handler only clears
@@ -477,8 +481,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.reqID != m.sidebarWorktreesReqID {
 			return m, nil
 		}
-		for path, active := range msg.active {
-			m.refs.SetAgentActive(path, active)
+		for path, state := range msg.states {
+			m.refs.SetAgentState(path, state)
 		}
 		return m, nil
 

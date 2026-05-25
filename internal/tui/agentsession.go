@@ -56,38 +56,6 @@ func agentSessionSlug(worktreePath string) string {
 	return string(b)
 }
 
-// agentActiveForWorktree reports whether an agent session touched
-// worktreePath within window of now, judged by the newest mtime among
-// projectsDir/<slug>/*.jsonl. A missing projectsDir, an unresolvable slug
-// dir, an unreadable entry, or no transcript at all all return false — the
-// caller renders no marker rather than surfacing an error.
-func agentActiveForWorktree(projectsDir, worktreePath string, now time.Time, window time.Duration) bool {
-	if projectsDir == "" {
-		return false
-	}
-	entries, err := os.ReadDir(filepath.Join(projectsDir, agentSessionSlug(worktreePath)))
-	if err != nil {
-		return false
-	}
-	var newest time.Time
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if mt := info.ModTime(); mt.After(newest) {
-			newest = mt
-		}
-	}
-	if newest.IsZero() {
-		return false
-	}
-	return now.Sub(newest) <= window
-}
-
 // agentState is the per-worktree agent-session state painted on the dashboard
 // row. The zero value is agentStateNone so a path the poll has never seen
 // renders no marker.
@@ -302,7 +270,7 @@ var agentSessionProjectsDir = func() string {
 // though worktreesLoadedMsg also dispatches event-driven polls).
 type agentSessionTickMsg struct{}
 
-// agentSessionPollMsg carries one poll's result (worktree path → active),
+// agentSessionPollMsg carries one poll's result (worktree path → state),
 // tagged with the sidebarWorktreesReqID it was computed against. Its handler
 // applies the map only when the reqID still matches the live inventory — a
 // poll computed before a worktree was pruned/added is dropped so it can't
@@ -310,7 +278,7 @@ type agentSessionTickMsg struct{}
 // handler's job), so dropping a stale poll never kills the loop.
 type agentSessionPollMsg struct {
 	reqID  uint64
-	active map[string]bool
+	states map[string]agentState
 }
 
 // agentSessionTickCmd arms one poll tick. Init fires it once; the
@@ -322,16 +290,16 @@ func agentSessionTickCmd() tea.Cmd {
 	})
 }
 
-// agentSessionPollCmd stats projectsDir/<slug>/*.jsonl for each path off the
-// main loop and reports the active set tagged with reqID. Pure read-only
-// stat: it never mutates refModel. The reqID lets the handler drop a result
-// that raced an inventory change.
+// agentSessionPollCmd reads projectsDir/<slug>/*.jsonl for each path off the
+// main loop and reports the state set tagged with reqID. Read-only (stat +
+// bounded seek-read): it never mutates refModel. The reqID lets the handler
+// drop a result that raced an inventory change.
 func agentSessionPollCmd(projectsDir string, paths []string, now time.Time, reqID uint64) tea.Cmd {
 	return func() tea.Msg {
-		active := make(map[string]bool, len(paths))
+		states := make(map[string]agentState, len(paths))
 		for _, p := range paths {
-			active[p] = agentActiveForWorktree(projectsDir, p, now, agentSessionFreshness)
+			states[p] = agentStateForWorktree(projectsDir, p, now, agentSessionFreshness)
 		}
-		return agentSessionPollMsg{reqID: reqID, active: active}
+		return agentSessionPollMsg{reqID: reqID, states: states}
 	}
 }

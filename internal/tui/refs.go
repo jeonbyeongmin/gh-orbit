@@ -42,7 +42,7 @@ type refModel struct {
 	worktreeDirty       map[string]bool
 	worktreeTimedOut    map[string]bool
 	worktreeLastCommit  map[string]worktreeCommitMeta
-	agentActive         map[string]bool
+	agentSessionState   map[string]agentState
 
 	localChangesSummary         git.LocalChangesSummary
 	localChangesSummaryLoadedAt time.Time
@@ -129,8 +129,8 @@ func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 	if r.worktreeLastCommit == nil {
 		r.worktreeLastCommit = make(map[string]worktreeCommitMeta)
 	}
-	if r.agentActive == nil {
-		r.agentActive = make(map[string]bool)
+	if r.agentSessionState == nil {
+		r.agentSessionState = make(map[string]agentState)
 	}
 	live := make(map[string]struct{}, len(entries))
 	for _, e := range entries {
@@ -151,9 +151,9 @@ func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 			delete(r.worktreeLastCommit, p)
 		}
 	}
-	for p := range r.agentActive {
+	for p := range r.agentSessionState {
 		if _, ok := live[p]; !ok {
-			delete(r.agentActive, p)
+			delete(r.agentSessionState, p)
 		}
 	}
 }
@@ -189,20 +189,32 @@ func (r refModel) WorktreeDirty(path string) bool {
 	return r.worktreeDirty[path]
 }
 
-// SetAgentActive records whether a worktree path currently hosts a live
-// Claude Code agent session. Written by the ~30s agent-session poll
-// (agentSessionPollMsg); read by the dashboard row to paint the 🤖 marker.
-func (r *refModel) SetAgentActive(path string, active bool) {
-	if r.agentActive == nil {
-		r.agentActive = make(map[string]bool)
+// SetAgentState records a worktree path's current Claude Code agent-session
+// state. Written by the ~30s agent-session poll (agentSessionPollMsg); read by
+// the dashboard row to paint the state marker.
+func (r *refModel) SetAgentState(path string, state agentState) {
+	if r.agentSessionState == nil {
+		r.agentSessionState = make(map[string]agentState)
 	}
-	r.agentActive[path] = active
+	r.agentSessionState[path] = state
 }
 
-// AgentActive reports the last polled agent-session state for a path. A
-// path the poll has never seen returns false → no marker.
-func (r refModel) AgentActive(path string) bool {
-	return r.agentActive[path]
+// AgentState reports the last polled agent-session state for a path. A path
+// the poll has never seen returns agentStateNone (the zero value) → no marker.
+func (r refModel) AgentState(path string) agentState {
+	return r.agentSessionState[path]
+}
+
+// AnyAgentRunning reports whether at least one worktree is in
+// agentStateRunning. The spinner tick is gated on this: it only animates while
+// something is actively working, so an idle cockpit re-renders zero times.
+func (r refModel) AnyAgentRunning() bool {
+	for _, st := range r.agentSessionState {
+		if st == agentStateRunning {
+			return true
+		}
+	}
+	return false
 }
 
 // WorktreeLastCommit returns the cached last-commit subject + time for a
@@ -331,16 +343,17 @@ const (
 // `Sidebar` in the name is a historical artifact — the dashboard reuses the
 // same row shape.
 //
-// Display order is `▶ name · 🤖 · branch · ● · subject · time`. When the band
+// Display order is `▶ name · ⠋ · branch · ● · subject · time`. When the band
 // is too narrow the columns drop whole (no leftover "…" fragment) in priority
-// order subject → branch → time → ● → 🤖, with `▶ name` always preserved. The
-// 🤖 (a live Claude Code agent session on this tree) drops last among the
-// fixed columns — it's the highest-value signal in a review cockpit. subject
-// gets whatever width is left after the fixed columns fit, capped at
+// order subject → branch → time → ● → agent, with `▶ name` always preserved.
+// The agent marker (the Claude Code session state on this tree) drops last
+// among the fixed columns — it's the highest-value signal in a review cockpit.
+// subject gets whatever width is left after the fixed columns fit, capped at
 // worktreeSubjectCap and hidden below worktreeSubjectFloor. A zero `when` /
 // empty `subject` (loading, timed-out, or unborn-HEAD worktree) simply omits
-// that column — the last-commit slots render blank, never `?`.
-func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected, agentActive bool, dirtyMark, subject string, when, now time.Time, width int) string {
+// that column — the last-commit slots render blank, never `?`. spinnerFrame is
+// the live Braille frame index for a running marker (ignored by other states).
+func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, agentState agentState, spinnerFrame int, dirtyMark, subject string, when, now time.Time, width int) string {
 	const prefixWidth = 2
 	const sep = " · "
 	sepW := runewidth.StringWidth(sep)
@@ -370,16 +383,16 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected, agentActive 
 	}
 
 	// Fixed (non-subject) columns, present-flag gated. Width is measured in
-	// display order: name · 🤖 · branch · ● · time.
-	const agentMark = "🤖"
-	hasAgent := agentActive
+	// display order: name · <agent> · branch · ● · time. Width math uses the
+	// plain (un-styled) glyph; color is threaded back in after truncation.
+	agentGlyph, agentGlyphStyled, hasAgent := agentMarker(agentState, spinnerFrame)
 	hasBranch := branch != ""
 	hasDirty := dirtyMark != ""
 	hasTime := timeStr != ""
 	fixedWidth := func() int {
 		parts := []string{name}
 		if hasAgent {
-			parts = append(parts, agentMark)
+			parts = append(parts, agentGlyph)
 		}
 		if hasBranch {
 			parts = append(parts, branch)
@@ -394,7 +407,7 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected, agentActive 
 	}
 	// Drop fixed columns until they fit. subject is dropped before any of
 	// these (it's added afterward from the leftover), so the order here is
-	// branch → time → ● → 🤖 ; name is never dropped. The presence guard
+	// branch → time → ● → agent ; name is never dropped. The presence guard
 	// stops the loop once only name remains — the final Truncate clips that
 	// as a last resort.
 	for fixedWidth() > avail && (hasBranch || hasTime || hasDirty || hasAgent) {
@@ -427,7 +440,7 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected, agentActive 
 
 	parts := []string{name}
 	if hasAgent {
-		parts = append(parts, agentMark)
+		parts = append(parts, agentGlyph)
 	}
 	if hasBranch {
 		parts = append(parts, branch)
@@ -442,6 +455,15 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected, agentActive 
 		parts = append(parts, timeStr)
 	}
 	body := runewidth.Truncate(strings.Join(parts, sep), avail, "…")
+	// Thread the agent marker's color back in (single replace of the plain
+	// glyph, which sits before subject so it's the first occurrence). Only on
+	// non-highlighted rows: the styled glyph carries its own SGR reset, which
+	// would truncate a row-level style (selected bold / cursor bg) mid-line —
+	// on those rows the row style wins and the glyph still conveys state by
+	// shape alone.
+	if hasAgent && !isCurrent && !selected {
+		body = strings.Replace(body, agentGlyph, agentGlyphStyled, 1)
+	}
 	// isCurrent paints the "you're here" body styling (bold + accent fg)
 	// independent of focus — Decision 4 keeps the ▶ row visually salient
 	// whether or not the dashboard has the cursor.
@@ -455,4 +477,46 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected, agentActive 
 		body = cursorRowBgStyle.Render(body)
 	}
 	return prefix + body
+}
+
+// agentSpinnerFrames is the Braille rotation painted for a running agent
+// marker — chosen over an emoji so the column stays a stable single cell on
+// every terminal (including CJK locales where emoji width is ambiguous).
+var agentSpinnerFrames = []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
+
+// agentParkedGlyph / agentUnknownGlyph are the static (non-animated) markers.
+// All three agent glyphs are single-cell Braille so the column never shifts
+// the row layout as state changes.
+const (
+	agentParkedGlyph  = "⠿" // session parked: full block, awaiting your input
+	agentUnknownGlyph = "⠂" // mtime fresh but state unparseable (v1 fallback)
+)
+
+// Agent-marker colors. Starting values pending post-build visual review — the
+// glyph shape is the primary signal, color is reinforcement.
+const (
+	colorAgentRunning = "42"  // green — actively working
+	colorAgentParked  = "214" // orange — your turn
+)
+
+var (
+	agentRunningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAgentRunning))
+	agentParkedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAgentParked))
+)
+
+// agentMarker maps a session state to its dashboard glyph: the plain glyph (for
+// width math), the styled glyph (color threaded back after truncation), and
+// whether a marker is present at all. agentStateNone yields no marker.
+func agentMarker(st agentState, spinnerFrame int) (plain, styled string, present bool) {
+	switch st {
+	case agentStateRunning:
+		plain = string(agentSpinnerFrames[spinnerFrame%len(agentSpinnerFrames)])
+		return plain, agentRunningStyle.Render(plain), true
+	case agentStateParked:
+		return agentParkedGlyph, agentParkedStyle.Render(agentParkedGlyph), true
+	case agentStateUnknownActive:
+		return agentUnknownGlyph, dimFGStyle.Render(agentUnknownGlyph), true
+	default:
+		return "", "", false
+	}
 }

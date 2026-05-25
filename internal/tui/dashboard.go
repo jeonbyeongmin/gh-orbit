@@ -52,6 +52,20 @@ func renderTopDashboard(m Model, width int) string {
 		return ""
 	}
 
+	// Pre-measure the set: the widest capped name (so rows pad to a shared
+	// name-column width) and whether any tree carries an agent marker (so rows
+	// reserve a 1-cell agent slot and the branch column lines up).
+	nameColW := 0
+	anyAgent := false
+	for _, wt := range wts {
+		if w := runewidth.StringWidth(worktreeDisplayName(wt.Path)); w > nameColW {
+			nameColW = w
+		}
+		if _, _, present := agentMarker(m.refs.AgentState(wt.Path), 0); present {
+			anyAgent = true
+		}
+	}
+
 	var b strings.Builder
 	b.WriteString(renderDashboardHeader(m, len(wts), width, now))
 	b.WriteByte('\n')
@@ -71,7 +85,7 @@ func renderTopDashboard(m Model, width int) string {
 		selected := focused && i == m.dashboardFocus.cursor
 		subject, when := m.refs.WorktreeLastCommit(wt.Path)
 		state := m.refs.AgentState(wt.Path)
-		b.WriteString(renderWorktreeSidebarRow(wt, isCurrent, selected, state, m.spinnerFrame, dirtyMark, subject, when, now, width))
+		b.WriteString(renderWorktreeSidebarRow(wt, isCurrent, selected, state, m.spinnerFrame, dirtyMark, subject, when, now, width, nameColW, anyAgent))
 		b.WriteByte('\n')
 	}
 

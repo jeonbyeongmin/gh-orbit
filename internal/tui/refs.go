@@ -338,22 +338,49 @@ const (
 	worktreeSubjectCap   = 30
 )
 
+// worktreeNameCap bounds the worktree name column. Names are derived from the
+// worktree directory basename, which can be long (e.g. a branch-shaped
+// `feat+worktree-sort-by-last-commit`); without a cap one long name swallows
+// the row and starves the higher-value branch / subject columns.
+const worktreeNameCap = 24
+
+// worktreeDisplayName is the basename of a worktree path, capped at
+// worktreeNameCap. Shared by the row renderer and the dashboard caller (which
+// pre-measures it to compute the aligned name-column width) so the cap lives
+// in one place.
+func worktreeDisplayName(path string) string {
+	name := path
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	return runewidth.Truncate(name, worktreeNameCap, "…")
+}
+
 // renderWorktreeSidebarRow formats one worktree entry inside the dashboard
 // row body. `▶` + bold for the current entry; 2-col indent for the rest. The
 // `Sidebar` in the name is a historical artifact — the dashboard reuses the
 // same row shape.
 //
-// Display order is `▶ name · ⠋ · branch · ● · subject · time`. When the band
-// is too narrow the columns drop whole (no leftover "…" fragment) in priority
-// order subject → branch → time → ● → agent, with `▶ name` always preserved.
-// The agent marker (the Claude Code session state on this tree) drops last
-// among the fixed columns — it's the highest-value signal in a review cockpit.
-// subject gets whatever width is left after the fixed columns fit, capped at
-// worktreeSubjectCap and hidden below worktreeSubjectFloor. A zero `when` /
+// Display order is `▶ name · ⠋ · branch · ● · subject · time`. `name` is capped
+// at worktreeNameCap and, when `nameColW` > the row's own name, padded to that
+// width so the columns after it line up across rows (the caller passes the
+// set-wide max). Padding is skipped on a terminal too narrow to spare it, so
+// alignment yields to information density. When `agentSlot` is set the agent
+// column is always 1 cell wide — the real glyph when present, a blank
+// placeholder otherwise — so a sibling row's branch still aligns.
+//
+// Columns are allocated in keep-priority order
+// `name > agent > branch > subject > ● dirty > time`: each is added only if it
+// (plus its separator) still fits, but a column that doesn't fit is skipped
+// while smaller lower-priority columns still get a shot at the leftover — so a
+// too-long subject never leaves the row half-empty. `name` always survives;
+// the agent marker is the highest-value droppable column (a review cockpit
+// signal) and so is offered space first after the name. subject takes up to
+// worktreeSubjectCap and is hidden below worktreeSubjectFloor. A zero `when` /
 // empty `subject` (loading, timed-out, or unborn-HEAD worktree) simply omits
 // that column — the last-commit slots render blank, never `?`. spinnerFrame is
 // the live Braille frame index for a running marker (ignored by other states).
-func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, agentState agentState, spinnerFrame int, dirtyMark, subject string, when, now time.Time, width int) string {
+func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, agentState agentState, spinnerFrame int, dirtyMark, subject string, when, now time.Time, width, nameColW int, agentSlot bool) string {
 	const prefixWidth = 2
 	const sep = " · "
 	sepW := runewidth.StringWidth(sep)
@@ -361,13 +388,16 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, agentSt
 	if isCurrent {
 		prefix = cursorStyle.Render("▶") + " "
 	}
-	name := wt.Path
-	if i := strings.LastIndexByte(name, '/'); i >= 0 {
-		name = name[i+1:]
-	}
+	name := worktreeDisplayName(wt.Path)
 	avail := width - prefixWidth
 	if avail < 1 {
 		return prefix
+	}
+	// Align the name column to the set-wide max so the following columns share
+	// a start column across rows. Skipped when the row can't spare the padding
+	// (name col + a separator + a floor-width subject) — density wins there.
+	if nameW := runewidth.StringWidth(name); nameColW > nameW && nameColW+sepW+worktreeSubjectFloor <= avail {
+		name += strings.Repeat(" ", nameColW-nameW)
 	}
 
 	branch := ""
@@ -382,76 +412,63 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, agentSt
 		timeStr = relativeShortAt(when, now)
 	}
 
-	// Fixed (non-subject) columns, present-flag gated. Width is measured in
-	// display order: name · <agent> · branch · ● · time. Width math uses the
-	// plain (un-styled) glyph; color is threaded back in after truncation.
+	// agent column: the real glyph when present, else a 1-cell blank when the
+	// set reserves the slot (agentSlot) so branch lines up with agent rows.
+	// Width math uses the plain glyph; color is threaded back after truncation.
 	agentGlyph, agentGlyphStyled, hasAgent := agentMarker(agentState, spinnerFrame)
-	hasBranch := branch != ""
-	hasDirty := dirtyMark != ""
-	hasTime := timeStr != ""
-	fixedWidth := func() int {
-		parts := []string{name}
-		if hasAgent {
-			parts = append(parts, agentGlyph)
-		}
-		if hasBranch {
-			parts = append(parts, branch)
-		}
-		if hasDirty {
-			parts = append(parts, dirtyMark)
-		}
-		if hasTime {
-			parts = append(parts, timeStr)
-		}
-		return runewidth.StringWidth(strings.Join(parts, sep))
-	}
-	// Drop fixed columns until they fit. subject is dropped before any of
-	// these (it's added afterward from the leftover), so the order here is
-	// branch → time → ● → agent ; name is never dropped. The presence guard
-	// stops the loop once only name remains — the final Truncate clips that
-	// as a last resort.
-	for fixedWidth() > avail && (hasBranch || hasTime || hasDirty || hasAgent) {
-		switch {
-		case hasBranch:
-			hasBranch = false
-		case hasTime:
-			hasTime = false
-		case hasDirty:
-			hasDirty = false
-		default: // hasAgent — highest-value fixed column, dropped last
-			hasAgent = false
-		}
+	agentCell := agentGlyph
+	if !hasAgent {
+		agentCell = " "
 	}
 
-	// subject takes the width left after the fixed columns + one separator,
-	// capped and floored. A negative leftover (name alone overflows) falls
-	// below the floor, so subject drops out here too.
+	// Greedy allocation in keep-priority order. cur tracks the running display
+	// width (incl. separators); fits() asks whether one more column still fits.
+	cur := runewidth.StringWidth(name)
+	fits := func(w int) bool { return cur+sepW+w <= avail }
+
+	useAgent := (hasAgent || agentSlot) && fits(runewidth.StringWidth(agentCell))
+	if useAgent {
+		cur += sepW + runewidth.StringWidth(agentCell)
+	}
+	useBranch := branch != "" && fits(runewidth.StringWidth(branch))
+	if useBranch {
+		cur += sepW + runewidth.StringWidth(branch)
+	}
+	// subject is elastic: it takes its own width up to worktreeSubjectCap, but
+	// only when at least worktreeSubjectFloor is free — otherwise it drops whole
+	// and the leftover falls through to the small dirty / time columns.
 	if subject != "" {
-		if leftover := avail - fixedWidth() - sepW; leftover >= worktreeSubjectFloor {
-			budget := leftover
+		if room := avail - cur - sepW; room >= worktreeSubjectFloor {
+			budget := room
 			if budget > worktreeSubjectCap {
 				budget = worktreeSubjectCap
 			}
 			subject = runewidth.Truncate(subject, budget, "…")
+			cur += sepW + runewidth.StringWidth(subject)
 		} else {
 			subject = ""
 		}
 	}
+	useDirty := dirtyMark != "" && fits(runewidth.StringWidth(dirtyMark))
+	if useDirty {
+		cur += sepW + runewidth.StringWidth(dirtyMark)
+	}
+	useTime := timeStr != "" && fits(runewidth.StringWidth(timeStr))
 
 	parts := []string{name}
-	if hasAgent {
-		parts = append(parts, agentGlyph)
+	if useAgent {
+		parts = append(parts, agentCell)
 	}
-	if hasBranch {
+	if useBranch {
 		parts = append(parts, branch)
 	}
-	if hasDirty {
+	if useDirty {
 		parts = append(parts, dirtyMark)
 	}
 	if subject != "" {
 		parts = append(parts, subject)
 	}
-	if hasTime {
+	if useTime {
 		parts = append(parts, timeStr)
 	}
 	body := runewidth.Truncate(strings.Join(parts, sep), avail, "…")
@@ -462,7 +479,7 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, agentSt
 	// styled glyph carries its own SGR reset, which would truncate a row-level
 	// style (selected bold / cursor bg) mid-line — on those rows the row style
 	// wins and the glyph still conveys state by shape alone.
-	if hasAgent && !isCurrent && !selected {
+	if useAgent && hasAgent && !isCurrent && !selected {
 		body = strings.Replace(body, sep+agentGlyph, sep+agentGlyphStyled, 1)
 	}
 	// isCurrent paints the "you're here" body styling (bold + accent fg)

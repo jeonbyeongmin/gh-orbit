@@ -18,6 +18,8 @@
 package tui
 
 import (
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,6 +86,195 @@ func agentActiveForWorktree(projectsDir, worktreePath string, now time.Time, win
 		return false
 	}
 	return now.Sub(newest) <= window
+}
+
+// agentState is the per-worktree agent-session state painted on the dashboard
+// row. The zero value is agentStateNone so a path the poll has never seen
+// renders no marker.
+type agentState int
+
+const (
+	agentStateNone          agentState = iota // no recent session → no marker
+	agentStateRunning                         // last entry tool_use / user → actively working
+	agentStateParked                          // last entry end_turn → awaiting user input
+	agentStateUnknownActive                   // mtime fresh but state unparseable → v1-level fallback
+)
+
+// agentTranscriptWindow caps how many bytes we read from each end of a
+// transcript. Active files reach 220KB+, so we seek-read only: the head holds
+// the session-start worktree-state entry (worktreePath confirm), the tail
+// holds the last assistant / user entry (running vs parked). 16KB comfortably
+// covers either side without ever loading the whole file.
+const agentTranscriptWindow = 16 << 10
+
+// agentEntry is the partial shape we need from a transcript line to judge the
+// current state: the entry type and, for assistant turns, the stop_reason.
+// Everything else in the (undocumented) Claude Code schema is ignored — a line
+// that doesn't carry these fields simply doesn't match and is skipped.
+type agentEntry struct {
+	Type    string `json:"type"`
+	Message struct {
+		StopReason string `json:"stop_reason"`
+	} `json:"message"`
+}
+
+// agentWorktreeStateEntry is the partial shape of the session-start
+// `worktree-state` line, which records the worktree this session is bound to.
+// Used to confirm a slug-located transcript actually belongs to the row being
+// evaluated (slug-collision false-positive guard).
+type agentWorktreeStateEntry struct {
+	Type            string `json:"type"`
+	WorktreeSession struct {
+		WorktreePath string `json:"worktreePath"`
+	} `json:"worktreeSession"`
+}
+
+// agentStateForWorktree judges the agent-session state of worktreePath from
+// the newest transcript under projectsDir/<slug>/. mtime drives presence /
+// staleness exactly as v1 did; when fresh, the transcript's head confirms the
+// worktree binding (slug-collision guard) and its tail decides running vs
+// parked. Every failure path degrades safely: a stale / absent / unreadable
+// transcript → agentStateNone; a fresh transcript we can't parse the state of
+// → agentStateUnknownActive (never a regression below v1's "something here").
+func agentStateForWorktree(projectsDir, worktreePath string, now time.Time, window time.Duration) agentState {
+	if projectsDir == "" {
+		return agentStateNone
+	}
+	dir := filepath.Join(projectsDir, agentSessionSlug(worktreePath))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return agentStateNone
+	}
+	var newestName string
+	var newest time.Time
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if mt := info.ModTime(); mt.After(newest) {
+			newest, newestName = mt, e.Name()
+		}
+	}
+	if newest.IsZero() || now.Sub(newest) > window {
+		return agentStateNone
+	}
+	path := filepath.Join(dir, newestName)
+	// Slug-collision guard: if the active transcript records a worktree-state
+	// path that disagrees with this row, two paths collapsed to one slug and
+	// the marker would point at the wrong tree — drop it. An absent / unreadable
+	// worktree-state entry means we can't confirm, so we trust the slug locate
+	// (v1 behavior) rather than hide a real session.
+	if match, found := agentTranscriptWorktreeMatches(path, worktreePath); found && !match {
+		return agentStateNone
+	}
+	if st, ok := agentTranscriptTailState(path); ok {
+		return st
+	}
+	return agentStateUnknownActive
+}
+
+// agentTranscriptTailState reads the last agentTranscriptWindow bytes and
+// returns the state implied by the last complete assistant / user entry,
+// scanning backward. ok=false means the tail was unreadable or held no
+// recognizable entry — the caller then applies its fresh-mtime fallback. A
+// partial first line (the window almost always cuts mid-line) just fails to
+// unmarshal and is skipped, so no boundary handling is needed.
+func agentTranscriptTailState(path string) (agentState, bool) {
+	data, ok := readFileTail(path, agentTranscriptWindow)
+	if !ok {
+		return agentStateNone, false
+	}
+	lines := strings.Split(string(data), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		var e agentEntry
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
+		}
+		switch e.Type {
+		case "assistant":
+			if e.Message.StopReason == "end_turn" {
+				return agentStateParked, true
+			}
+			return agentStateRunning, true
+		case "user":
+			return agentStateRunning, true
+		}
+		// system / summary / worktree-state / etc. — keep scanning back.
+	}
+	return agentStateNone, false
+}
+
+// agentTranscriptWorktreeMatches scans the head of a transcript for the
+// session-start worktree-state entry. Returns (paths-equal, found). found=false
+// (absent / unreadable) tells the caller to trust the slug locate; found=true
+// with a mismatch is the slug-collision false-positive to suppress.
+func agentTranscriptWorktreeMatches(path, worktreePath string) (match, found bool) {
+	data, ok := readFileHead(path, agentTranscriptWindow)
+	if !ok {
+		return false, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var e agentWorktreeStateEntry
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
+		}
+		if e.Type == "worktree-state" {
+			return e.WorktreeSession.WorktreePath == worktreePath, true
+		}
+	}
+	return false, false
+}
+
+// readFileHead returns up to n bytes from the start of path. ok=false on an
+// unreadable file (silent-degrade — no marker / trust-slug fallback upstream).
+func readFileHead(path string, n int) ([]byte, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	buf := make([]byte, n)
+	c, err := f.Read(buf)
+	if c == 0 && err != nil {
+		return nil, false
+	}
+	return buf[:c], true
+}
+
+// readFileTail returns up to the last n bytes of path via a single ReadAt from
+// a computed offset — never reading the (potentially multi-hundred-KB) body.
+func readFileTail(path string, n int) ([]byte, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, false
+	}
+	start := int64(0)
+	if size := info.Size(); size > int64(n) {
+		start = size - int64(n)
+	}
+	buf := make([]byte, info.Size()-start)
+	c, err := f.ReadAt(buf, start)
+	if c == 0 && err != nil && err != io.EOF {
+		return nil, false
+	}
+	return buf[:c], true
 }
 
 // agentSessionPollInterval is the cadence of the agent-session poll. The

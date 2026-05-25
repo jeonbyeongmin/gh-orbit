@@ -126,6 +126,90 @@ func TestAgentActiveForWorktree(t *testing.T) {
 	})
 }
 
+// writeTranscriptContent is like writeTranscript but writes caller-supplied
+// jsonl body — used to exercise the tail/head state parser, which v1's
+// mtime-only path ignored.
+func writeTranscriptContent(t *testing.T, projectsDir, wtPath, name, body string, mtime time.Time) {
+	t.Helper()
+	dir := filepath.Join(projectsDir, agentSessionSlug(wtPath))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Chtimes(p, mtime, mtime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+}
+
+func TestAgentStateForWorktree(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	const window = 10 * time.Minute
+	const wt = "/repo/wt"
+	fresh := now.Add(-1 * time.Minute)
+
+	cases := []struct {
+		name string
+		body string
+		want agentState
+	}{
+		{"tool_use is running",
+			`{"type":"assistant","message":{"stop_reason":"tool_use"}}` + "\n", agentStateRunning},
+		{"user entry is running",
+			`{"type":"assistant","message":{"stop_reason":"end_turn"}}` + "\n" +
+				`{"type":"user"}` + "\n", agentStateRunning},
+		{"end_turn is parked",
+			`{"type":"assistant","message":{"stop_reason":"end_turn"}}` + "\n", agentStateParked},
+		{"unparseable fresh transcript is unknown-active",
+			"not json at all\n", agentStateUnknownActive},
+		{"empty fresh transcript is unknown-active",
+			"\n", agentStateUnknownActive},
+		{"worktree-state match keeps the parsed state",
+			`{"type":"worktree-state","worktreeSession":{"worktreePath":"/repo/wt"}}` + "\n" +
+				`{"type":"assistant","message":{"stop_reason":"tool_use"}}` + "\n", agentStateRunning},
+		{"worktree-state mismatch is suppressed (slug collision)",
+			`{"type":"worktree-state","worktreeSession":{"worktreePath":"/repo/OTHER"}}` + "\n" +
+				`{"type":"assistant","message":{"stop_reason":"tool_use"}}` + "\n", agentStateNone},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			projects := t.TempDir()
+			writeTranscriptContent(t, projects, wt, "a.jsonl", c.body, fresh)
+			if got := agentStateForWorktree(projects, wt, now, window); got != c.want {
+				t.Errorf("agentStateForWorktree = %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	t.Run("stale transcript is none regardless of content", func(t *testing.T) {
+		projects := t.TempDir()
+		writeTranscriptContent(t, projects, wt, "a.jsonl",
+			`{"type":"assistant","message":{"stop_reason":"tool_use"}}`+"\n", now.Add(-11*time.Minute))
+		if got := agentStateForWorktree(projects, wt, now, window); got != agentStateNone {
+			t.Errorf("stale transcript = %v, want none", got)
+		}
+	})
+
+	t.Run("newest transcript decides the state", func(t *testing.T) {
+		projects := t.TempDir()
+		writeTranscriptContent(t, projects, wt, "old.jsonl",
+			`{"type":"assistant","message":{"stop_reason":"tool_use"}}`+"\n", now.Add(-5*time.Minute))
+		writeTranscriptContent(t, projects, wt, "new.jsonl",
+			`{"type":"assistant","message":{"stop_reason":"end_turn"}}`+"\n", fresh)
+		if got := agentStateForWorktree(projects, wt, now, window); got != agentStateParked {
+			t.Errorf("newest (parked) should win, got %v", got)
+		}
+	})
+
+	t.Run("missing projects dir is none", func(t *testing.T) {
+		if got := agentStateForWorktree(filepath.Join(t.TempDir(), "nope"), wt, now, window); got != agentStateNone {
+			t.Errorf("missing projectsDir = %v, want none", got)
+		}
+	})
+}
+
 func TestAgentSessionPollCmdReportsActiveSet(t *testing.T) {
 	projects := t.TempDir()
 	now := time.Now()

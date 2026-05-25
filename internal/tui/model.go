@@ -116,12 +116,6 @@ const (
 	viewModeBranchesModal
 )
 
-// helpExpandedHeight is the row count reserved for the bottom area when
-// the `?` help panel is open. Each helpData category renders as a 1-line
-// header + 1-line entries row, so 3 categories × 2 rows = 6. paneSizes
-// clamps this on small terminals.
-const helpExpandedHeight = 6
-
 // pendingCheckout remembers what the user was trying to check out so the
 // confirm modal's hint can name the chain it's aborting. detached=true
 // means graph Enter resolved to detach (CheckoutDetached); detached=false
@@ -1093,6 +1087,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.mode == viewModeHelp {
+			// Centered overlay reference modal: swallow everything but the
+			// close keys (and quit). Unlike the old inline panel, shortcuts
+			// do NOT pass through — read, then close, then act.
+			switch msg.String() {
+			case "?", "esc":
+				m.mode = viewModeNormal
+				return m, nil
+			case "ctrl+c":
+				return m.handleCtrlC()
+			}
+			return m, nil
+		}
 		if m.focused == paneDashboard && m.mode == viewModeNormal {
 			switch msg.String() {
 			case "j", "down":
@@ -1155,7 +1162,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "?":
 				m.mode = viewModeHelp
-				m.applyPaneSizes()
 				return m, nil
 			case "tab":
 				return m.cycleLocalChangesFocus(), nil
@@ -1195,12 +1201,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m.handleCtrlC()
 		case "?":
-			if m.mode == viewModeHelp {
-				m.mode = viewModeNormal
-			} else {
-				m.mode = viewModeHelp
-			}
-			m.applyPaneSizes()
+			// Open the help reference modal. Closing is owned by the
+			// viewModeHelp key gate above; the overlay reserves no rows so
+			// pane sizes are unchanged.
+			m.mode = viewModeHelp
 			return m, nil
 		case "F":
 			if m.fetchInFlight {
@@ -1571,17 +1575,11 @@ func (m Model) paneSizes() paneSizes {
 	if m.width == 0 || m.height == 0 {
 		return s
 	}
-	// Reserve 1 row for the bottom help/status line, or the full panel
-	// height when `?` is open. The four centered overlay modal modes
-	// (branchPicker / refNameInput / refDeleteConfirm / checkoutConfirm)
-	// don't reserve extra rows here — composeOverlay paints them on top
-	// of the unchanged 3-pane base, so paneSizes is mode-agnostic outside
-	// viewModeHelp.
-	helpReserved := 1
-	if m.mode == viewModeHelp {
-		helpReserved = m.helpReservedRows()
-	}
-	mainH := m.height - helpReserved
+	// Reserve 1 row for the bottom help/status line. Every centered overlay
+	// modal mode — including viewModeHelp — is painted on top of the
+	// unchanged 3-pane base by composeOverlay, so none of them reserve extra
+	// rows here and paneSizes stays mode-agnostic.
+	mainH := m.height - 1
 	if mainH < 1 {
 		mainH = 1
 	}
@@ -1663,19 +1661,6 @@ func (m Model) paneSizes() paneSizes {
 // tree column in viewModeLocalChanges; the diff viewport takes the
 // remainder. Tuned so paths still breathe on a typical 120-col terminal.
 const localChangesTreeRatio = 35
-
-// helpReservedRows returns how many bottom rows the `?` help panel
-// claims. Defaults to helpExpandedHeight; small terminals halve it.
-// The main area is given priority — if leaving 3 rows for it would push
-// the panel below 3 rows, the panel shrinks further (down to 1 row) so
-// the user can still see the graph. Floor: 1.
-func (m Model) helpReservedRows() int {
-	want := max(min(helpExpandedHeight, m.height/2), 3)
-	if upper := m.height - 3; upper > 0 {
-		want = min(want, upper)
-	}
-	return max(want, 1)
-}
 
 // modalHeaderS is the bold style applied to the header row of the branch
 // picker modal. Checkout confirm uses confirmPromptS (busy-color + bold);
@@ -1865,6 +1850,8 @@ func (m Model) View() string {
 	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
 
 	switch m.mode {
+	case viewModeHelp:
+		return composeOverlay(base, renderModalBox(renderHelpModalInner(m.width)), m.width, m.height)
 	case viewModeBranchPicker:
 		return composeOverlay(base, renderModalBox(m.renderBranchPickerInner()), m.width, m.height)
 	case viewModeBranchesModal:
@@ -1913,25 +1900,12 @@ func (m Model) renderHelpStatus() string {
 		return " "
 	case viewModeRefDeleteConfirm:
 		return m.refDeleteInlineHint()
-	case viewModeHelp:
-		return renderHelpPanel(m.width, m.helpReservedRows())
 	}
-	hint := graphHintText
-	hintRendered := graphHintRendered
-	if m.mode == viewModeLocalChanges {
-		hint = localChangesHintText
-		hintRendered = localChangesHintRendered
-	}
-	// paneDashboard owns the cursor → replace the graph hint with the
-	// dashboard-scoped key matrix. Local Changes is mutually exclusive
-	// (enterLocalChangesMode resets focused to paneGraph) so the order
-	// doesn't matter, but keep this last for explicit precedence.
-	if m.focused == paneDashboard {
-		hint = dashboardFocusHintText
-		hintRendered = dashboardFocusHintRendered
-	}
+	// Normal operation (incl. viewModeHelp, whose modal is painted over this
+	// base by View()): a single `? help` token + the status message. The full
+	// key reference lives behind the `?` overlay modal.
 	if m.status == "" {
-		return hintRendered
+		return collapsedHintRendered
 	}
 	statusRendered := m.statusStyle.Render(m.status)
 
@@ -1939,5 +1913,5 @@ func (m Model) renderHelpStatus() string {
 	if avail < 1 {
 		return statusRendered
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, fitHelpLine(hint, avail), " ", statusRendered)
+	return lipgloss.JoinHorizontal(lipgloss.Top, fitHelpLine(collapsedHintText, avail), " ", statusRendered)
 }

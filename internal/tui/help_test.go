@@ -27,31 +27,12 @@ func TestHelpDataCoverage(t *testing.T) {
 	}
 }
 
-func TestGraphHintContainsGlobalSuffix(t *testing.T) {
-	const suffix = "? help · ^C ^C quit"
-	if !strings.HasSuffix(graphHintText, suffix) {
-		t.Errorf("graphHintText = %q; want suffix %q", graphHintText, suffix)
-	}
-	if !strings.HasSuffix(localChangesHintText, suffix) {
-		t.Errorf("localChangesHintText = %q; want suffix %q", localChangesHintText, suffix)
-	}
-}
-
-// TestHelpExpandedHeightMatchesData guards against helpExpandedHeight
-// drifting away from helpData() — renderHelpPanel emits 2 rows per
-// category (header + entries), so the constant must equal 2 * len.
-func TestHelpExpandedHeightMatchesData(t *testing.T) {
-	if got := 2 * len(helpData()); got != helpExpandedHeight {
-		t.Errorf("helpExpandedHeight = %d, want %d (2 rows × %d categories)",
-			helpExpandedHeight, got, len(helpData()))
-	}
-}
-
 func TestRenderHelpPanelLineCount(t *testing.T) {
-	out := renderHelpPanel(120, helpExpandedHeight)
+	panelRows := 2 * len(helpData())
+	out := renderHelpPanel(120, panelRows)
 	got := strings.Count(out, "\n") + 1
-	if got > helpExpandedHeight {
-		t.Errorf("renderHelpPanel emitted %d lines, want ≤ %d", got, helpExpandedHeight)
+	if got > panelRows {
+		t.Errorf("renderHelpPanel emitted %d lines, want ≤ %d", got, panelRows)
 	}
 	for _, want := range []string{"[Global]", "[Graph]", "[Local Changes]"} {
 		if !strings.Contains(out, want) {
@@ -69,11 +50,38 @@ func TestRenderHelpPanelClampsToHeight(t *testing.T) {
 }
 
 func TestRenderHelpPanelHandlesNarrowWidth(t *testing.T) {
-	out := renderHelpPanel(8, helpExpandedHeight)
+	panelRows := 2 * len(helpData())
+	out := renderHelpPanel(8, panelRows)
 	if out == "" {
 		t.Fatal("renderHelpPanel(8, _) returned empty string; want at least one row")
 	}
-	if got := strings.Count(out, "\n") + 1; got > helpExpandedHeight {
-		t.Errorf("narrow render emitted %d rows, want ≤ %d", got, helpExpandedHeight)
+	if got := strings.Count(out, "\n") + 1; got > panelRows {
+		t.Errorf("narrow render emitted %d rows, want ≤ %d", got, panelRows)
+	}
+}
+
+// TestRenderHelpModalColumnsWide verifies the wide-terminal layout puts all
+// three category titles on the same (first) row — the side-by-side columns.
+func TestRenderHelpModalColumnsWide(t *testing.T) {
+	out := renderHelpModalInner(200)
+	firstLine := strings.SplitN(out, "\n", 2)[0]
+	for _, title := range []string{"Global", "Graph", "Local Changes"} {
+		if !strings.Contains(firstLine, title) {
+			t.Errorf("wide help modal: first row missing %q (want all titles on one row)\n--- first row ---\n%s", title, firstLine)
+		}
+	}
+}
+
+// TestRenderHelpModalNarrowFallback verifies that when the columns can't fit
+// the content budget, renderHelpModalInner falls back to the stacked-rows
+// renderHelpPanel form (bracketed headers on separate lines).
+func TestRenderHelpModalNarrowFallback(t *testing.T) {
+	out := renderHelpModalInner(20)
+	if !strings.Contains(out, "[Global]") {
+		t.Errorf("narrow help modal should fall back to stacked rows ([Global] header), got:\n%s", out)
+	}
+	firstLine := strings.SplitN(out, "\n", 2)[0]
+	if strings.Contains(firstLine, "Graph") {
+		t.Errorf("narrow fallback should not place Graph on the first row (that's the column layout):\n%s", firstLine)
 	}
 }

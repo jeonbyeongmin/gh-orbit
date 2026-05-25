@@ -53,7 +53,7 @@ func TestHelpToggleEntersAndExitsMode(t *testing.T) {
 func TestHelpModeKeysPassThrough(t *testing.T) {
 	// The expanded panel is a reference, not a modal — shortcuts must keep
 	// working while it is open so a user can act on what they read. F
-	// dispatches a fetch, q quits.
+	// dispatches a fetch; q no longer quits (quit is ctrl+c twice now).
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -68,9 +68,13 @@ func TestHelpModeKeysPassThrough(t *testing.T) {
 		t.Errorf("F in help mode should return a fetchCmd, got nil")
 	}
 
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	if cmd == nil {
-		t.Errorf("q in help mode should still quit (tea.Quit), got nil cmd")
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(Model)
+	if m.quitArmed {
+		t.Errorf("q must not arm quit")
+	}
+	if m.mode != viewModeHelp {
+		t.Errorf("q should be inert in help mode, mode changed to %v", m.mode)
 	}
 }
 
@@ -335,7 +339,7 @@ func TestRenderDiffOverlayHintEmptyDiffFallsBackToKeymap(t *testing.T) {
 	if strings.Contains(hint, "[0/0]") {
 		t.Errorf("empty diff hint must not show [0/0], got %q", hint)
 	}
-	if !strings.Contains(hint, "esc/q close") {
+	if !strings.Contains(hint, "esc close") {
 		t.Errorf("empty diff hint should still show keymap, got %q", hint)
 	}
 }
@@ -752,7 +756,10 @@ func TestModelEscClosesDiffWindow(t *testing.T) {
 	}
 }
 
-func TestModelQClosesDiffWindowWithoutQuitting(t *testing.T) {
+func TestModelQInertInDiffWindow(t *testing.T) {
+	// q used to close the patch overlay; it no longer does. Closing is esc
+	// (see TestModelEscClosesDiffWindow), quitting is ctrl+c twice. q must be
+	// inert: the overlay stays open and nothing quits.
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -760,13 +767,74 @@ func TestModelQClosesDiffWindowWithoutQuitting(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("q in diff window should return to normal mode, got %v", m.mode)
+	if m.mode != viewModeDiffWindow {
+		t.Errorf("q must not close the diff window anymore, got mode %v", m.mode)
 	}
 	if cmd != nil {
-		// tea.Quit is a non-nil cmd — its presence here would mean the app
-		// quits when the user just wanted to close the overlay.
-		t.Errorf("q in diff window must not dispatch tea.Quit, got cmd=%v", cmd)
+		t.Errorf("q in diff window must not dispatch a cmd, got cmd=%v", cmd)
+	}
+	if m.quitArmed {
+		t.Errorf("q must not arm quit")
+	}
+}
+
+func TestCtrlCArmsThenQuits(t *testing.T) {
+	// The first ctrl+c arms quit and paints the hint without quitting; a
+	// second consecutive ctrl+c quits.
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated.(Model)
+	if !m.quitArmed {
+		t.Fatalf("first ctrl+c should arm quit")
+	}
+	if m.status != quitArmHint {
+		t.Errorf("first ctrl+c should set the quit hint, got status %q", m.status)
+	}
+	if cmd != nil {
+		t.Errorf("first ctrl+c must not quit, got cmd=%v", cmd)
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatalf("second ctrl+c should quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("second ctrl+c should dispatch tea.Quit, got %T", cmd())
+	}
+}
+
+func TestCtrlCDisarmedByOtherKey(t *testing.T) {
+	// An intervening non-ctrl+c key clears the armed state + hint, so the
+	// next single ctrl+c only re-arms instead of quitting.
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated.(Model)
+	if !m.quitArmed {
+		t.Fatalf("ctrl+c should arm quit")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+	if m.quitArmed {
+		t.Errorf("j should disarm quit")
+	}
+	if m.status != "" {
+		t.Errorf("disarm should clear the quit hint, got status %q", m.status)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated.(Model)
+	if !m.quitArmed {
+		t.Errorf("ctrl+c after disarm should re-arm, not quit")
+	}
+	if cmd != nil {
+		t.Errorf("re-arming ctrl+c must not quit, got cmd=%v", cmd)
 	}
 }
 

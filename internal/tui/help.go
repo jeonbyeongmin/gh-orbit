@@ -27,7 +27,7 @@ var helpCategories = []helpCategory{
 		title: "Global",
 		entries: []helpEntry{
 			{"?", "help"},
-			{"q", "quit"},
+			{"^C ^C", "quit"},
 			{"F", "fetch"},
 			{"p", "pull"},
 			{"r", "reload"},
@@ -64,8 +64,8 @@ func helpData() []helpCategory { return helpCategories }
 
 // graphHintText is the single-line bottom hint for the graph pane (the
 // only outer focus after the bottom tab pane retired). Ends with `? help
-// · q quit` so the user always sees how to expand the panel or quit.
-const graphHintText = "enter checkout/ff/detach · d patch · y copy · w worktree focus · b branches · Z zombies · ? help · q quit"
+// · ^C ^C quit` so the user always sees how to expand the panel or quit.
+const graphHintText = "enter checkout/ff/detach · d patch · y copy · w worktree focus · b branches · Z zombies · ? help · ^C ^C quit"
 
 // graphHintRendered is the pre-styled form of graphHintText. View() runs
 // on every Update so re-applying the help style per frame would burn a
@@ -76,7 +76,7 @@ var graphHintRendered = help.Render(graphHintText)
 // viewModeLocalChanges owns the right column. It overrides the focused
 // pane's hint because the keymap inside the mode is mode-scoped (space /
 // tab cycle / r reload / , exit), not pane-scoped.
-const localChangesHintText = "space stage/unstage · tab focus · r reload · , exit · ? help · q quit"
+const localChangesHintText = "space stage/unstage · tab focus · r reload · , exit · ? help · ^C ^C quit"
 
 var localChangesHintRendered = help.Render(localChangesHintText)
 

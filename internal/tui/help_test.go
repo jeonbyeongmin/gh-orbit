@@ -10,7 +10,7 @@ import (
 // hint carries — every refactor of the panel must keep them all.
 func TestHelpDataCoverage(t *testing.T) {
 	required := []string{
-		"j/k", "enter", "y", "d", "F", "p", "r", "q", ",", "space", "b",
+		"j/k", "enter", "y", "d", "F", "p", "r", "^C ^C", ",", "space", "b",
 	}
 
 	var have []string
@@ -28,7 +28,7 @@ func TestHelpDataCoverage(t *testing.T) {
 }
 
 func TestGraphHintContainsGlobalSuffix(t *testing.T) {
-	const suffix = "? help · q quit"
+	const suffix = "? help · ^C ^C quit"
 	if !strings.HasSuffix(graphHintText, suffix) {
 		t.Errorf("graphHintText = %q; want suffix %q", graphHintText, suffix)
 	}

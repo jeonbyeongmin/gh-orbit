@@ -154,6 +154,30 @@ func TestBranchesModalEscClosesModal(t *testing.T) {
 	}
 }
 
+// TestBranchesModalQInert — q no longer closes the modal (esc does) and must
+// not quit; the modal stays open and inert.
+func TestBranchesModalQInert(t *testing.T) {
+	m := initSized(t)
+	m = seedRefs(t, m, []git.Ref{
+		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
+	})
+	m, _ = pressRune(t, m, 'b')
+	if m.mode != viewModeBranchesModal {
+		t.Fatalf("setup: mode = %v, want viewModeBranchesModal", m.mode)
+	}
+
+	m, cmd := pressRune(t, m, 'q')
+	if m.mode != viewModeBranchesModal {
+		t.Errorf("q must not close the modal, got mode %v", m.mode)
+	}
+	if cmd != nil {
+		t.Errorf("q in branches modal must not dispatch a cmd, got %v", cmd)
+	}
+	if m.quitArmed {
+		t.Errorf("q must not arm quit")
+	}
+}
+
 // TestBranchesModalRenderHEADMarker — view shows the HEAD branch with the
 // `←` glyph appended. Lightweight smoke test of the renderer.
 func TestBranchesModalRenderHEADMarker(t *testing.T) {

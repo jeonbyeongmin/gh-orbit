@@ -73,7 +73,7 @@ const (
 	// viewModeHelp expands the bottom area into a multi-line help panel.
 	// The 3-pane layout stays visible above; only the bottom shrinks the
 	// main area to make room. All other shortcuts keep working while the
-	// panel is open — `?` re-toggles, q quits, j/k navigate, etc. — so the
+	// panel is open — `?` re-toggles, j/k navigate, etc. — so the
 	// expanded panel functions as a reference, not a modal.
 	viewModeHelp
 	// viewModeBranchPicker gates the screen on a "pick which local branch"
@@ -188,7 +188,7 @@ type Model struct {
 	// diff debounce and graph reload progress on separate cadences.
 	streamReqID uint64
 	// streamCancel is the cancel handle of the most recent LogStream. r and
-	// q/ctrl+c invoke it so the git process is reaped instead of leaking.
+	// ctrl+c invoke it so the git process is reaped instead of leaking.
 	streamCancel context.CancelFunc
 	// currentRefs is the last commit-query argument dispatched to
 	// loadCommitsCmd. New() seeds it with [refsAllSentinel] so the unified
@@ -225,6 +225,11 @@ type Model struct {
 	// statusStyle decides the color; zero value renders without color.
 	status      string
 	statusStyle lipgloss.Style
+	// quitArmed is set by the first ctrl+c and cleared by any other key.
+	// While armed, the status line shows the quit hint and a second ctrl+c
+	// actually quits. No timer — disarm is purely key-driven, handled at the
+	// top of the tea.KeyMsg branch in Update.
+	quitArmed bool
 	// checkoutInFlight gates Enter on the refs pane and Enter on the graph
 	// while a background checkout is running. fetch/pull have their own
 	// gates; git's .git/index.lock is the real serialization point.
@@ -249,7 +254,7 @@ type Model struct {
 	// dispatches a graph-Enter checkout on enter.
 	branchPicker branchPickerState
 	// branchesModal backs viewModeBranchesModal. Cursor indexes into
-	// m.refs.LocalRefs() at modal-open time. Reset on esc/q.
+	// m.refs.LocalRefs() at modal-open time. Reset on esc.
 	branchesModal branchesModalState
 	// dashboardFocus backs the top-dashboard focus mode (paneDashboard).
 	// Cursor indexes into m.refs.Worktrees() at focus-on time. Reset to
@@ -919,17 +924,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.reloadCmd()
 
 	case tea.KeyMsg:
-		// The viewMode guard runs before the global ctrl+c/q quit branch so
-		// `q` inside the overlay closes the overlay instead of killing the app.
+		// Any key other than ctrl+c disarms a pending quit. Handled here once,
+		// before the per-mode dispatch, so every branch shares one disarm
+		// point. Only the arm hint is cleared so an unrelated status survives.
+		if m.quitArmed && msg.String() != "ctrl+c" {
+			m.quitArmed = false
+			if m.status == quitArmHint {
+				m.status = ""
+				m.statusStyle = statusOkS
+			}
+		}
+		// The viewMode guard runs before the global ctrl+c quit branch so
+		// `esc` inside the overlay closes the overlay instead of killing the app.
 		if m.mode == viewModeDiffWindow {
 			switch msg.String() {
-			case "esc", "q":
+			case "esc":
 				m.mode = viewModeNormal
 				m.diff.ClosePatch()
 				return m, nil
 			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
+				return m.handleCtrlC()
 			case "j", "k", "down", "up", "pgdown", "pgup":
 				return m, m.diff.ScrollPatch(msg)
 			case "]":
@@ -949,8 +963,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.worktreeAction.addInlineErr = ""
 				return m, nil
 			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
+				return m.handleCtrlC()
 			case "enter":
 				if m.worktreeAction.actionInFlight {
 					return m, nil
@@ -973,8 +986,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == viewModeWorktreeRemoveConfirm {
 			if m.worktreeAction.actionInFlight {
 				if msg.String() == "ctrl+c" {
-					m.cancelStream()
-					return m, tea.Quit
+					return m.handleCtrlC()
 				}
 				return m, nil
 			}
@@ -988,8 +1000,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.worktreeAction.removeTarget = git.Worktree{}
 				return m, nil
 			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
+				return m.handleCtrlC()
 			case "y":
 				if needsForce {
 					m.mode = viewModeNormal
@@ -1044,8 +1055,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusStyle = statusOkS
 				return m, nil
 			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
+				return m.handleCtrlC()
 			}
 			return m, nil
 		}
@@ -1058,8 +1068,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusStyle = statusOkS
 				return m, nil
 			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
+				return m.handleCtrlC()
 			case "y":
 				return m.dispatchRefDelete(false)
 			case "Y":
@@ -1075,13 +1084,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.branchesModalMoveCursor(-1), nil
 			case "d":
 				return m.beginBranchesModalDelete()
-			case "esc", "q":
+			case "esc":
 				m.mode = viewModeNormal
 				m.branchesModal = branchesModalState{}
 				return m, nil
 			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
+				return m.handleCtrlC()
 			}
 			return m, nil
 		}
@@ -1104,8 +1112,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.dashboardFocus = dashboardFocusState{}
 				return m, nil
 			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
+				return m.handleCtrlC()
 			}
 			// `w` and any other key fall through to the normal-mode
 			// switch so the toggle-off case in `case "w"` fires and
@@ -1116,8 +1123,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// is honored so a second y/Y can't fork a parallel sweep.
 			if m.zombieInFlight {
 				if msg.String() == "ctrl+c" {
-					m.cancelStream()
-					return m, tea.Quit
+					return m.handleCtrlC()
 				}
 				return m, nil
 			}
@@ -1129,8 +1135,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusStyle = statusOkS
 				return m, nil
 			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
+				return m.handleCtrlC()
 			case "y", "Y":
 				m.zombieInFlight = true
 				m.status = fmt.Sprintf("deleting %d zombie branches…", len(m.zombieCleanup.branches))
@@ -1141,9 +1146,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == viewModeLocalChanges {
 			switch msg.String() {
-			case "ctrl+c", "q":
-				m.cancelStream()
-				return m, tea.Quit
+			case "ctrl+c":
+				return m.handleCtrlC()
 			case ",", "esc":
 				m.exitLocalChangesMode()
 				m.status = "local changes: exit"
@@ -1183,15 +1187,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusStyle = statusOkS
 				return m, nil
 			case "ctrl+c":
-				m.cancelStream()
-				return m, tea.Quit
+				return m.handleCtrlC()
 			}
 			return m, nil
 		}
 		switch msg.String() {
-		case "ctrl+c", "q":
-			m.cancelStream()
-			return m, tea.Quit
+		case "ctrl+c":
+			return m.handleCtrlC()
 		case "?":
 			if m.mode == viewModeHelp {
 				m.mode = viewModeNormal
@@ -1301,6 +1303,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.graph, cmd = m.graph.Update(msg)
 		return m, cmd
 	}
+	return m, nil
+}
+
+// quitArmHint is the status line shown after the first ctrl+c. Kept as a
+// const so the disarm chokepoint in Update can match it exactly before
+// clearing — an unrelated status message is left untouched.
+const quitArmHint = "^C again to quit"
+
+// handleCtrlC implements the two-press quit. The first press arms quit and
+// paints quitArmHint; the second (while still armed) cancels the in-flight
+// stream and quits. Disarm happens key-driven at the top of the tea.KeyMsg
+// branch, so no timer is involved. Every ctrl+c site routes through here to
+// keep the rule uniform across modes; callers must re-assign the returned
+// Model (`return m.handleCtrlC()`) or the armed flag is lost.
+func (m Model) handleCtrlC() (Model, tea.Cmd) {
+	if m.quitArmed {
+		m.cancelStream()
+		return m, tea.Quit
+	}
+	m.quitArmed = true
+	m.status = quitArmHint
+	m.statusStyle = statusErrS
 	return m, nil
 }
 
@@ -1775,7 +1799,7 @@ func renderModalBox(inner string) string {
 // diffOverlayHintBase is the keymap half of the bottom hint shown inside
 // the patch overlay. The current-file half (path + N/M) is prepended at
 // render time by renderDiffOverlayHint when files() is non-empty.
-const diffOverlayHintBase = "j/k scroll · pgup/pgdn page · [ ] file · esc/q close"
+const diffOverlayHintBase = "j/k scroll · pgup/pgdn page · [ ] file · esc close"
 
 // renderDiffOverlayHint builds the patch-overlay bottom line. For commits
 // with at least one file boundary it leads with `<path> [N/M] · `; for

@@ -45,16 +45,16 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `,`            | global | enter Local Changes mode                                                            |
 | `Z`            | global | zombie-branch cleanup — see [branches.md](branches.md)                              |
 | `q` / `ctrl+c` | global | quit (closes patch overlay first)                                                   |
-| `?`            | global | toggle expanded help panel                                                          |
+| `?`            | global | open help reference modal (`esc` / `q` / `?` close)                                 |
 | `R`            | global | reserved for future Rebase                                                          |
 
 Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `[` / `]` / `esc` / `q`. `[` jumps to the previous file header, `]` to the next; both are no-ops past the first / last file (no wrap — surprise jumps make the cockpit harder to read, not easier). The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md).
 
-`?` toggles a multi-line help panel that replaces the bottom hint with pane-grouped bindings. Reference, not modal — every shortcut keeps working. Suppressed inside the patch overlay and dirty-tree confirm; those modes keep their own single-line hint.
+`?` opens a centered overlay help modal listing every binding grouped into side-by-side columns (`[Global] / [Graph] / [Local Changes]`). It is a real modal — all other shortcuts are swallowed while it is open; `esc` / `q` / `?` close it. Narrow terminals that can't fit three columns fall back to the stacked one-row-per-category layout. The overlay paints over the unchanged 3-pane base, so it reserves no rows and never shrinks the graph.
 
-Bottom hint, single line:
+Bottom hint, single line — just a pressable `? help` token plus the status message; the full reference lives behind the `?` modal:
 
-- `enter checkout/ff/detach · d patch · y copy · w worktrees · b branches · Z zombies · ? help · q quit`
+- `? help`
 
 ## Bubble Tea rules
 

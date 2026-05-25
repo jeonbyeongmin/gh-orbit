@@ -62,30 +62,16 @@ var helpCategories = []helpCategory{
 
 func helpData() []helpCategory { return helpCategories }
 
-// graphHintText is the single-line bottom hint for the graph pane (the
-// only outer focus after the bottom tab pane retired). Ends with `? help
-// · q quit` so the user always sees how to expand the panel or quit.
-const graphHintText = "enter checkout/ff/detach · d patch · y copy · w worktree focus · b branches · Z zombies · ? help · q quit"
+// collapsedHintText is the entire bottom line in normal operation: a single
+// pressable `? help` token. The full key reference lives behind the `?`
+// overlay modal (renderHelpModalInner), so the footer no longer carries a
+// focus-aware key matrix — it stays minimal and the modal owns discovery.
+const collapsedHintText = "? help"
 
-// graphHintRendered is the pre-styled form of graphHintText. View() runs
-// on every Update so re-applying the help style per frame would burn a
-// Lipgloss render for nothing.
-var graphHintRendered = help.Render(graphHintText)
-
-// localChangesHintText is the mode-specific bottom hint shown while
-// viewModeLocalChanges owns the right column. It overrides the focused
-// pane's hint because the keymap inside the mode is mode-scoped (space /
-// tab cycle / r reload / , exit), not pane-scoped.
-const localChangesHintText = "space stage/unstage · tab focus · r reload · , exit · ? help · q quit"
-
-var localChangesHintRendered = help.Render(localChangesHintText)
-
-// dashboardFocusHintText is the bottom hint shown while paneDashboard
-// owns the cursor. Replaces the graph hint so the user can see the
-// dashboard-scoped key matrix instead of repeating the graph one.
-const dashboardFocusHintText = "dashboard: j/k 이동 · enter switch · a add · d remove · s sort · esc 종료"
-
-var dashboardFocusHintRendered = help.Render(dashboardFocusHintText)
+// collapsedHintRendered is the pre-styled form. View() runs on every Update
+// so re-applying the help style per frame would burn a Lipgloss render for
+// nothing.
+var collapsedHintRendered = help.Render(collapsedHintText)
 
 // fitHelpLine truncates text to width with an ellipsis when the rendered
 // content overflows, then applies the help style. Shared by the focus-aware
@@ -103,11 +89,11 @@ func fitHelpLine(text string, width int) string {
 // the hint enumerates exactly what works.
 const helpTextBranchPicker = "j/k navigate · enter checkout · esc cancel"
 
-// renderHelpPanel composes the expanded `?` help panel as a multi-line
+// renderHelpPanel composes the stacked-rows help layout as a multi-line
 // string capped at `height` rows. Each category emits a `[Title]` header
 // row plus a single entries row joined inline with `·`. Rows past the cap
-// are dropped — clamped terminals show fewer categories rather than
-// overflowing into the main area.
+// are dropped. This is the narrow-terminal fallback for renderHelpModalInner
+// when the side-by-side columns don't fit the content budget.
 func renderHelpPanel(width, height int) string {
 	if width < 1 || height < 1 {
 		return ""
@@ -129,4 +115,47 @@ func renderHelpPanel(width, height int) string {
 		rendered[i] = fitHelpLine(ln, width)
 	}
 	return strings.Join(rendered, "\n")
+}
+
+// helpColumnGutter is the blank-space width between adjacent columns in the
+// modal's side-by-side layout.
+const helpColumnGutter = 2
+
+// renderHelpColumns lays the categories out as side-by-side vertical lists:
+// a bold title row over one `keys action` row per entry. lipgloss pads each
+// column to its own widest line and to the tallest column, so the gutter
+// stays aligned regardless of how many entries a category has.
+func renderHelpColumns() string {
+	blocks := make([]string, 0, len(helpCategories)*2-1)
+	gutter := strings.Repeat(" ", helpColumnGutter)
+	for i, c := range helpCategories {
+		if i > 0 {
+			blocks = append(blocks, gutter)
+		}
+		lines := make([]string, 0, len(c.entries)+1)
+		lines = append(lines, modalHeaderS.Render(c.title))
+		for _, e := range c.entries {
+			lines = append(lines, e.keys+" "+e.action)
+		}
+		blocks = append(blocks, strings.Join(lines, "\n"))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, blocks...)
+}
+
+// renderHelpModalInner renders the `?` reference for the centered overlay
+// modal. Wide terminals get the side-by-side column layout; when the columns
+// don't fit the content budget it falls back to the stacked renderHelpPanel
+// form. termWidth is the full terminal width — the modal box frame is
+// subtracted to get the content budget.
+func renderHelpModalInner(termWidth int) string {
+	avail := termWidth - modalBoxStyle.GetHorizontalFrameSize()
+	if avail < 1 {
+		avail = 1
+	}
+	if columns := renderHelpColumns(); lipgloss.Width(columns) <= avail {
+		return columns
+	}
+	// Narrow terminal: reuse the stacked-rows layout. Height is content-driven
+	// (header + entries row per category) since the modal reserves no rows.
+	return renderHelpPanel(avail, 2*len(helpCategories))
 }

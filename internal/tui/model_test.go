@@ -15,20 +15,21 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
-func TestPaneSizesShrinkWhenHelpExpanded(t *testing.T) {
+// TestPaneSizesUnchangedWhenHelpModal: the `?` reference is now a centered
+// overlay modal painted over the unchanged base, so it must NOT reserve rows
+// — graph height stays identical to normal mode (unlike the old inline panel).
+func TestPaneSizesUnchangedWhenHelpModal(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
 	normal := m.paneSizes()
 	m.mode = viewModeHelp
-	expanded := m.paneSizes()
+	overlay := m.paneSizes()
 
-	wantDelta := helpExpandedHeight - 1
-	gotDelta := normal.graphH - expanded.graphH
-	if gotDelta != wantDelta {
-		t.Errorf("graph delta on viewModeHelp = %d, want %d (helpExpandedHeight - 1)",
-			gotDelta, wantDelta)
+	if normal.graphH != overlay.graphH {
+		t.Errorf("graphH changed on viewModeHelp: normal=%d help=%d (overlay must reserve no rows)",
+			normal.graphH, overlay.graphH)
 	}
 }
 
@@ -50,10 +51,10 @@ func TestHelpToggleEntersAndExitsMode(t *testing.T) {
 	}
 }
 
-func TestHelpModeKeysPassThrough(t *testing.T) {
-	// The expanded panel is a reference, not a modal — shortcuts must keep
-	// working while it is open so a user can act on what they read. F
-	// dispatches a fetch, q quits.
+func TestHelpModalSwallowsKeys(t *testing.T) {
+	// The `?` reference is now a centered overlay modal, not an inline
+	// reference — shortcuts must NOT pass through while it is open. F is
+	// swallowed (no fetch dispatched); esc/q/? close the modal.
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -61,16 +62,27 @@ func TestHelpModeKeysPassThrough(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
 	m = updated.(Model)
-	if !m.fetchInFlight {
-		t.Errorf("F in help mode should still dispatch fetch")
+	if m.fetchInFlight {
+		t.Errorf("F while help modal open should be swallowed, not dispatch fetch")
 	}
-	if cmd == nil {
-		t.Errorf("F in help mode should return a fetchCmd, got nil")
+	if cmd != nil {
+		t.Errorf("F while help modal open should return nil cmd, got non-nil")
 	}
 
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	if cmd == nil {
-		t.Errorf("q in help mode should still quit (tea.Quit), got nil cmd")
+	for _, close := range []rune{'?', 'q'} {
+		m.mode = viewModeHelp
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{close}})
+		m = updated.(Model)
+		if m.mode != viewModeNormal {
+			t.Errorf("%q should close help modal to viewModeNormal, got %v", close, m.mode)
+		}
+	}
+
+	m.mode = viewModeHelp
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Errorf("esc should close help modal to viewModeNormal, got %v", m.mode)
 	}
 }
 
@@ -116,31 +128,34 @@ func TestHelpToggleClosesViaSecondQuestionMark(t *testing.T) {
 	}
 }
 
-func TestRenderHelpStatusReturnsPaneHint(t *testing.T) {
+func TestRenderHelpStatusReturnsCollapsedHint(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
+	// The bottom line is now a single `? help` token regardless of focus —
+	// the full key reference moved behind the `?` overlay modal.
 	m.focused = paneGraph
-	got := m.renderHelpStatus()
-	if !strings.Contains(got, "enter checkout/ff/detach") {
-		t.Errorf("paneGraph hint missing 'enter checkout/ff/detach': %q", got)
-	}
-	if !strings.Contains(got, "y copy") {
-		t.Errorf("paneGraph hint missing 'y copy': %q", got)
+	if got := m.renderHelpStatus(); !strings.Contains(got, "? help") {
+		t.Errorf("collapsed bottom line missing '? help': %q", got)
 	}
 }
 
-func TestRenderHelpStatusInHelpModeReturnsPanel(t *testing.T) {
+func TestHelpModalViewShowsColumns(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	m.mode = viewModeHelp
 
-	got := m.renderHelpStatus()
-	for _, want := range []string{"[Global]", "[Graph]", "[Local Changes]"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("help-mode renderHelpStatus missing %q\n--- panel ---\n%s", want, got)
+	// In help mode the bottom line stays collapsed; the column reference is
+	// painted as a centered overlay by View().
+	if got := m.renderHelpStatus(); !strings.Contains(got, "? help") {
+		t.Errorf("help-mode bottom line should stay '? help', got %q", got)
+	}
+	view := m.View()
+	for _, want := range []string{"Global", "Graph", "Local Changes"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("help-mode View() missing category title %q", want)
 		}
 	}
 }
@@ -157,8 +172,8 @@ func TestRenderHelpStatusStatusOverridesHint(t *testing.T) {
 	if !strings.Contains(got, "fetching…") {
 		t.Errorf("rendered line missing status: %q", got)
 	}
-	if !strings.Contains(got, "enter checkout/ff/detach") {
-		t.Errorf("rendered line should still carry the hint alongside status: %q", got)
+	if !strings.Contains(got, "? help") {
+		t.Errorf("rendered line should still carry '? help' alongside status: %q", got)
 	}
 }
 

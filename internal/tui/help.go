@@ -27,7 +27,7 @@ var helpCategories = []helpCategory{
 		title: "Global",
 		entries: []helpEntry{
 			{"?", "help"},
-			{"q", "quit"},
+			{"^C ^C", "quit"},
 			{"F", "fetch"},
 			{"p", "pull"},
 			{"r", "reload"},

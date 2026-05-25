@@ -22,7 +22,7 @@ The shape is closer to `tig` than to Fork: a dense commit cockpit on top, modal 
 
 The top dashboard is data-driven: header + N worktree rows + separator + 2 border rows. paneSizes caps the dashboard at `mainH - 3` so the graph retains ≥3 outer rows. The dashboard is read-only by default — pressing `w` toggles its focus mode so j/k/enter/a/d/esc route to the dashboard's cursor (see [worktrees.md](worktrees.md)). Local Changes is entered globally via `,`. Fetch is throttled by terminal focus events (60s) so an alt-tab burst can't saturate `git fetch`.
 
-The full-screen `d` patch overlay is where commit diffs live (entire `git show -p` body), opened on top of the base layout and closed with `esc` / `q`. Inside the overlay, `[` / `]` jump to the previous / next `diff --git` header so a 20-file patch reads as 20 ordered chapters instead of one long scroll. The bottom hint surfaces `<path> [N/M]` so the reviewer always knows which file the cursor is in.
+The full-screen `d` patch overlay is where commit diffs live (entire `git show -p` body), opened on top of the base layout and closed with `esc`. Inside the overlay, `[` / `]` jump to the previous / next `diff --git` header so a 20-file patch reads as 20 ordered chapters instead of one long scroll. The bottom hint surfaces `<path> [N/M]` so the reviewer always knows which file the cursor is in.
 
 ## Pane composition
 
@@ -44,13 +44,13 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `r`            | global | reload refs + log                                                                   |
 | `,`            | global | enter Local Changes mode                                                            |
 | `Z`            | global | zombie-branch cleanup — see [branches.md](branches.md)                              |
-| `q` / `ctrl+c` | global | quit (closes patch overlay first)                                                   |
-| `?`            | global | open help reference modal (`esc` / `q` / `?` close)                                 |
+| `^C ^C`        | global | quit (press twice; closes patch overlay first)                                      |
+| `?`            | global | open help reference modal (`esc` / `?` close)                                       |
 | `R`            | global | reserved for future Rebase                                                          |
 
-Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `[` / `]` / `esc` / `q`. `[` jumps to the previous file header, `]` to the next; both are no-ops past the first / last file (no wrap — surprise jumps make the cockpit harder to read, not easier). The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md).
+Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `[` / `]` / `esc`. `[` jumps to the previous file header, `]` to the next; both are no-ops past the first / last file (no wrap — surprise jumps make the cockpit harder to read, not easier). The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md).
 
-`?` opens a centered overlay help modal listing every binding grouped into side-by-side columns (`[Global] / [Graph] / [Local Changes]`). It is a real modal — all other shortcuts are swallowed while it is open; `esc` / `q` / `?` close it. Narrow terminals that can't fit three columns fall back to the stacked one-row-per-category layout. The overlay paints over the unchanged 3-pane base, so it reserves no rows and never shrinks the graph.
+`?` opens a centered overlay help modal listing every binding grouped into side-by-side columns (`[Global] / [Graph] / [Local Changes]`). It is a real modal — all other shortcuts are swallowed while it is open; `esc` / `?` close it. Narrow terminals that can't fit three columns fall back to the stacked one-row-per-category layout. The overlay paints over the unchanged 3-pane base, so it reserves no rows and never shrinks the graph.
 
 Bottom hint, single line — just a pressable `? help` token plus the status message; the full reference lives behind the `?` modal:
 

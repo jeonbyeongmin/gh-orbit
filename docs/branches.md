@@ -10,8 +10,8 @@ Key matrix:
 
 - `j` / `down` / `k` / `up` → move cursor (bounded; no wrap).
 - `d` → arms the inline `viewModeRefDeleteConfirm` for the cursor row. HEAD rejected (`cannot delete current branch`).
-- `esc` / `q` → close modal.
-- `ctrl+c` → quit.
+- `esc` → close modal.
+- `ctrl+c` `ctrl+c` → quit (first press arms, second quits).
 
 The `d` from the modal reuses the same `pendingRefDelete` + `branchDeleteCmd` chain as the refs-pane `d`. Confirm `esc` lands in `viewModeNormal` (modal does not auto-reopen) — re-press `b` to come back. Empty local list rejects entry with a status line (`branches: no local branches`).
 

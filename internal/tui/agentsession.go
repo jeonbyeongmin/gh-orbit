@@ -1,16 +1,17 @@
-// Claude Code agent-session detection for the worktree dashboard. A 🤖
-// marker on a worktree row means an agent session has touched that tree
-// recently — answering the cockpit's core "which worktree is an agent in
-// right now?" question.
+// Claude Code agent-session detection for the worktree dashboard. The marker
+// on a worktree row reports the state of an agent session on that tree
+// (running / parked / unknown-active / none) — answering the cockpit's core
+// "which worktree is an agent in right now, and does it need me?" question.
 //
-// The only filesystem signal that tracks activity is the mtime of the
-// session transcripts Claude Code writes under
-// ~/.claude/projects/<slug>/*.jsonl. The <slug> is the worktree's absolute
+// Sessions are located by mtime of the transcripts Claude Code writes under
+// ~/.claude/projects/<slug>/*.jsonl, where <slug> is the worktree's absolute
 // path with every non-alphanumeric byte replaced by '-' — an UNDOCUMENTED
-// Claude Code internal convention. Everything here is silent-degrade: if
-// the convention changes, the home dir is unreadable, or no transcript
-// exists, the marker simply doesn't render. No error, no status line, no
-// crash — exactly the spirit of the fsnotify watcher's degrade path.
+// Claude Code internal convention. mtime drives presence/staleness; the
+// transcript's tail (last entry) and head (worktree-state) refine the state.
+// Everything here is silent-degrade: if the convention or schema changes, the
+// home dir is unreadable, or no transcript exists, it falls back to a coarser
+// state (down to "no marker") — no error, no status line, no crash, exactly
+// the spirit of the fsnotify watcher's degrade path.
 //
 // Process-based detection (claude PID + cwd) was rejected: background-job
 // and desktop-app sessions keep their process cwd at the repo root, never
@@ -248,14 +249,14 @@ func readFileTail(path string, n int) ([]byte, bool) {
 // agentSessionPollInterval is the cadence of the agent-session poll. The
 // signal lives outside the worktree's .git (under ~/.claude/projects/), so
 // the fsnotify watcher that drives dirty / branch updates can't see it; a
-// lightweight stat-only tick re-derives every worktree's 🤖 state instead.
-// Fully decoupled from the git-status dirty fan-out (which owns a 3s budget
-// and touches git index locks) — this only stat()s transcript files.
+// lightweight tick re-derives every worktree's agent state instead. Fully
+// decoupled from the git-status dirty fan-out (which owns a 3s budget and
+// touches git index locks) — this only stats + bounded seek-reads transcripts.
 const agentSessionPollInterval = 30 * time.Second
 
 // agentSessionProjectsDir resolves ~/.claude/projects. A package-level var
 // so tests can repoint it at a fixture dir. Returns "" when the home dir is
-// unknown, which makes agentActiveForWorktree degrade to "no marker".
+// unknown, which makes agentStateForWorktree degrade to "no marker".
 var agentSessionProjectsDir = func() string {
 	home, err := os.UserHomeDir()
 	if err != nil {

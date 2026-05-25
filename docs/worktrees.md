@@ -33,11 +33,12 @@ Layout (N=4 example):
   The Local Changes meta carries `N files · +X -Y · Zm ago` when the
   working tree is dirty (numstat against HEAD + load wall clock); empty
   working tree drops the meta. On narrow widths the label wins.
-- **Worktree row** — `name · 🤖 · branch · ● · subject · time`. `name` is
+- **Worktree row** — `name · ⠋ · branch · ● · subject · time`. `name` is
   the basename of the worktree path. The current entry (the one `m.workdir`
   lives in) prefixes with `▶` + bold + select color so the user knows
-  which context the rest of the cockpit describes. `🤖` flags a live Claude
-  Code agent session on that tree (see **Agent-session hint**). `subject` +
+  which context the rest of the cockpit describes. The Braille glyph reports
+  the Claude Code agent-session state on that tree (see **Agent-session
+  marker**). `subject` +
   `time` are the worktree HEAD's last-commit summary (see **Last-commit
   column**) — graph only ever shows the *current* tree's commits, so the
   row carries the others' last activity without a switch.
@@ -61,7 +62,7 @@ worktree HEAD's last commit. Both come from the dirty fan-out (one
 probe — see **Dirty fan-out**).
 
 Width-adaptive degradation, since the band shares the right column with
-the graph. Display order is `▶ name · 🤖 · branch · ● · subject · time`; when
+the graph. Display order is `▶ name · ⠋ · branch · ● · subject · time`; when
 the row is too narrow the columns drop **whole** (no leftover `…`
 fragment) in priority order:
 
@@ -71,7 +72,7 @@ fragment) in priority order:
 2. `branch`
 3. `time`
 4. `●` dirty marker
-5. `🤖` agent-session marker — dropped last (highest-value review signal).
+5. agent-session marker — dropped last (highest-value review signal).
 
 `▶ name` always survives. A worktree with no commits yet (unborn HEAD /
 bare) or a still-loading / timed-out row renders the `subject` + `time`
@@ -292,63 +293,86 @@ watch unavailable — use 'r' to refresh` once, and the rest of the
 refresh trigger list above keeps working. Manual `r` is always
 sufficient — the watcher is an *optional* convenience layer over it.
 
-## Agent-session hint (🤖)
+## Agent-session marker (⠋ / ⠿)
 
-A `🤖` on a worktree row means a Claude Code agent session has touched
-that tree within the last `agentSessionFreshness` (10m) — the cockpit's
-"which worktree is an agent in right now?" answer. It joins the row's
-`·`-separated columns right after the name: `▶ name · 🤖 · branch · ● ·
-subject · time`, and is the **last** fixed column dropped under width
-pressure (drop order subject → branch → time → ● → 🤖) because it's the
-highest-value review signal; `▶ name` always survives.
+A marker on a worktree row reports the state of a Claude Code agent session
+on that tree — the cockpit's "which worktree is an agent in right now, and
+does it need me?" answer. It joins the row's `·`-separated columns right
+after the name: `▶ name · ⠋ · branch · ● · subject · time`, and is the
+**last** fixed column dropped under width pressure (drop order subject →
+branch → time → ● → agent) because it's the highest-value review signal;
+`▶ name` always survives. There are four states (`agentState`), each a
+single-cell Braille glyph so the column never shifts the row layout:
+
+- **running** — animated spinner (`⠋⠙⠹…`, green): the agent is actively
+  working (last transcript entry is a `tool_use` turn or an incoming `user`
+  message).
+- **parked** — static `⠿` (orange): the agent finished its turn
+  (`end_turn`) and is awaiting your input. This is the "it's your move" row.
+- **unknown-active** — static dim `⠂`: the transcript is fresh but its state
+  couldn't be parsed (schema drift) — a v1-level "something's here" fallback.
+- **none** — no marker: no transcript within `agentSessionFreshness` (10m).
 
 **Detection** lives in `internal/tui/agentsession.go`, not `internal/git/`
-— it's not a git concern. The only filesystem signal that tracks activity
-is the mtime of the session transcripts Claude Code appends under
-`~/.claude/projects/<slug>/*.jsonl`, where `<slug>` is the worktree's
-absolute path with every non-alphanumeric byte replaced by `-`
-(`agentSessionSlug`). `agentActiveForWorktree` takes the newest such
-mtime and compares it against the freshness window. The window doubles as
-stale-correction: an ended session's marker ages out on its own once mtime
-passes 10m, so there's no separate false-positive cleanup. v1 counts only
-the slug dir's direct `*.jsonl` files — nested `…/subagents/*.jsonl` are
-deliberately ignored (a session-count / subagent badge is a separate
-backlog).
+— it's not a git concern. Sessions are located by slug: `<slug>` is the
+worktree's absolute path with every non-alphanumeric byte replaced by `-`
+(`agentSessionSlug`), under `~/.claude/projects/<slug>/*.jsonl`.
+`agentStateForWorktree` takes the **newest** such transcript; its mtime
+still drives presence / staleness (the 10m window doubles as
+stale-correction — an ended session's marker ages out on its own). When
+fresh, it then **seek-reads** that transcript (never the whole file — active
+ones reach 220KB+): the last `agentTranscriptWindow` (16KB) tail decides
+running vs parked from the last assistant/user entry, and the head confirms
+the session's `worktree-state.worktreeSession.worktreePath` matches this row
+(see Slug collision below). Only the slug dir's direct `*.jsonl` files count
+— nested `…/subagents/*.jsonl` are deliberately ignored (a session-count /
+subagent badge is a separate backlog).
 
-**Refresh** is a dedicated `agentSessionPollInterval` (30s) self-rearming
-`tea.Tick` (`agentSessionTickCmd` → `agentSessionPollCmd` →
-`agentSessionPollMsg` re-arms the tick). It is **not** wired into the
-`loadWorktreesCmd` triggers above: the signal lives outside the worktree's
-`.git`, so the fsnotify watcher can't see it, and a stat-only poll keeps it
-fully decoupled from the `git status` dirty fan-out (no 3s budget, no index
-locks). The codebase has no other recurring tick — every other `tea.Tick`
-is one-shot — so the self-rearm in the poll handler *is* the loop.
+**Refresh** has two decoupled lineages:
 
-**Fragility / silent-degrade**: the `<slug>` scheme is an *undocumented*
-Claude Code internal convention. If it changes, the home dir is unreadable,
-or no transcript exists, `agentActiveForWorktree` returns `false` and the
-marker simply doesn't render — no error, no status line, no crash. Process
-+ cwd matching was rejected: background-job and desktop-app sessions keep
-their process cwd at the repo root, never the worktree, so they're
-invisible to a cwd match.
+- **State poll** — a `agentSessionPollInterval` (30s) self-rearming
+  `tea.Tick` (`agentSessionTickCmd` → `agentSessionPollCmd` →
+  `agentSessionPollMsg` re-arms). Not wired into the `loadWorktreesCmd`
+  triggers above: the signal lives outside the worktree's `.git`, so the
+  fsnotify watcher can't see it, and the read-only poll stays decoupled from
+  the `git status` dirty fan-out (no 3s budget, no index locks). Because
+  state is judged only every 30s, a running→parked transition surfaces on
+  the next poll, not instantly.
+- **Spinner tick** — a separate `agentSpinnerInterval` (100ms) tick that only
+  advances the running glyph's frame. It is **gated**: the poll handler arms
+  it solely when a worktree is running and not already ticking, and the tick
+  handler (the sole re-arm site) re-arms only while `AnyAgentRunning` holds,
+  dying to idle once nothing is running. So an idle cockpit re-renders zero
+  times — the animation cost exists only while an agent is actually working.
 
-Two known limitations of the slug scheme, both inherent (not fixed in v1):
+**Fragility / silent-degrade**: the `<slug>` scheme and the transcript
+schema (`type`, `message.stop_reason`, `worktree-state`) are *undocumented*
+Claude Code internals. Every failure degrades safely: an unreadable home
+dir / absent transcript / stale mtime → **none**; a fresh transcript whose
+state can't be parsed → **unknown-active** (never a regression below the v1
+"something's here"). Process + cwd matching was rejected: background-job and
+desktop-app sessions keep their process cwd at the repo root, never the
+worktree, so they're invisible to a cwd match.
 
-- **Slug collision → false positive.** `agentSessionSlug` collapses *every*
-  non-alphanumeric byte to `-`, so two sibling worktrees whose paths differ
-  only by punctuation (e.g. `…/feat-x` and `…/feat+x`, which is exactly how
-  a `feat-x` branch and a `feat/x` branch's auto-named worktree dirs land)
-  map to the *same* `<slug>`. Both rows then read the same transcript dir
-  and both light 🤖 — the marker points at the wrong tree. Rare in practice
-  (needs two trees colliding under the punctuation rule); not worth the
-  speculative complexity of a collision detector in v1.
-- **Symlinked path → false negative.** The slug is computed from the path
-  `git worktree list` reports. If the repo lives under a symlink (macOS
-  `/tmp`→`/private/tmp`, `/var`→`/private/var`, a symlinked `$HOME` or
+State of the two slug-scheme limitations:
+
+- **Slug collision → false positive (mitigated).** `agentSessionSlug`
+  collapses *every* non-alphanumeric byte to `-`, so two sibling worktrees
+  whose paths differ only by punctuation (e.g. `…/feat-x` and `…/feat+x`,
+  exactly how a `feat-x` branch and a `feat/x` branch's auto-named worktree
+  dirs land) map to the *same* `<slug>` and share a transcript dir. The
+  head-scan `worktreePath` confirm now suppresses the wrong tree: a transcript
+  whose recorded `worktreePath` disagrees with the row reads as **none**. An
+  *absent* `worktree-state` entry (older sessions) can't be confirmed, so the
+  slug locate is trusted as before — collision then falls back to the v1
+  behavior rather than hiding a real session.
+- **Symlinked path → false negative (still inherent).** The slug is computed
+  from the path `git worktree list` reports. If the repo lives under a symlink
+  (macOS `/tmp`→`/private/tmp`, `/var`→`/private/var`, a symlinked `$HOME` or
   Volume) and Claude Code recorded its `~/.claude/projects/<slug>` from the
-  *resolved* cwd, the two slugs differ, `os.ReadDir` misses, and the marker
-  never renders for a live agent — indistinguishable from "no agent". This
-  is the silent-degrade path, just an invisible one.
+  *resolved* cwd, the two slugs differ, `os.ReadDir` misses, and no marker
+  renders for a live agent — indistinguishable from "no agent". Resolving this
+  (path normalization on both sides) is tracked in a separate backlog.
 
 ## Scope: v1 explicitly excludes
 

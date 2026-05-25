@@ -420,7 +420,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// gitDir set change. nil-safe for the silent-degrade path.
 		m.watcher.Sync(msg.entries)
 		// Event-driven agent poll alongside the dirty fan-out: every inventory
-		// change (startup, add/remove, switch) lights the 🤖 column now instead
+		// change (startup, add/remove, switch) lights the agent column now instead
 		// of waiting up to one poll interval for the next tick. The 30s tick
 		// stays as the ongoing refresh + freshness-aging loop.
 		return m, tea.Batch(

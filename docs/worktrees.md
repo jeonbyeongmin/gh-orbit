@@ -34,11 +34,17 @@ Layout (N=4 example):
   working tree is dirty (numstat against HEAD + load wall clock); empty
   working tree drops the meta. On narrow widths the label wins.
 - **Worktree row** — `name · ⠋ · branch · ● · subject · time`. `name` is
-  the basename of the worktree path. The current entry (the one `m.workdir`
-  lives in) prefixes with `▶` + bold + select color so the user knows
-  which context the rest of the cockpit describes. The Braille glyph reports
-  the Claude Code agent-session state on that tree (see **Agent-session
-  marker**). `subject` +
+  the basename of the worktree path, capped at **24** cells (a long
+  branch-shaped name would otherwise swallow the row) and padded to the
+  widest name in the current set so the columns after it line up across
+  rows. When any tree carries an agent marker the agent column is held to a
+  fixed 1 cell on every row — the glyph where present, a blank placeholder
+  otherwise — so the branch column stays aligned. Both alignments yield to
+  information density on a terminal too narrow to spare the padding. The
+  current entry (the one `m.workdir` lives in) prefixes with `▶` + bold +
+  select color so the user knows which context the rest of the cockpit
+  describes. The Braille glyph reports the Claude Code agent-session state on
+  that tree (see **Agent-session marker**). `subject` +
   `time` are the worktree HEAD's last-commit summary (see **Last-commit
   column**) — graph only ever shows the *current* tree's commits, so the
   row carries the others' last activity without a switch.
@@ -61,20 +67,27 @@ worktree HEAD's last commit. Both come from the dirty fan-out (one
 `git log -1` per tree, folded into the same goroutine as the dirty
 probe — see **Dirty fan-out**).
 
-Width-adaptive degradation, since the band shares the right column with
-the graph. Display order is `▶ name · ⠋ · branch · ● · subject · time`; when
-the row is too narrow the columns drop **whole** (no leftover `…`
-fragment) in priority order:
+Width-adaptive degradation, since the dashboard stacks full-width above
+the graph and the band's height is capped so the graph never starves.
+Display order is `▶ name · ⠋ · branch · ● · subject · time`; columns are
+allocated in **keep-priority** order — each takes space only if it (plus
+its separator) still fits, but a column that doesn't fit is skipped while
+smaller lower-priority columns still claim the leftover, so a too-long
+`subject` never leaves the row half-empty. Keep-priority, highest first:
 
-1. `subject` — dropped first, and hidden whenever fewer than **12**
-   columns remain for it (a 1–2 char fragment is useless). When shown it
-   takes the leftover width, capped at **30**.
-2. `branch`
-3. `time`
-4. `●` dirty marker
-5. agent-session marker — dropped last (highest-value review signal).
+1. `name` — always survives (capped + padded as above).
+2. agent-session marker — offered space first after the name (highest-value
+   review signal; a single Braille cell).
+3. `branch`
+4. `subject` — hidden whenever fewer than **12** columns remain for it (a
+   1–2 char fragment is useless); when shown it takes its own width up to a
+   **30**-column cap.
+5. `●` dirty marker
+6. `time`
 
-`▶ name` always survives. A worktree with no commits yet (unborn HEAD /
+So `subject` and `branch` outlive the small `●` / `time` columns under
+width pressure (the inversion the redesign fixed: a long name used to push
+branch + subject out first). A worktree with no commits yet (unborn HEAD /
 bare) or a still-loading / timed-out row renders the `subject` + `time`
 slots **blank** — never `?`. The `?` placeholder is reserved for the
 dirty marker; a `?` in the time slot would read as a literal value.

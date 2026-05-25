@@ -213,7 +213,7 @@ func readFileHead(path string, n int) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only; close error is irrelevant
 	buf := make([]byte, n)
 	c, err := f.Read(buf)
 	if c == 0 && err != nil {
@@ -229,7 +229,7 @@ func readFileTail(path string, n int) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only; close error is irrelevant
 	info, err := f.Stat()
 	if err != nil {
 		return nil, false

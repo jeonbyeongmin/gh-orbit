@@ -43,6 +43,7 @@ var helpCategories = []helpCategory{
 			{"j/k", "nav"},
 			{"g/G", "top/bot"},
 			{"enter", "checkout / ff / detach"},
+			{"R", "rebase onto cursor"},
 			{"d", "patch overlay"},
 			{"y", "copy hash"},
 		},

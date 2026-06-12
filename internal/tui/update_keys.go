@@ -46,6 +46,9 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == viewModeRefDeleteConfirm {
 		return m.handleRefDeleteConfirmKey(msg)
 	}
+	if m.mode == viewModeRebaseConfirm {
+		return m.handleRebaseConfirmKey(msg)
+	}
 	if m.mode == viewModeBranchesModal {
 		return m.handleBranchesModalKey(msg)
 	}
@@ -375,9 +378,8 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m = m.copyHashFromGraph()
 		return m, nil
 	case "R":
-		// Swallow so capital R doesn't fall through to the focused
-		// sub-model. Reserved for a future Rebase action.
-		return m, nil
+		// Rebase the current branch onto the cursor commit (confirm-first).
+		return m.beginRebase()
 	case "Z":
 		// Zombie-branch cleanup is a global action now that the sidebar
 		// is gone — the previous paneRefs focus gate had no meaningful

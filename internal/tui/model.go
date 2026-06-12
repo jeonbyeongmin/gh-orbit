@@ -110,6 +110,11 @@ const (
 	// branches modal. enter switches, a/d reuse the existing add-input /
 	// remove-confirm sub-modals, s toggles last-commit sort.
 	viewModeWorktreesModal
+	// viewModeRebaseConfirm gates the screen on the inline "rebase <head>
+	// onto <cursor>?" confirm. Bottom-hint style like the branch-delete
+	// confirm — the cursor stays anchored on the onto-row. Only
+	// y/esc/ctrl+c are accepted.
+	viewModeRebaseConfirm
 )
 
 // pendingCheckout remembers what the user was trying to check out so the
@@ -246,6 +251,13 @@ type Model struct {
 	// worktreesModal backs viewModeWorktreesModal. Cursor indexes into
 	// m.modalWorktrees() at modal-open time. Reset to zero on close.
 	worktreesModal worktreesModalState
+	// pendingRebase backs viewModeRebaseConfirm. Stamped on `R` with the
+	// cursor hash + display label + HEAD branch; consumed by the confirm
+	// key handler. Reset on esc / dispatch.
+	pendingRebase pendingRebase
+	// rebaseInFlight gates `R` while rebaseCmd is running. Cleared by the
+	// three rebase outcome msgs.
+	rebaseInFlight bool
 	// pendingRefDelete backs viewModeRefDeleteConfirm. Stamped on `d`
 	// keypress with the cursor's local-branch name; the inline-confirm
 	// renderer / key router reads it without re-deriving from refs.
@@ -417,7 +429,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		ffFailedMsg,
 		ffNeedsCleanTreeMsg,
 		checkoutThenFFSucceededMsg,
-		ffCheckoutNeedsCleanTreeMsg:
+		ffCheckoutNeedsCleanTreeMsg,
+		rebaseSucceededMsg,
+		rebaseConflictMsg,
+		rebaseFailedMsg:
 		return m.updateCheckoutMsg(msg)
 
 	case tea.FocusMsg,
@@ -1010,6 +1025,8 @@ func (m Model) renderHelpStatus() string {
 		return " "
 	case viewModeRefDeleteConfirm:
 		return m.refDeleteInlineHint()
+	case viewModeRebaseConfirm:
+		return m.rebaseInlineHint()
 	case viewModeHelp:
 		// Inline column reference panel, grown out of the footer over the rows
 		// helpReservedRows() carved from the graph.

@@ -96,7 +96,8 @@ Today the build wires up:
     "merge" | "rebase"`), then git's `pull.rebase` / `pull.ff`,
     falling back to `--ff-only`
   - `r` — reload refs + log
-  - `ctrl+c` `ctrl+c` — quit (press twice; closes the patch overlay first)
+  - `ctrl+c` `ctrl+c` — quit (press twice; works anywhere, including
+    inside the patch overlay)
   - `R` is reserved for a future Rebase action
 - a status line next to the help row surfaces fetch progress, errors,
   and hash-copy confirmation

@@ -13,9 +13,8 @@ import (
 
 // refModel is a storage container post-PR-B2 — these tests cover the
 // data-shape contracts (LocalRefs / RemoteRefs / Worktrees / dirty maps
-// / Local Changes meta / fetch freshness) and the few render helpers
-// that the dashboard reuses (composeLocalChangesRow, formatLocalChangesMeta,
-// renderWorktreeSidebarRow). Cursor / View / Update key handling left
+// / fetch freshness) and the worktree row renderer
+// (renderWorktreeSidebarRow). Cursor / View / Update key handling left
 // with the sidebar in PR B2.
 
 func TestRefModelHandlesLoadFailure(t *testing.T) {

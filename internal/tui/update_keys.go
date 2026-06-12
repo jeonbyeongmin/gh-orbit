@@ -87,7 +87,9 @@ func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleWorktreeAddInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.mode = viewModeNormal
+		// Sub-modals open from the worktrees modal, so every exit path
+		// lands back there (the dashboard-era surface continuity).
+		m.mode = viewModeWorktreesModal
 		m.worktreeAction.addInput = textinput.Model{}
 		m.worktreeAction.addInlineErr = ""
 		return m, nil
@@ -126,14 +128,14 @@ func (m Model) handleWorktreeRemoveConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 	needsForce := isDirty || isLocked
 	switch msg.String() {
 	case "esc":
-		m.mode = viewModeNormal
+		m.mode = viewModeWorktreesModal
 		m.worktreeAction.removeTarget = git.Worktree{}
 		return m, nil
 	case "ctrl+c":
 		return m.handleCtrlC()
 	case "y":
 		if needsForce {
-			m.mode = viewModeNormal
+			m.mode = viewModeWorktreesModal
 			m.worktreeAction.removeTarget = git.Worktree{}
 			reason := "dirty"
 			if isLocked && !isDirty {

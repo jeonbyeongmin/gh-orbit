@@ -556,8 +556,8 @@ func TestWorktreeRemoveConfirmDirtyRequiresUppercaseY(t *testing.T) {
 	if cmd != nil {
 		t.Errorf("lowercase y on dirty should not dispatch remove cmd")
 	}
-	if m.mode != viewModeNormal {
-		t.Errorf("expected to return to normal, got %v", m.mode)
+	if m.mode != viewModeWorktreesModal {
+		t.Errorf("y-cancel should return to the worktrees modal, got %v", m.mode)
 	}
 	if !strings.Contains(m.status, "dirty") {
 		t.Errorf("status should mention dirty, got %q", m.status)

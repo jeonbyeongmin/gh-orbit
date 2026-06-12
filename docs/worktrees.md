@@ -139,7 +139,7 @@ standard modal contract) — global shortcuts resume on close.
 | Key     | Action                                                            |
 | ------- | ----------------------------------------------------------------- |
 | `enter` | run `git worktree add -b <branch> <path>` (path auto-derived)     |
-| `esc`   | close, drop input state                                           |
+| `esc`   | back to the worktrees modal, drop input state                     |
 
 Branch name is the only input; the new worktree's path auto-derives to
 `<dir(activeWorktreePath)>/<branch>` — a sibling directory of the
@@ -156,7 +156,7 @@ Invalid branch names surface git's stderr verbatim via
 | `y`     | clean entry: run `git worktree remove <path>`                     |
 | `y`     | dirty/locked entry: cancel and surface "[Y] to force" hint        |
 | `Y`     | dirty/locked entry: run `git worktree remove --force <path>`      |
-| `esc`   | close, drop target state                                          |
+| `esc`   | back to the worktrees modal, drop target state                    |
 
 Removing the current worktree is rejected before the confirm opens —
 the user must switch first. Git would refuse anyway, but the friendly

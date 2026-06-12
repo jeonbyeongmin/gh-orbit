@@ -33,6 +33,27 @@ func (m Model) updateWorktreeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.refs.SetWorktrees(msg.entries, m.workdir)
+		// While the modal is open, keep its cursor valid against the fresh
+		// inventory: land on a just-added entry (pendingAddPath), then clamp
+		// against shrink so the highlight can never point past the list.
+		if m.mode == viewModeWorktreesModal {
+			wts := m.modalWorktrees()
+			if p := m.worktreeAction.pendingAddPath; p != "" {
+				for i, wt := range wts {
+					if wt.Path == p {
+						m.worktreesModal.cursor = i
+						break
+					}
+				}
+			}
+			if m.worktreesModal.cursor >= len(wts) {
+				m.worktreesModal.cursor = len(wts) - 1
+			}
+			if m.worktreesModal.cursor < 0 {
+				m.worktreesModal.cursor = 0
+			}
+		}
+		m.worktreeAction.pendingAddPath = ""
 		paths := make([]string, 0, len(msg.entries))
 		for _, e := range msg.entries {
 			paths = append(paths, e.Path)
@@ -85,7 +106,11 @@ func (m Model) updateWorktreeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.worktreeAction.actionInFlight = false
 		m.worktreeAction.addInput = textinput.Model{}
 		m.worktreeAction.addInlineErr = ""
-		m.mode = viewModeNormal
+		// Return to the worktrees modal — the sub-modal was opened from it,
+		// and the surface continuity (pick next action from the same list)
+		// is the dashboard-era behavior this modal inherits. The cursor
+		// lands on the new entry once the reload below delivers it.
+		m.mode = viewModeWorktreesModal
 		m.status = "worktree added: " + msg.branch + " → " + filepath.Base(msg.path)
 		m.statusStyle = statusOkS
 		m.sidebarWorktreesReqID++
@@ -107,7 +132,7 @@ func (m Model) updateWorktreeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.worktreeAction.actionInFlight = false
 		m.worktreeAction.removeTarget = git.Worktree{}
-		m.mode = viewModeNormal
+		m.mode = viewModeWorktreesModal
 		m.status = "worktree removed: " + filepath.Base(msg.path)
 		m.statusStyle = statusOkS
 		m.sidebarWorktreesReqID++
@@ -119,7 +144,7 @@ func (m Model) updateWorktreeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.worktreeAction.actionInFlight = false
 		m.worktreeAction.removeTarget = git.Worktree{}
-		m.mode = viewModeNormal
+		m.mode = viewModeWorktreesModal
 		m.status = "remove: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil

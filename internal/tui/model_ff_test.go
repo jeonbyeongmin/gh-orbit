@@ -489,3 +489,71 @@ func TestCheckoutThenFFSucceededMsgReloadsAndJumpsHEAD(t *testing.T) {
 		t.Fatal("checkoutThenFFSucceededMsg should dispatch reload cmd")
 	}
 }
+
+// --- pull-after chain (enter on origin/xx → checkout/FF → git pull) ---
+
+func TestPullAfterActionChainsPullOnFFSuccess(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m = seedGraphCursor(t, m, "abc1234")
+	m.actionInFlight = true
+
+	updated, _ = m.Update(graphActionMsg{
+		hash: "abc1234", kind: graphActionFF, branch: "main", advance: 2, pullAfter: true,
+	})
+	m = updated.(Model)
+	if !m.pullAfterAction {
+		t.Fatal("pullAfter dispatch should arm pullAfterAction")
+	}
+
+	updated, cmd := m.Update(ffSucceededMsg{branch: "main", advance: 2})
+	m = updated.(Model)
+	if m.pullAfterAction {
+		t.Error("success should consume pullAfterAction")
+	}
+	if !m.pullInFlight {
+		t.Error("success should flip pullInFlight and dispatch pull")
+	}
+	if !strings.Contains(m.status, "pulling…") {
+		t.Errorf("status should show the chained pull, got %q", m.status)
+	}
+	if cmd == nil {
+		t.Fatal("success should return reload+pull batch")
+	}
+}
+
+func TestPullAfterActionClearedOnFailureAndDetour(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.pullAfterAction = true
+	updated, _ = m.Update(ffFailedMsg{err: errors.New("ff: divergent")})
+	m = updated.(Model)
+	if m.pullAfterAction {
+		t.Error("ffFailedMsg should clear pullAfterAction")
+	}
+
+	m.pullAfterAction = true
+	updated, _ = m.Update(checkoutNeedsCleanTreeMsg{ref: "develop"})
+	m = updated.(Model)
+	if m.pullAfterAction {
+		t.Error("needs-clean-tree detour should clear pullAfterAction")
+	}
+}
+
+func TestPullAfterActionSkipsWhenPullAlreadyInFlight(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.pullAfterAction = true
+	m.pullInFlight = true
+	updated, _ = m.Update(ffSucceededMsg{branch: "main", advance: 1})
+	m = updated.(Model)
+	if m.pullAfterAction {
+		t.Error("in-flight pull should still consume the flag (no deferred surprise pull)")
+	}
+	if !strings.Contains(m.status, "fast-forward") {
+		t.Errorf("status should keep the FF outcome, got %q", m.status)
+	}
+}

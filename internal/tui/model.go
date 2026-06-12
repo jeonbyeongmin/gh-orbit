@@ -230,6 +230,12 @@ type Model struct {
 	// checkout chains can't collide on a status overwrite. Cleared by
 	// ffSucceededMsg / ffFailedMsg / ffNeedsCleanTreeMsg.
 	ffInFlight bool
+	// pullAfterAction arms the "enter on origin/xx" chain: set when the
+	// graphActionMsg dispatch carried pullAfter, consumed by the
+	// checkout/FF success handlers (which then fire pullCmd) and cleared
+	// on every failure / clean-tree detour so an aborted chain can't pull
+	// later by surprise.
+	pullAfterAction bool
 	// branchPicker backs viewModeBranchPicker. Reset to the zero value on
 	// esc / enter; the picker reads candidates+cursor while open and
 	// dispatches a graph-Enter checkout on enter.

@@ -138,8 +138,19 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	}
 
 	dim := d.shouldDim(index, ci.c.Hash)
+	commitPrefix := ci.commitPrefix
+	// HEAD row: swap the commit dot to ◉ so "where am I" reads without
+	// scanning chips. The replace targets the unique commit-cell glyph
+	// (one per row); merge-HEAD swaps the hollow variant instead.
+	if index == d.headRowIndex {
+		if replaced := strings.Replace(commitPrefix, commitGlyph, headGlyph, 1); replaced != commitPrefix {
+			commitPrefix = replaced
+		} else {
+			commitPrefix = strings.Replace(commitPrefix, mergeGlyph, headGlyph, 1)
+		}
+	}
 	connectorLine := renderConnectorLine(connectorPrefix, connectorWidth, connectorColW, width, dim)
-	commitLine := renderCommitLine(ci.c, ci.commitPrefix, ci.commitGraphWidth, commitColW, width, selected, dim)
+	commitLine := renderCommitLine(ci.c, commitPrefix, ci.commitGraphWidth, commitColW, width, selected, dim)
 
 	_, _ = fmt.Fprint(w, connectorLine+"\n"+commitLine)
 }
@@ -537,8 +548,8 @@ func collectBatchCmd(state *streamState) tea.Cmd {
 					return commitsStreamDoneMsg{reqID: state.reqID, err: ev.Err}
 				}
 				pair := state.alloc.Push(ev.Commit)
-				connectorText, connectorW := renderGraphRow(pair.Connector)
-				commitText, commitW := renderGraphRow(pair.Commit)
+				connectorText, connectorW := renderGraphRow(pair.Connector, false)
+				commitText, commitW := renderGraphRow(pair.Commit, len(ev.Commit.Parents) >= 2)
 				rows = append(rows, graphRow{
 					commit:          ev.Commit,
 					connectorPrefix: connectorText,

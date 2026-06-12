@@ -4,6 +4,8 @@ Single-pane TUI. The commit graph fills the whole terminal; everything else live
 
 The shape is closer to `tig` than to Fork: a dense commit cockpit on top, modal patch viewer for the actual diff work. `gh dash` covers the same neighborhood for remote PRs, which gh-orbit will absorb in a follow-up.
 
+Graph dot vocabulary: `●` regular commit · `○` merge commit (2+ parents — plumbing renders lighter than work) · `◉` the HEAD row. Lane colors rotate through an 8-hue palette ordered so rotation neighbors stay far apart.
+
 ```
 ┌──────────────────────────────────────────────────────────┐
 │ Worktrees (4)                  ◆ Local Changes 3 files…  │

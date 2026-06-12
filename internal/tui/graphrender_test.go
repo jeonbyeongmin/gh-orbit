@@ -16,7 +16,7 @@ func TestRenderGraphRowLinear(t *testing.T) {
 		Cells:      []lanes.Cell{{Kind: lanes.CellCommit, Lane: 0}},
 		CommitLane: 0,
 	}
-	text, w := renderGraphRow(row)
+	text, w := renderGraphRow(row, false)
 	if w != cellWidth {
 		t.Errorf("visualWidth = %d, want %d", w, cellWidth)
 	}
@@ -36,7 +36,7 @@ func TestRenderGraphRowEmptyCellPadsTwoColumns(t *testing.T) {
 		},
 		CommitLane: -1,
 	}
-	text, _ := renderGraphRow(row)
+	text, _ := renderGraphRow(row, false)
 	stripped := ansi.Strip(text)
 	if w := runewidth.StringWidth(stripped); w != 3*cellWidth {
 		t.Errorf("rendered width = %d, want %d (text=%q)", w, 3*cellWidth, stripped)
@@ -53,7 +53,7 @@ func TestRenderConnectorForkSpansHorizontal(t *testing.T) {
 		},
 		CommitLane: -1,
 	}
-	text, _ := renderGraphRow(row)
+	text, _ := renderGraphRow(row, false)
 	stripped := ansi.Strip(text)
 	// Expect ├─╮ followed by a trailing space (last cell gets a plain
 	// space, not a horizontal).
@@ -76,7 +76,7 @@ func TestRenderConnectorMergeArmHorizontal(t *testing.T) {
 		},
 		CommitLane: -1,
 	}
-	text, _ := renderGraphRow(row)
+	text, _ := renderGraphRow(row, false)
 	stripped := ansi.Strip(text)
 	if !strings.HasPrefix(stripped, "├─╯") {
 		t.Errorf("stripped = %q, want prefix %q", stripped, "├─╯")
@@ -94,7 +94,7 @@ func TestRenderConnectorOctopusFork(t *testing.T) {
 		},
 		CommitLane: -1,
 	}
-	text, _ := renderGraphRow(row)
+	text, _ := renderGraphRow(row, false)
 	stripped := ansi.Strip(text)
 	if !strings.HasPrefix(stripped, "├─┬─╮") {
 		t.Errorf("stripped = %q, want prefix %q", stripped, "├─┬─╮")
@@ -111,7 +111,7 @@ func TestRenderConnectorPipesNoHorizontal(t *testing.T) {
 		},
 		CommitLane: -1,
 	}
-	text, _ := renderGraphRow(row)
+	text, _ := renderGraphRow(row, false)
 	stripped := ansi.Strip(text)
 	if strings.Contains(stripped, "─") {
 		t.Errorf("stripped = %q, plain pipes should not be connected by `─`",
@@ -131,7 +131,7 @@ func TestRenderGraphRowTrimsTrailingEmpty(t *testing.T) {
 		},
 		CommitLane: 1,
 	}
-	_, w := renderGraphRow(row)
+	_, w := renderGraphRow(row, false)
 	if want := 2 * cellWidth; w != want {
 		t.Errorf("visualWidth = %d, want %d (trailing empty trimmed)", w, want)
 	}
@@ -148,7 +148,7 @@ func TestRenderGraphRowKeepsActiveLanesAfterCommit(t *testing.T) {
 		},
 		CommitLane: 1,
 	}
-	text, w := renderGraphRow(row)
+	text, w := renderGraphRow(row, false)
 	if want := 3 * cellWidth; w != want {
 		t.Errorf("visualWidth = %d, want %d (active lane 2 must stay)", w, want)
 	}
@@ -167,7 +167,7 @@ func TestRenderGraphRowAllEmptyIsZeroWidth(t *testing.T) {
 		},
 		CommitLane: -1,
 	}
-	text, w := renderGraphRow(row)
+	text, w := renderGraphRow(row, false)
 	if w != 0 || text != "" {
 		t.Errorf("all-empty row should render as zero width; got w=%d text=%q", w, text)
 	}
@@ -205,5 +205,17 @@ func TestLaneStylesAreSixUnique(t *testing.T) {
 			t.Errorf("duplicate foreground in rotation: %s", key)
 		}
 		seen[key] = true
+	}
+}
+
+func TestRenderGraphRowMergeCommitHollow(t *testing.T) {
+	row := lanes.Row{Cells: []lanes.Cell{{Kind: lanes.CellCommit, Lane: 0}}}
+	merged, _ := renderGraphRow(row, true)
+	if !strings.Contains(merged, mergeGlyph) || strings.Contains(merged, commitGlyph) {
+		t.Errorf("merge row should render hollow %s, got %q", mergeGlyph, merged)
+	}
+	normal, _ := renderGraphRow(row, false)
+	if !strings.Contains(normal, commitGlyph) {
+		t.Errorf("normal row should render solid %s, got %q", commitGlyph, normal)
 	}
 }

@@ -115,6 +115,14 @@ const (
 	// confirm — the cursor stays anchored on the onto-row. Only
 	// y/esc/ctrl+c are accepted.
 	viewModeRebaseConfirm
+	// viewModeCherryPickConfirm gates the screen on the inline
+	// "cherry-pick <hash> onto <head>?" confirm. Same surface contract as
+	// the rebase confirm.
+	viewModeCherryPickConfirm
+	// viewModeBranchCreateInput hosts the branch-name textinput for `n`
+	// (create branch at cursor + switch). Same modal shape as the
+	// worktree add input.
+	viewModeBranchCreateInput
 )
 
 // pendingCheckout remembers what the user was trying to check out so the
@@ -258,6 +266,14 @@ type Model struct {
 	// rebaseInFlight gates `R` while rebaseCmd is running. Cleared by the
 	// three rebase outcome msgs.
 	rebaseInFlight bool
+	// pendingCherryPick / cherryPickInFlight back viewModeCherryPickConfirm
+	// and the `c` dispatch gate — same lifecycle as the rebase pair.
+	pendingCherryPick  pendingCherryPick
+	cherryPickInFlight bool
+	// branchCreate backs viewModeBranchCreateInput (`n`).
+	branchCreate branchCreateState
+	// pushInFlight gates `P` while pushCmd is running.
+	pushInFlight bool
 	// pendingRefDelete backs viewModeRefDeleteConfirm. Stamped on `d`
 	// keypress with the cursor's local-branch name; the inline-confirm
 	// renderer / key router reads it without re-deriving from refs.
@@ -432,7 +448,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		ffCheckoutNeedsCleanTreeMsg,
 		rebaseSucceededMsg,
 		rebaseConflictMsg,
-		rebaseFailedMsg:
+		rebaseFailedMsg,
+		cherryPickSucceededMsg,
+		cherryPickConflictMsg,
+		cherryPickFailedMsg,
+		branchCreateSucceededMsg,
+		branchCreateFailedMsg,
+		pushSucceededMsg,
+		pushFailedMsg,
+		browseOpenedMsg,
+		browseFailedMsg:
 		return m.updateCheckoutMsg(msg)
 
 	case tea.FocusMsg,
@@ -463,6 +488,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateLocalChangesMsg(msg)
 	}
 	return m, nil
+}
+
+// gitMutationInFlight reports whether any working-tree / history mutating
+// action is mid-flight (graph enter chain, rebase, cherry-pick, branch
+// create, push). Every mutating begin* gate checks this one predicate so
+// two git writers can never race on the same index/HEAD.
+func (m Model) gitMutationInFlight() bool {
+	return m.actionInFlight || m.checkoutInFlight || m.ffInFlight ||
+		m.rebaseInFlight || m.cherryPickInFlight || m.branchCreate.inFlight ||
+		m.pushInFlight
 }
 
 // quitArmHint is the status line shown after the first ctrl+c. Kept as a
@@ -989,6 +1024,8 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderZombieCleanupConfirmInner()), m.width, m.height)
 	case viewModeWorktreesModal:
 		return composeOverlay(base, renderModalBox(m.renderWorktreesModalInner()), m.width, m.height)
+	case viewModeBranchCreateInput:
+		return composeOverlay(base, renderModalBox(m.renderBranchCreateInputInner()), m.width, m.height)
 	}
 	return base
 }
@@ -1021,12 +1058,15 @@ func (m Model) renderHelpStatus() string {
 	switch m.mode {
 	case viewModeBranchPicker, viewModeBranchesModal,
 		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
-		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm:
+		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm,
+		viewModeBranchCreateInput:
 		return " "
 	case viewModeRefDeleteConfirm:
 		return m.refDeleteInlineHint()
 	case viewModeRebaseConfirm:
 		return m.rebaseInlineHint()
+	case viewModeCherryPickConfirm:
+		return m.cherryPickInlineHint()
 	case viewModeHelp:
 		// Inline column reference panel, grown out of the footer over the rows
 		// helpReservedRows() carved from the graph.

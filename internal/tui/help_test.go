@@ -10,7 +10,8 @@ import (
 // hint carries — every refactor of the panel must keep them all.
 func TestHelpDataCoverage(t *testing.T) {
 	required := []string{
-		"j/k", "enter", "y", "d", "F", "p", "r", "^C ^C", ",", "space", "b", "w",
+		"j/k", "enter", "y", "d", "F", "p", "P", "r", "R", "c", "n", "o",
+		"^C ^C", ",", "space", "b", "w",
 	}
 
 	var have []string

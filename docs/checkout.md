@@ -87,3 +87,30 @@ same graph cursor as `enter`.
 - Wrapper: `git.Rebase` (plain `git rebase <onto>`), conflict detection
   via the same merge-like stderr/stdout scan as `git.Pull`
   (`ErrRebaseConflict`).
+
+## Cherry-pick (`c`)
+
+`c` applies the **cursor commit onto the current branch** — the same
+confirm-first inline prompt and conflict contract as `R`
+(`cherry-pick <hash> onto <head>? [y]/[esc]`; conflicts report
+`resolve in your terminal` and leave the mid-pick state in place).
+Rejections mirror rebase: detached HEAD, cursor on HEAD, in-flight
+actions. Wrapper: `git.CherryPick` (`ErrCherryPickConflict`).
+
+## New branch at cursor (`n`)
+
+`n` opens a name-input modal (same shape as the worktree add input)
+and runs `git checkout -b <name> <cursor>` — create at the cursor
+commit and switch in one step. Empty names and git failures (name
+collision, dirty tree) surface as an inline error and keep the modal
+open for correction; success closes the modal, reloads, and HEAD-jumps
+the graph cursor onto the new branch tip.
+
+## Push (`P`) / open on GitHub (`o`)
+
+`P` completes the network triad (`F` fetch · `p` pull · `P` push):
+plain `git push` for the current branch, with a one-shot
+`--set-upstream origin <branch>` retry when the branch has no upstream
+yet. Never forces; detached HEAD is rejected up front. `o` runs
+`gh browse <cursor-hash>` to open the commit on GitHub — gh's own
+error (non-GitHub remote, auth) lands on the status line.

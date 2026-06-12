@@ -1,6 +1,6 @@
 # architecture
 
-Stacked TUI. Top dashboard (worktrees + Local Changes meta + fetch freshness) sits above the commit graph; the graph fills the rest of the terminal. The per-commit diff is read in the full-screen `d` patch overlay, with `[` / `]` jumping between files inside it — the previous bottom Commit/Changes tab pane was retired with the subtract-bottom-pane change. Post-PR-B2 the sidebar is retired — graph Enter is the single checkout surface, branches modal (`b`) is the single delete-branch surface, the top dashboard's `w` focus mode is the single worktree-workflow surface.
+Single-pane TUI. The commit graph fills the whole terminal; everything else lives in overlays. The per-commit diff is read in the full-screen `d` patch overlay, with `[` / `]` jumping between files inside it — the previous bottom Commit/Changes tab pane was retired with the subtract-bottom-pane change, and the top worktree dashboard was retired with the worktrees-modal change. Graph Enter is the single checkout surface, the branches modal (`b`) is the single delete-branch surface, the worktrees modal (`w`) is the single worktree-workflow surface.
 
 The shape is closer to `tig` than to Fork: a dense commit cockpit on top, modal patch viewer for the actual diff work. `gh dash` covers the same neighborhood for remote PRs, which gh-orbit will absorb in a follow-up.
 
@@ -20,7 +20,7 @@ The shape is closer to `tig` than to Fork: a dense commit cockpit on top, modal 
 └──────────────────────────────────────────────────────────┘
 ```
 
-The top dashboard is data-driven: header + N worktree rows + separator + 2 border rows. paneSizes caps the dashboard at `mainH - 3` so the graph retains ≥3 outer rows. The dashboard is read-only by default — pressing `w` toggles its focus mode so j/k/enter/a/d/esc route to the dashboard's cursor (see [worktrees.md](worktrees.md)). Local Changes is entered globally via `,`. Fetch is throttled by terminal focus events (60s) so an alt-tab burst can't saturate `git fetch`.
+Worktrees live behind the `w` modal — j/k/enter/a/d/s/esc route to its cursor while open (see [worktrees.md](worktrees.md)). Local Changes is entered globally via `,`. Fetch is throttled by terminal focus events (60s) so an alt-tab burst can't saturate `git fetch`.
 
 The full-screen `d` patch overlay is where commit diffs live (entire `git show -p` body), opened on top of the base layout and closed with `esc`. Inside the overlay, `[` / `]` jump to the previous / next `diff --git` header so a 20-file patch reads as 20 ordered chapters instead of one long scroll. The bottom hint surfaces `<path> [N/M]` so the reviewer always knows which file the cursor is in.
 
@@ -35,7 +35,7 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `j` / `k`      | graph  | navigate the commit list                                                            |
 | `g` / `G`      | graph  | jump to top / bottom                                                                |
 | `b`            | global | open branches modal (delete-branch entry) — see [branches.md](branches.md)          |
-| `w`            | global | toggle dashboard focus (switch / add / remove entry) — see [worktrees.md](worktrees.md) |
+| `w`            | global | worktrees modal (switch / add / remove / sort) — see [worktrees.md](worktrees.md) |
 | `enter`        | graph  | context-aware: checkout / FF / detach — see [checkout.md](checkout.md)              |
 | `y`            | graph  | copy the focused commit's full hash to clipboard                                    |
 | `d`            | graph  | open the focused commit's full patch overlay                                        |

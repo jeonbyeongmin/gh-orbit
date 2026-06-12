@@ -16,6 +16,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -77,7 +78,7 @@ type worktreeDirtyResultMsg struct {
 	// same goroutine as the dirty probe so they land in one msg (no
 	// incremental jitter between the `●` marker and the subject/time
 	// columns). Both stay zero-valued when the tree has no commits yet or
-	// the probe timed out — the dashboard renders a blank last-commit column.
+	// the probe timed out — the modal renders a blank last-commit column.
 	subject string
 	when    time.Time
 }
@@ -378,7 +379,7 @@ func (m Model) switchWorktree(path string) (Model, tea.Cmd) {
 	// reloadCmd bumps sidebarWorktreesReqID and dispatches loadWorktreesCmd
 	// itself — that covers the in-flight invalidation for the new tree, so
 	// the switch handler no longer fans out explicitly.
-	cmd := tea.Batch(m.reloadCmd(), loadLocalChangesSummaryCmd(m.workdir))
+	cmd := m.reloadCmd()
 	// Local Changes mode keeps its own status snapshot; reloadCmd doesn't
 	// touch it. Re-fire the status load so the file tree reflects the new
 	// tree immediately rather than waiting for the user to press `r`.
@@ -425,27 +426,30 @@ func validateWorktreePath(path string) error {
 	return nil
 }
 
-// dashboardFocusState backs paneDashboard — the top dashboard band's
-// cursor mode toggled by `w`. An int cursor into m.dashboardWorktrees()
-// (the active display order) at focus-on time; reloads (after add /
-// remove) clamp via enterDashboardFocus on re-entry. sortByCommit is the
-// session-local last-commit sort toggle (`s`); it resets on focus exit
-// because the whole struct is zeroed there.
-type dashboardFocusState struct {
+// worktreesModalState backs viewModeWorktreesModal — the centered
+// worktree-list modal toggled by `w`, same overlay pattern as the
+// branches modal. An int cursor into m.modalWorktrees() (the active
+// display order) at open time; reloads (after add / remove) clamp via
+// beginWorktreesModal on re-entry. sortByCommit is the session-local
+// last-commit sort toggle (`s`); it resets on close because the whole
+// struct is zeroed there.
+type worktreesModalState struct {
 	cursor       int
 	sortByCommit bool
 }
 
-// dashboardWorktrees returns the worktrees in the dashboard's active
+const helpTextWorktreesModal = "[j/k] navigate · [enter] switch · [a] add · [d] remove · [s] sort · [esc] close"
+
+// modalWorktrees returns the worktrees in the modal's active
 // display order. With sortByCommit off it's the git natural order
 // (Worktrees() as-is, main first). On, the main worktree stays pinned at
 // the top and the rest sort by last-commit time descending, with unknown
 // rows (zero-value `when` — still loading / timed out / no commits) last.
 // The original slice is never mutated; render and the cursor helpers all
 // route through this so the cursor index and the rendered rows agree.
-func (m Model) dashboardWorktrees() []git.Worktree {
+func (m Model) modalWorktrees() []git.Worktree {
 	wts := m.refs.Worktrees()
-	if !m.dashboardFocus.sortByCommit || len(wts) < 2 {
+	if !m.worktreesModal.sortByCommit || len(wts) < 2 {
 		return wts
 	}
 	sorted := make([]git.Worktree, len(wts))
@@ -464,11 +468,11 @@ func (m Model) dashboardWorktrees() []git.Worktree {
 	return sorted
 }
 
-// enterDashboardFocus flips m.focused to paneDashboard. Cursor lands on
+// beginWorktreesModal opens viewModeWorktreesModal. Cursor lands on
 // the current worktree if found, else 0. Empty inventory surfaces an
-// inline error and leaves focus on paneGraph.
-func (m Model) enterDashboardFocus() (Model, tea.Cmd) {
-	wts := m.dashboardWorktrees()
+// inline error and stays in viewModeNormal.
+func (m Model) beginWorktreesModal() (Model, tea.Cmd) {
+	wts := m.modalWorktrees()
 	if len(wts) == 0 {
 		m.status = "worktrees: none loaded yet"
 		m.statusStyle = statusErrS
@@ -481,57 +485,59 @@ func (m Model) enterDashboardFocus() (Model, tea.Cmd) {
 			break
 		}
 	}
-	m.dashboardFocus.cursor = cursor
-	m.focused = paneDashboard
+	m.worktreesModal.cursor = cursor
+	m.mode = viewModeWorktreesModal
 	m.status = ""
 	return m, nil
 }
 
-func (m Model) dashboardMoveCursor(delta int) Model {
-	wts := m.dashboardWorktrees()
+func (m Model) worktreesModalMoveCursor(delta int) Model {
+	wts := m.modalWorktrees()
 	if len(wts) == 0 {
 		return m
 	}
-	c := m.dashboardFocus.cursor + delta
+	c := m.worktreesModal.cursor + delta
 	if c < 0 {
 		c = 0
 	}
 	if c >= len(wts) {
 		c = len(wts) - 1
 	}
-	m.dashboardFocus.cursor = c
+	m.worktreesModal.cursor = c
 	return m
 }
 
-// dashboardToggleSort flips the last-commit sort (`s`) and keeps the cursor
+// worktreesModalToggleSort flips the last-commit sort (`s`) and keeps the cursor
 // on the same worktree across the reorder so the highlight doesn't jump to a
 // different tree under the user's hands.
-func (m Model) dashboardToggleSort() Model {
-	before := m.dashboardWorktrees()
+func (m Model) worktreesModalToggleSort() Model {
+	before := m.modalWorktrees()
 	curPath := ""
-	if m.dashboardFocus.cursor >= 0 && m.dashboardFocus.cursor < len(before) {
-		curPath = before[m.dashboardFocus.cursor].Path
+	if m.worktreesModal.cursor >= 0 && m.worktreesModal.cursor < len(before) {
+		curPath = before[m.worktreesModal.cursor].Path
 	}
-	m.dashboardFocus.sortByCommit = !m.dashboardFocus.sortByCommit
-	for i, wt := range m.dashboardWorktrees() {
+	m.worktreesModal.sortByCommit = !m.worktreesModal.sortByCommit
+	for i, wt := range m.modalWorktrees() {
 		if wt.Path == curPath {
-			m.dashboardFocus.cursor = i
+			m.worktreesModal.cursor = i
 			break
 		}
 	}
 	return m
 }
 
-// dashboardEnter dispatches a switchWorktreeMsg for the cursor entry.
-// The Model's existing switchWorktree handler does the validate +
-// retarget + reload chain. Focus stays on paneDashboard so the user can
-// keep moving / acting from the same surface.
-func (m Model) dashboardEnter() (Model, tea.Cmd) {
-	wts := m.dashboardWorktrees()
-	if m.dashboardFocus.cursor < 0 || m.dashboardFocus.cursor >= len(wts) {
+// worktreesModalEnter closes the modal and dispatches a switchWorktreeMsg
+// for the cursor entry. The Model's existing switchWorktree handler does
+// the validate + retarget + reload chain; closing first means the switch
+// confirmation status renders on the normal layout, not under an overlay.
+func (m Model) worktreesModalEnter() (Model, tea.Cmd) {
+	wts := m.modalWorktrees()
+	if m.worktreesModal.cursor < 0 || m.worktreesModal.cursor >= len(wts) {
 		return m, nil
 	}
-	wt := wts[m.dashboardFocus.cursor]
+	wt := wts[m.worktreesModal.cursor]
+	m.mode = viewModeNormal
+	m.worktreesModal = worktreesModalState{}
 	if wt.Path == m.workdir {
 		m.status = "already on this worktree"
 		m.statusStyle = statusOkS
@@ -540,22 +546,83 @@ func (m Model) dashboardEnter() (Model, tea.Cmd) {
 	return m, func() tea.Msg { return switchWorktreeMsg{path: wt.Path} }
 }
 
-// dashboardAdd opens the existing add-input sub-modal. The sub-modal
-// owns key routing while open; on cancel / success the user returns to
-// viewModeNormal with focus still on paneDashboard.
-func (m Model) dashboardAdd() (Model, tea.Cmd) {
-	return m.beginWorktreeAdd()
-}
-
-// dashboardRemove arms the existing remove-confirm sub-modal for the
+// worktreesModalRemove arms the existing remove-confirm sub-modal for the
 // cursor entry. beginWorktreeRemove already rejects removing the
-// current worktree with a status line. Focus stays on paneDashboard.
-func (m Model) dashboardRemove() (Model, tea.Cmd) {
-	wts := m.dashboardWorktrees()
-	if m.dashboardFocus.cursor < 0 || m.dashboardFocus.cursor >= len(wts) {
+// current worktree with a status line.
+func (m Model) worktreesModalRemove() (Model, tea.Cmd) {
+	wts := m.modalWorktrees()
+	if m.worktreesModal.cursor < 0 || m.worktreesModal.cursor >= len(wts) {
 		return m, nil
 	}
-	target := wts[m.dashboardFocus.cursor]
+	target := wts[m.worktreesModal.cursor]
 	m = m.beginWorktreeRemove(target)
 	return m, nil
+}
+
+// renderWorktreesModalInner returns the centered overlay content: bold
+// header (with the ↓time sort tag while active), scroll-windowed worktree
+// rows reusing the standard row renderer, an optional fetch-freshness
+// line, and the action hint. Row width adapts to the terminal but stays
+// inside the modal-friendly 40–76 band.
+func (m Model) renderWorktreesModalInner() string {
+	wts := m.modalWorktrees()
+	headerText := "[Worktrees]"
+	if m.worktreesModal.sortByCommit {
+		headerText += "  ↓time"
+	}
+	header := modalHeaderS.Render(headerText)
+	if len(wts) == 0 {
+		return strings.Join([]string{
+			header,
+			help.Render("(no worktrees)"),
+			help.Render(helpTextWorktreesModal),
+		}, "\n")
+	}
+
+	rowW := m.width - 12
+	if rowW > 76 {
+		rowW = 76
+	}
+	if rowW < 40 {
+		rowW = 40
+	}
+	nameColW := 0
+	for _, wt := range wts {
+		if w := runewidth.StringWidth(worktreeDisplayName(wt.Path)); w > nameColW {
+			nameColW = w
+		}
+	}
+
+	now := time.Now()
+	const visibleBudget = 16
+	visibleRows := visibleBudget
+	if len(wts) < visibleRows {
+		visibleRows = len(wts)
+	}
+
+	lines := []string{header}
+	lines = append(lines, renderScrollWindow(
+		m.worktreesModal.cursor-visibleRows/2, visibleRows, len(wts),
+		func(i int) string {
+			wt := wts[i]
+			dirtyMark := ""
+			if m.refs.worktreeTimedOut[wt.Path] {
+				dirtyMark = "?"
+			} else if m.refs.worktreeDirty[wt.Path] {
+				dirtyMark = "●"
+			}
+			subject, when := m.refs.WorktreeLastCommit(wt.Path)
+			return renderWorktreeSidebarRow(
+				wt, wt.Path == m.workdir, i == m.worktreesModal.cursor,
+				dirtyMark, subject, when, now, rowW, nameColW)
+		})...)
+	if !m.refs.lastFetchAt.IsZero() {
+		fresh := "fetched " + relativeShortAt(m.refs.lastFetchAt, now)
+		if !strings.HasSuffix(fresh, "just now") {
+			fresh += " ago"
+		}
+		lines = append(lines, help.Render(fresh))
+	}
+	lines = append(lines, help.Render(helpTextWorktreesModal))
+	return strings.Join(lines, "\n")
 }

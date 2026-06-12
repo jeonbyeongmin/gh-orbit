@@ -180,7 +180,7 @@ func (d commitDelegate) shouldDim(index int, hash string) bool {
 }
 
 // colorCursorRowBg is xterm 237 — a dark grey one step above colorDim
-// (240). Used as the dashboard cursor row's background tint so it stays
+// (240). Used as the worktrees-modal cursor row's background tint so it stays
 // visible against the default body fg without competing with the
 // colorSelected (205) accent that paints the `▶` current-row body.
 const colorCursorRowBg = "237"

@@ -1,38 +1,35 @@
 # worktrees
 
 Multi-worktree is a first-class cockpit concept. The shape it's built
-for: an AI agent occupies worktree A and is mid-task; the reviewer pops
-into gh-orbit, sees every tree in the top dashboard at a glance,
-presses `w` to grab the cursor in the dashboard, picks worktree B,
-hits `enter` to switch — all in-process, no second terminal, no
-disturbance to the agent's session.
+for: work is in flight on worktree A; the user pops into gh-orbit,
+presses `w` to open the worktrees modal, picks worktree B, hits
+`enter` to switch — all in-process, no second terminal, no disturbance
+to whatever is running on the other tree.
 
-The top dashboard is the single worktree surface. Rendered above the
-graph pane on every frame, it lists every entry from
+The `w` modal is the single worktree surface — the same centered
+overlay pattern as the branches modal (`b`). It lists every entry from
 `git worktree list --porcelain`, marks the current entry with `▶`, and
-paints a `●` dirty marker (`?` on timeout). The dashboard is always
-visible. By default it's read-only; pressing `w` toggles focus on so
-the dashboard grabs the cursor and j/k/enter/a/d/esc route to it.
+paints a `●` dirty marker (`?` on timeout). The graph keeps the whole
+screen; worktrees appear only while the modal is open.
 
-## Dashboard rendering
+## Modal rendering
 
 Layout (N=4 example):
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│ Worktrees (4)              ◆ Local Changes 3 files…      │
-│ ▶ main · develop ● · sync watcher fix · 2m               │
-│   feat-auth · feat/auth · add login form · 1h            │
-│   feat-qa · feat/qa · run tests green · 3d               │
-│   refactor · feat/refactor ● · wip                       │
-│ ────────────────────────────── fetched 14m ago           │
-└──────────────────────────────────────────────────────────┘
+        ┌──────────────────────────────────────────────────┐
+        │ [Worktrees]                                      │
+        │ ▶ main · develop ● · sync watcher fix · 2m       │
+        │   feat-auth · feat/auth · add login form · 1h    │
+        │   feat-qa · feat/qa · run tests green · 3d       │
+        │   refactor · feat/refactor ● · wip               │
+        │ fetched 14m ago                                  │
+        │ [j/k] navigate · [enter] switch · [a] add · …    │
+        └──────────────────────────────────────────────────┘
 ```
 
-- **Header line** — `Worktrees (N)` left, `◆ Local Changes meta` right.
-  The Local Changes meta carries `N files · +X -Y · Zm ago` when the
-  working tree is dirty (numstat against HEAD + load wall clock); empty
-  working tree drops the meta. On narrow widths the label wins.
+- **Header line** — `[Worktrees]`, plus a `↓time` tag while the
+  last-commit sort is on.
 - **Worktree row** — `name · branch · ● · subject · time`. `name` is
   the basename of the worktree path, capped at **24** cells (a long
   branch-shaped name would otherwise swallow the row) and padded to the
@@ -45,15 +42,16 @@ Layout (N=4 example):
   `time` are the worktree HEAD's last-commit summary (see **Last-commit
   column**) — graph only ever shows the *current* tree's commits, so the
   row carries the others' last activity without a switch.
-- **Separator line** — horizontal rule with `fetched Xm ago` right-
-  aligned. The freshness clock for fetch attempts; blank rule before
-  the first fetch.
+- **Freshness line** — `fetched Xm ago` under the rows; absent before
+  the first fetch attempt.
+- **Hint line** — the modal key reference, mirroring the branches
+  modal's hint.
 
 Dirty marker on each row:
 
 - `●` — `git status` returned non-empty (dirty).
 - `?` — the per-row 3s budget was exhausted; render a placeholder so
-  the dashboard never silently lies about a slow / stuck worktree.
+  the modal never silently lies about a slow / stuck worktree.
 - (none) — clean, OR not yet loaded.
 
 ### Last-commit column
@@ -64,9 +62,10 @@ worktree HEAD's last commit. Both come from the dirty fan-out (one
 `git log -1` per tree, folded into the same goroutine as the dirty
 probe — see **Dirty fan-out**).
 
-Width-adaptive degradation, since the dashboard stacks full-width above
-the graph and the band's height is capped so the graph never starves.
-Display order is `▶ name · branch · ● · subject · time`; columns are
+Width-adaptive degradation: the row width tracks the terminal inside a
+40–76 cell band, and rows past the 16-row window scroll behind
+`↑/↓ N more` markers (shared renderScrollWindow math with the branch
+modals). Display order is `▶ name · branch · ● · subject · time`; columns are
 allocated in **keep-priority** order — each takes space only if it (plus
 its separator) still fits, but a column that doesn't fit is skipped while
 smaller lower-priority columns still claim the leftover, so a too-long
@@ -87,36 +86,32 @@ bare) or a still-loading / timed-out row renders the `subject` + `time`
 slots **blank** — never `?`. The `?` placeholder is reserved for the
 dirty marker; a `?` in the time slot would read as a literal value.
 
-The dashboard is read-only by default; pressing `w` toggles focus on
-so j/k/enter/a/d/esc route to the dashboard's cursor. `refModel.SetWorktrees(entries, currentPath)` populates the state; per-tree fan-out fires after every `worktreesLoadedMsg` and tags each row's `worktreeDirty` / `worktreeTimedOut` / `worktreeLastCommit` state.
+`refModel.SetWorktrees(entries, currentPath)` populates the state;
+per-tree fan-out fires after every `worktreesLoadedMsg` and tags each
+row's `worktreeDirty` / `worktreeTimedOut` / `worktreeLastCommit`
+state.
 
-## Dashboard focus mode (`paneDashboard`)
+## Worktrees modal (`viewModeWorktreesModal`)
 
-The cursor surface for worktree actions. Toggled by the global `w`
-keybind from `viewModeNormal`. Press `w` again or `esc` to exit;
-switching / add / remove all keep focus on so a follow-up action can
-fire from the same surface (only `esc` / `w` exits).
+The cursor surface for worktree actions. Opened by the global `w`
+keybind from `viewModeNormal`; `w` again or `esc` closes it.
 
 | Key       | Action                                                              |
 | --------- | ------------------------------------------------------------------- |
 | `j` / `k` | move cursor within the list (bounded; no wrap)                      |
-| `enter`   | switch to the worktree under the cursor                             |
+| `enter`   | switch to the worktree under the cursor (closes the modal)          |
 | `a`       | open the add-worktree input sub-modal                               |
 | `d`       | open the remove-worktree confirm sub-modal (refuses main + current entry) |
 | `s`       | toggle last-commit sort (main pinned, rest newest-first)            |
-| `esc` / `w` | exit focus (cursor + sort reset, dashboard returns to read-only)  |
+| `esc` / `w` | close (cursor + sort reset)                                       |
 
-Visual cues while focused:
+Visual cues:
 
-- The dashboard's outer box border switches to the focused accent color
-  (same as the graph pane's focused border) so the user can tell at a
-  glance which surface owns the cursor.
 - The cursor row gets a background tint (`colorCursorRowBg`, xterm 237)
   layered behind whatever foreground styling the row already has. On
   the `▶` current row, the bold + accent fg survives the bg overlay so
   both signals (current + cursor) read independently.
-- The bottom hint line replaces the graph hint with `dashboard: j/k
-  이동 · enter switch · a add · d remove · s sort · esc 종료` while focused.
+- The backdrop dims (composeOverlay), same as every centered modal.
 
 ### Last-commit sort (`s`)
 
@@ -129,25 +124,22 @@ the same worktree across the reorder, so the highlight doesn't jump.
 
 The sort is a **snapshot** of the cache at keypress: rows don't re-jump
 as the dirty fan-out trickles in. A later `r` reload (or re-toggle)
-picks up fresh times. It's **session-local** — leaving focus (`esc` /
-`w`) zeroes `dashboardFocusState`, so the next entry starts in natural
-order again (no config persistence). While the sort is on, a `↓time`
-tag rides next to the `Worktrees (N)` header label; it sits in the
-left group so the narrow-width drop (which sheds the Local Changes meta
-first) keeps the mode indicator visible.
+picks up fresh times. It's **session-local** — closing the modal
+(`esc` / `w`) zeroes `worktreesModalState`, so the next open starts in
+natural order again (no config persistence). While the sort is on, a
+`↓time` tag rides next to the `[Worktrees]` header label.
 
-Focus on lands the cursor on the current worktree row if found, else
-on row 0. Empty inventory rejects entry with a status line; focus
-stays on `paneGraph`. Other normal-mode global keys (`r`, `F`, `p`,
-`?`, `,`, `b`, `Z`, ...) keep working while focused — only j/k/enter/
-a/d/esc are claimed by the dashboard.
+Opening lands the cursor on the current worktree row if found, else
+on row 0. Empty inventory rejects entry with a status line and stays
+in `viewModeNormal`. While the modal is open it owns every key (the
+standard modal contract) — global shortcuts resume on close.
 
 ## Add input sub-modal (`viewModeWorktreeAddInput`)
 
 | Key     | Action                                                            |
 | ------- | ----------------------------------------------------------------- |
 | `enter` | run `git worktree add -b <branch> <path>` (path auto-derived)     |
-| `esc`   | close, drop input state                                           |
+| `esc`   | back to the worktrees modal, drop input state                     |
 
 Branch name is the only input; the new worktree's path auto-derives to
 `<dir(activeWorktreePath)>/<branch>` — a sibling directory of the
@@ -164,7 +156,7 @@ Invalid branch names surface git's stderr verbatim via
 | `y`     | clean entry: run `git worktree remove <path>`                     |
 | `y`     | dirty/locked entry: cancel and surface "[Y] to force" hint        |
 | `Y`     | dirty/locked entry: run `git worktree remove --force <path>`      |
-| `esc`   | close, drop target state                                          |
+| `esc`   | back to the worktrees modal, drop target state                    |
 
 Removing the current worktree is rejected before the confirm opens —
 the user must switch first. Git would refuse anyway, but the friendly
@@ -180,8 +172,8 @@ user never burns a switch on a target that's permanently unremovable.
 ## In-process switch
 
 `switchWorktreeMsg{path}` is the seam every "go to a different worktree"
-surface dispatches through (today: `enter` while the dashboard owns the
-cursor). On switch:
+surface dispatches through (today: `enter` in the worktrees modal). On
+switch:
 
 1. Validate path (directory containing `.git`); fail surfaces on status.
 2. Same-path → no-op + "already on this worktree".
@@ -195,7 +187,7 @@ cursor). On switch:
    `viewModeLocalChanges` is active — a fresh `loadStatusCmd` too.
 
 `m.refs.SetWorktrees(...)` is nudged synchronously with the new path so
-the `▶` marker on the dashboard flips immediately while the
+the `▶` marker in the modal flips immediately while the
 authoritative list (with its dirty fan-out) is in flight.
 
 ### Switch confirmation status line
@@ -204,7 +196,7 @@ On every successful switch the status line paints
 `→ switched: <prev-basename> → <new-basename>` and the handler arms a
 `tea.Tick(3s)` auto-clear. The fix for scenario 3 (switch confirmation
 ambiguity) from the design doc — without the toast a fast switch can
-look like a no-op because the surrounding TUI (dashboard `▶`, graph,
+look like a no-op because the surrounding TUI (modal `▶`, graph,
 tab) animates faster than the eye registers.
 
 Anti-stale mechanism: `m.statusTickSeq` is incremented before the tick
@@ -244,10 +236,10 @@ watcher-flicker risk (see below).
 
 **E3 budget**: each per-row goroutine has a 3-second
 `context.WithTimeout` shared by both probes. On timeout the msg carries
-`timedOut=true`; the dashboard renders `?` for that row's dirty marker
+`timedOut=true`; the modal renders `?` for that row's dirty marker
 instead of trusting the (effectively unknown) dirty bit, and leaves the
 last-commit columns blank. Without the budget a stuck NFS / slow
-network mount could leave the dashboard visually stalled.
+network mount could leave the modal visually stalled.
 
 Stale-drop: a `worktreeDirtyResultMsg` whose `reqID` doesn't match the
 live `sidebarWorktreesReqID` is dropped — a worktree switch in the
@@ -258,7 +250,7 @@ status` (see `internal/git/status.go`). A plain `git status` opportunistically
 refreshes its stat cache by rewriting `.git/index`; since the external-change
 watcher below watches `.git/index`, that write would fire a fresh
 `worktreeWatchedChangeMsg`, re-running the fan-out — a status → index write →
-event → reload → status loop that flickers the dashboard after any working-tree
+event → reload → status loop that flickers the inventory after any working-tree
 mutation (merge, checkout). `--no-optional-locks` makes the probe read-only so
 it never feeds the watcher.
 
@@ -270,13 +262,13 @@ load drops on arrival:
 
 - App startup (initial batch).
 - `worktree add` / `worktree remove` success.
-- dashboard-focus switch (via `reloadCmd`).
+- worktrees-modal switch (via `reloadCmd`).
 - `r` global reload key (via `reloadCmd`).
 - `fetch` / `pull` / `checkout` / `ff-only` / `checkoutThenFF` /
   `branchDelete` success — all route through `reloadCmd`, which bumps
   the worktree reqID and dispatches the inventory + fan-out together.
 - Local Changes `stage` / `unstage` success (explicit, in addition to
-  their own status reload — needed for the dashboard `●` to flip).
+  their own status reload — needed for the modal `●` to flip).
 - **External git op** (another shell, another worktree)
   — each known worktree's `.git/HEAD` and `.git/index` are watched via
   fsnotify; a 200ms trailing debounce coalesces burst writes (commit,
@@ -285,7 +277,7 @@ load drops on arrival:
   reqID and dispatches `loadWorktreesCmd`. When the event path matches
   `m.workdir` (i.e., the *current* worktree changed externally), the
   handler also fires `reloadCmd` so graph + refs follow the new HEAD,
-  not just the dashboard row.
+  not just the modal row.
 
   `onRawEvent` only reacts to **content** ops (Create/Write/Remove/Rename);
   Chmod-only events are dropped. This closes the other half of the

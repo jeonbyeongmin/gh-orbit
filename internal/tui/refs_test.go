@@ -13,9 +13,8 @@ import (
 
 // refModel is a storage container post-PR-B2 — these tests cover the
 // data-shape contracts (LocalRefs / RemoteRefs / Worktrees / dirty maps
-// / Local Changes meta / fetch freshness) and the few render helpers
-// that the dashboard reuses (composeLocalChangesRow, formatLocalChangesMeta,
-// renderWorktreeSidebarRow). Cursor / View / Update key handling left
+// / fetch freshness) and the worktree row renderer
+// (renderWorktreeSidebarRow). Cursor / View / Update key handling left
 // with the sidebar in PR B2.
 
 func TestRefModelHandlesLoadFailure(t *testing.T) {
@@ -100,56 +99,6 @@ func TestRefModelWorktreesAccessor(t *testing.T) {
 	wts := r.Worktrees()
 	if len(wts) != 2 {
 		t.Errorf("Worktrees() len = %d, want 2", len(wts))
-	}
-}
-
-// --- Local Changes meta helpers ---
-
-func TestFormatLocalChangesMetaSingularFile(t *testing.T) {
-	r := newRefsModel()
-	r.SetLocalChangesSummary(git.LocalChangesSummary{FilesChanged: 1, Insertions: 5, Deletions: 0}, time.Now())
-	got := r.formatLocalChangesMeta(time.Now())
-	if !strings.Contains(got, "1 file ·") {
-		t.Errorf("singular form expected, got %q", got)
-	}
-}
-
-func TestFormatLocalChangesMetaEmptySummary(t *testing.T) {
-	r := newRefsModel()
-	if got := r.formatLocalChangesMeta(time.Now()); got != "" {
-		t.Errorf("empty summary should yield empty meta, got %q", got)
-	}
-}
-
-func TestFormatLocalChangesMetaJustNowNoAgoSuffix(t *testing.T) {
-	r := newRefsModel()
-	now := time.Now()
-	r.SetLocalChangesSummary(git.LocalChangesSummary{FilesChanged: 1, Insertions: 1, Deletions: 0}, now)
-	got := r.formatLocalChangesMeta(now)
-	if strings.Contains(got, "just now ago") {
-		t.Errorf("'just now' should not get ' ago' suffix: %q", got)
-	}
-	if !strings.Contains(got, "just now") {
-		t.Errorf("expected 'just now' segment: %q", got)
-	}
-}
-
-func TestComposeLocalChangesRowTruncatesMetaBeforeLabel(t *testing.T) {
-	out := composeLocalChangesRow("● Local Changes", "3 files · +47 -12 · 2m ago", 22, false)
-	plain := ansi.Strip(out)
-	if !strings.Contains(plain, "● Local Changes") {
-		t.Errorf("label must survive narrow width: %q", plain)
-	}
-	if !strings.HasSuffix(plain, "…") {
-		t.Errorf("expected truncation marker on meta, got %q", plain)
-	}
-}
-
-func TestComposeLocalChangesRowBareLabelWhenTooNarrowForMeta(t *testing.T) {
-	out := composeLocalChangesRow("● Local Changes", "3 files", 15, false)
-	plain := ansi.Strip(out)
-	if strings.Contains(plain, "files") {
-		t.Errorf("meta should drop entirely when no room: %q", plain)
 	}
 }
 

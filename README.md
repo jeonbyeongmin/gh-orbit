@@ -51,15 +51,12 @@ neighborhood for remote PRs, which is the next milestone.
 the next milestone.
 Today the build wires up:
 
-- Stacked layout — top dashboard (worktrees + Local Changes meta +
-  fetch freshness) above the commit graph, which fills the rest of
-  the terminal; the per-commit diff lives in the full-screen `d`
-  patch overlay
-- Local Changes view — a dedicated `● Local Changes` row at the top
-  of the refs pane, with an inline meta `N files · +X -Y · Zm ago`
-  when the working tree is dirty (numstat against HEAD); `enter`
-  jumps into a working-tree diff view so you can read what an agent
-  (or you) hasn't committed yet without leaving the TUI
+- Single-pane layout — the commit graph fills the whole terminal;
+  worktrees (`w`), branches (`b`), and the per-commit diff (`d`,
+  full-screen patch overlay) all live in overlays
+- Local Changes view — `,` jumps into a working-tree diff view
+  (file tree + diff, stage/unstage) so you can read what hasn't
+  been committed yet without leaving the TUI
 - the graph runs against the unified `--all` revision spec by default
   so every local/remote/tag is one walk; `enter` from the refs pane
   jumps the graph cursor to a ref tip without changing the base

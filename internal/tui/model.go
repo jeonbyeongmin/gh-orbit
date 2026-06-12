@@ -1,5 +1,5 @@
 // Package tui hosts the Bubble Tea models, panes, and key bindings for the
-// stacked layout (top dashboard · commit graph filling the rest). The
+// full-screen commit graph plus its overlay modals. The
 // per-commit diff lives in the full-screen `d` patch overlay.
 package tui
 
@@ -36,11 +36,6 @@ type pane int
 
 const (
 	paneGraph pane = iota
-	// paneDashboard is the top worktree band when it grabs the cursor.
-	// Toggled by `w` from paneGraph; j/k/enter/a/d/esc route to dashboard
-	// handlers while the focus is on, all other keys fall through to the
-	// normal-mode switch so global shortcuts (r, F, p, ?, ,) still work.
-	paneDashboard
 )
 
 // refsAllSentinel is the git revision spec that means "every ref". Used as the
@@ -86,9 +81,7 @@ const (
 	// acted upon. Only y/Y/esc/ctrl+c are accepted.
 	viewModeRefDeleteConfirm
 	// viewModeLocalChanges replaces the graph view with a file-tree + diff
-	// layout for working-tree work. The top dashboard stays put so the
-	// branch context is unchanged across the toggle. Entered via the `,`
-	// keybind.
+	// layout for working-tree work. Entered via the `,` keybind.
 	viewModeLocalChanges
 	// viewModeWorktreeAddInput hosts the branch-name textinput for the
 	// add-worktree action, triggered by `a` on a worktree row in the
@@ -112,6 +105,11 @@ const (
 	// arms viewModeRefDeleteConfirm against that branch — the delete-branch
 	// chain stays single-codepath with the refs-pane inline d.
 	viewModeBranchesModal
+	// viewModeWorktreesModal hosts the centered overlay listing every
+	// worktree. Entered via `w` from viewModeNormal — same pattern as the
+	// branches modal. enter switches, a/d reuse the existing add-input /
+	// remove-confirm sub-modals, s toggles last-commit sort.
+	viewModeWorktreesModal
 )
 
 // pendingCheckout remembers what the user was trying to check out so the
@@ -239,10 +237,9 @@ type Model struct {
 	// branchesModal backs viewModeBranchesModal. Cursor indexes into
 	// m.refs.LocalRefs() at modal-open time. Reset on esc.
 	branchesModal branchesModalState
-	// dashboardFocus backs the top-dashboard focus mode (paneDashboard).
-	// Cursor indexes into m.refs.Worktrees() at focus-on time. Reset to
-	// zero on focus-off.
-	dashboardFocus dashboardFocusState
+	// worktreesModal backs viewModeWorktreesModal. Cursor indexes into
+	// m.modalWorktrees() at modal-open time. Reset to zero on close.
+	worktreesModal worktreesModalState
 	// pendingRefDelete backs viewModeRefDeleteConfirm. Stamped on `d`
 	// keypress with the cursor's local-branch name; the inline-confirm
 	// renderer / key router reads it without re-deriving from refs.
@@ -352,7 +349,6 @@ func (m Model) Init() tea.Cmd {
 		loadRefsCmd(m.workdir),
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 		loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
-		loadLocalChangesSummaryCmd(m.workdir),
 	)
 }
 
@@ -442,9 +438,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		localChangesAddSucceededMsg,
 		localChangesAddFailedMsg,
 		localChangesRestoreSucceededMsg,
-		localChangesRestoreFailedMsg,
-		localChangesSummaryLoadedMsg,
-		localChangesSummaryFailedMsg:
+		localChangesRestoreFailedMsg:
 		return m.updateLocalChangesMsg(msg)
 	}
 	return m, nil
@@ -475,7 +469,7 @@ func (m Model) handleCtrlC() (Model, tea.Cmd) {
 // applyPaneSizes recomputes the inner content dimensions for every sub-model
 // from the current width/height. refs is a pure storage model
 // post-sidebar-shell-subtract, so it owns no size of its own — the
-// dashboard reads m.refs directly with the width handed to it by View.
+// modal reads m.refs directly at render time.
 func (m *Model) applyPaneSizes() {
 	s := m.paneSizes()
 	m.graph.SetSize(s.graphW, s.graphH)
@@ -493,7 +487,7 @@ func (m *Model) enterLocalChangesMode() tea.Cmd {
 	m.focused = paneGraph
 	m.localChanges.SetFocus(paneLCTree)
 	m.applyPaneSizes()
-	return tea.Batch(loadStatusCmd(m.workdir), loadLocalChangesSummaryCmd(m.workdir))
+	return loadStatusCmd(m.workdir)
 }
 
 // exitLocalChangesMode flips back to the normal layout. Entries / cursor
@@ -699,9 +693,8 @@ func (m *Model) reloadCmd() tea.Cmd {
 
 // paneSizes holds the inner content dimensions for each rendered box. The
 // outer (bordered) widths/heights are content + 2 along each axis. The
-// layout stacks the top dashboard above the graph, full terminal width.
+// graph fills the full terminal; worktrees live behind the `w` modal.
 type paneSizes struct {
-	dashW, dashH   int
 	graphW, graphH int
 	// lcTreeW/H, lcDiffW/H carry the in-mode split when mode ==
 	// viewModeLocalChanges. Zero in any other mode — graphW/H stays
@@ -729,37 +722,13 @@ func (m Model) paneSizes() paneSizes {
 		mainH = 1
 	}
 	// Sidebar retired in PR B2; the bottom tab pane retired with the
-	// subtract-bottom-pane change. The dashboard (top) + graph now stack
-	// vertically across the full terminal width. Each box claims 2 cols
-	// of border around its content.
+	// subtract-bottom-pane change; the top dashboard retired with the
+	// worktrees-modal change. The graph owns the whole main area, full
+	// terminal width. Each box claims 2 cols of border around its content.
 	outerW := m.width
-
-	// Dashboard: header + N worktree rows + separator + 2 border rows.
-	// Data-driven; 0 (no dashboard) when there are no worktrees yet.
-	var dashOuterH int
-	if inner := dashboardLines(m); inner > 0 {
-		dashOuterH = inner + 2
-		if dashOuterH > mainH-3 {
-			// Never starve the graph; cap the dashboard so the graph
-			// gets ≥3 outer rows.
-			dashOuterH = mainH - 3
-			if dashOuterH < 0 {
-				dashOuterH = 0
-			}
-		}
-	}
-	graphOuterH := mainH - dashOuterH
+	graphOuterH := mainH
 	if graphOuterH < 3 {
 		graphOuterH = 3
-	}
-
-	s.dashW = outerW - 2
-	s.dashH = dashOuterH - 2
-	if s.dashW < 1 {
-		s.dashW = 1
-	}
-	if s.dashH < 0 {
-		s.dashH = 0
 	}
 
 	s.graphW = outerW - 2
@@ -980,13 +949,7 @@ func (m Model) View() string {
 		diffBox := boxStyle(diffFocused).Width(s.lcDiffW).Height(s.lcDiffH).Render(m.localChanges.DiffView())
 		main = lipgloss.JoinHorizontal(lipgloss.Top, treeBox, diffBox)
 	} else {
-		graphBox := boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
-		if s.dashH > 0 {
-			dashBox := boxStyle(m.focused == paneDashboard).Width(s.dashW).Height(s.dashH).Render(renderTopDashboard(m, s.dashW))
-			main = lipgloss.JoinVertical(lipgloss.Left, dashBox, graphBox)
-		} else {
-			main = graphBox
-		}
+		main = boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
 	}
 	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
 
@@ -1003,6 +966,8 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderWorktreeRemoveConfirmInner()), m.width, m.height)
 	case viewModeZombieCleanupConfirm:
 		return composeOverlay(base, renderModalBox(m.renderZombieCleanupConfirmInner()), m.width, m.height)
+	case viewModeWorktreesModal:
+		return composeOverlay(base, renderModalBox(m.renderWorktreesModalInner()), m.width, m.height)
 	}
 	return base
 }

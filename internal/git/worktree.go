@@ -181,7 +181,7 @@ func isWorktreeLocked(stderr string) bool {
 //
 // A worktree with no commits yet (unborn HEAD — a fresh `worktree add -b`)
 // or a bare worktree makes `git log -1` exit non-zero; that is reported as
-// an empty result (`"", time.Time{}, nil`), not a failure, so the dashboard
+// an empty result (`"", time.Time{}, nil`), not a failure, so the modal
 // renders a blank last-commit column instead of spamming the status bar.
 // The callers here only ever pass paths that came from `git worktree list`,
 // so a non-deadline exit is the no-commits / bare case rather than a broken

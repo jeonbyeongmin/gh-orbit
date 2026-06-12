@@ -20,7 +20,7 @@ detail.
 - [branches.md](branches.md) — `n` / `d` / `m` modals for create /
   delete / rename, key matrix, modal mechanics. The "agent left a
   pile of branches behind" cleanup surface.
-- [worktrees.md](worktrees.md) — top dashboard's `w` focus mode for
+- [worktrees.md](worktrees.md) — the `w` worktrees modal for
   list / switch / add / remove, in-process switch + dirty fan-out.
   The "agent occupies worktree A, reviewer inspects worktree B" surface.
 

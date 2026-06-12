@@ -13,16 +13,31 @@ import (
 // neighbor).
 const cellWidth = 2
 
-// laneStyles is the 6-color rotation, pre-built once so per-cell rendering
+// laneStyles is the 8-color rotation, pre-built once so per-cell rendering
 // reuses the same Style instance instead of re-allocating on every row.
+// Hues are ordered so rotation neighbors stay far apart on the wheel — an
+// 8-lane repo never puts two similar colors side by side.
 var laneStyles = []lipgloss.Style{
 	lipgloss.NewStyle().Foreground(lipgloss.Color("212")), // pink
-	lipgloss.NewStyle().Foreground(lipgloss.Color("215")), // orange
-	lipgloss.NewStyle().Foreground(lipgloss.Color("228")), // yellow
-	lipgloss.NewStyle().Foreground(lipgloss.Color("120")), // green
 	lipgloss.NewStyle().Foreground(lipgloss.Color("117")), // cyan
+	lipgloss.NewStyle().Foreground(lipgloss.Color("215")), // orange
+	lipgloss.NewStyle().Foreground(lipgloss.Color("120")), // green
 	lipgloss.NewStyle().Foreground(lipgloss.Color("183")), // lavender
+	lipgloss.NewStyle().Foreground(lipgloss.Color("228")), // yellow
+	lipgloss.NewStyle().Foreground(lipgloss.Color("75")),  // blue
+	lipgloss.NewStyle().Foreground(lipgloss.Color("168")), // rose
 }
+
+// commitGlyph / mergeGlyph / headGlyph are the three commit-dot weights:
+// a regular commit is solid, a merge commit is hollow (it's plumbing —
+// the interesting work lives on the replayed/merged commits), and the
+// HEAD row's dot is swapped to ◉ at render time by the delegate. All are
+// single-cell.
+const (
+	commitGlyph = "●"
+	mergeGlyph  = "○"
+	headGlyph   = "◉"
+)
 
 // glyphFor maps a CellKind to its single-rune glyph. All glyphs are width 1
 // so cellWidth = glyph + trailing — the trailing char is decided by
@@ -31,7 +46,7 @@ var laneStyles = []lipgloss.Style{
 func glyphFor(k lanes.CellKind) string {
 	switch k {
 	case lanes.CellCommit:
-		return "●"
+		return commitGlyph
 	case lanes.CellPipe:
 		return "│"
 	case lanes.CellHoriz:
@@ -94,7 +109,11 @@ func isLeftOpen(k lanes.CellKind) bool  { return cellSides[k].left }
 // The trailing column for each cell is `─` when both this cell and the
 // next one have their facing sides open (e.g., `├` followed by `╮`); else
 // it's a plain space.
-func renderGraphRow(row lanes.Row) (text string, visualWidth int) {
+//
+// merge=true renders the row's commit cell hollow (mergeGlyph) — passed by
+// the stream collector for 2+-parent commits; connector rows carry no
+// commit cell so their callers pass false.
+func renderGraphRow(row lanes.Row, merge bool) (text string, visualWidth int) {
 	if len(row.Cells) == 0 {
 		return "", 0
 	}
@@ -118,7 +137,11 @@ func renderGraphRow(row lanes.Row) (text string, visualWidth int) {
 			continue
 		}
 		style := laneStyles[laneColorIdx(cell.Lane)]
-		b.WriteString(style.Render(glyphFor(cell.Kind)))
+		glyph := glyphFor(cell.Kind)
+		if merge && cell.Kind == lanes.CellCommit {
+			glyph = mergeGlyph
+		}
+		b.WriteString(style.Render(glyph))
 
 		// Trailing column: ─ if this cell connects right and the next
 		// cell connects left; else a plain space.

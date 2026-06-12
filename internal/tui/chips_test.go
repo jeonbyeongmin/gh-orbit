@@ -238,3 +238,33 @@ func TestBuildChipsPRBadgeSurvivesNameTruncation(t *testing.T) {
 		t.Errorf("plain=%q should keep the PR badge after the truncated name", plain)
 	}
 }
+
+func TestBuildChipsPRBadgeTwoToneSegment(t *testing.T) {
+	prs := map[string]prInfo{"feat-x": {Number: 86, Checks: prChecksPending}}
+	s, _ := buildChips([]string{"feat-x"}, prs, false, false)
+	// 배지 tail 은 칩 본체와 다른 bg(236) + 상태색 fg(pending 214) 를 가진
+	// 별도 세그먼트여야 한다.
+	if !strings.Contains(s, "48;5;236") {
+		t.Errorf("badge tail should use bg 236, got %q", s)
+	}
+	if !strings.Contains(s, "38;5;214") {
+		t.Errorf("pending badge should use fg 214, got %q", s)
+	}
+	// 칩 본체 bg(local 39) 도 여전히 존재해야 한다 — two-tone 의 양쪽.
+	if !strings.Contains(s, "48;5;39") {
+		t.Errorf("name segment should keep local chip bg 39, got %q", s)
+	}
+}
+
+func TestBuildChipsPRBadgeFlattensWhenSelected(t *testing.T) {
+	prs := map[string]prInfo{"feat-x": {Number: 86, Checks: prChecksPassing}}
+	s, _ := buildChips([]string{"feat-x"}, prs, true, false)
+	plain := ansi.Strip(s)
+	// selected 행은 단일 색으로 평탄화 — 배지 텍스트는 남고 bg 236 은 사라진다.
+	if !strings.Contains(plain, "#86✓") {
+		t.Errorf("flattened chip should keep badge text, got %q", plain)
+	}
+	if strings.Contains(s, "48;5;236") {
+		t.Errorf("selected chip must not keep the badge bg, got %q", s)
+	}
+}

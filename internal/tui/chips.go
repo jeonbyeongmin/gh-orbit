@@ -27,6 +27,16 @@ const (
 	// name doesn't push the subject off the row. Branch names longer than
 	// this are truncated to "long-branch-na…".
 	maxChipTextWidth = 20
+
+	// PR badge segment: a dark tail attached to the branch chip, with the
+	// foreground carrying the CI verdict. The bg sits between colorDim
+	// (240) and the row background so the badge reads as part of the chip
+	// without competing with the chip's own bg color.
+	colorBadgeBG      = "236"
+	colorBadgePass    = "114" // green — checks passed
+	colorBadgeFail    = "203" // red — matches statusErrS
+	colorBadgePending = "214" // orange — matches statusBusyS
+	colorBadgeNone    = "250" // neutral — open PR, no checks
 )
 
 func newChipStyle(bg, fg string) lipgloss.Style {
@@ -43,6 +53,11 @@ var (
 	chipMoreStyle     = newChipStyle(colorChipMore, colorChipFG)
 	chipSelectedStyle = newChipStyle(colorSelected, colorChipFG)
 	chipDimStyle      = newChipStyle(colorDim, colorChipFG)
+
+	badgePassStyle    = newChipStyle(colorBadgeBG, colorBadgePass)
+	badgeFailStyle    = newChipStyle(colorBadgeBG, colorBadgeFail)
+	badgePendingStyle = newChipStyle(colorBadgeBG, colorBadgePending)
+	badgeNoneStyle    = newChipStyle(colorBadgeBG, colorBadgeNone)
 )
 
 // pairedPrefix is rendered inside the paired-local chip text, just before the
@@ -99,7 +114,25 @@ func buildChips(refNames []string, prs map[string]prInfo, selected, dim bool) (s
 	}
 
 	for _, c := range visible {
-		add(chipDisplay(c, prs), chipStyleFor(c))
+		name := chipDisplay(c)
+		pr, hasPR := prForChip(c, prs)
+		if !hasPR {
+			add(name, chipStyleFor(c))
+			continue
+		}
+		badge := prBadge(pr)
+		if override != nil {
+			// selected/dim flatten the whole row to one color — render
+			// the badge inline so the two-tone split doesn't fight the
+			// override.
+			add(name+" "+badge, chipStyleFor(c))
+			continue
+		}
+		// Two-tone chip: branch-colored name segment + dark badge tail
+		// whose fg carries the CI verdict.
+		b.WriteString(chipStyleFor(c).Render(name))
+		b.WriteString(badgeStyleFor(pr.Checks).Render(badge))
+		totalW += runewidth.StringWidth(name) + runewidth.StringWidth(badge) + 4
 	}
 	if overflow > 0 {
 		add(fmt.Sprintf("+%d", overflow), chipMoreStyle)
@@ -122,21 +155,30 @@ func chipStyleFor(c git.ChipRef) lipgloss.Style {
 	}
 }
 
-func chipDisplay(c git.ChipRef, prs map[string]prInfo) string {
+func chipDisplay(c git.ChipRef) string {
 	name := c.DisplayName
 	if runewidth.StringWidth(name) > maxChipTextWidth {
 		name = runewidth.Truncate(name, maxChipTextWidth, "…")
-	}
-	if pr, ok := prForChip(c, prs); ok {
-		// The badge survives name truncation — the PR number + CI verdict
-		// is the part a reviewer scans for, the branch name is recoverable
-		// from context.
-		name += " " + prBadge(pr)
 	}
 	if c.PairedRemote {
 		return pairedPrefix + name
 	}
 	return name
+}
+
+// badgeStyleFor picks the badge tail's style by CI verdict — shared dark
+// bg, verdict-colored fg.
+func badgeStyleFor(s prCheckState) lipgloss.Style {
+	switch s {
+	case prChecksPassing:
+		return badgePassStyle
+	case prChecksFailing:
+		return badgeFailStyle
+	case prChecksPending:
+		return badgePendingStyle
+	default:
+		return badgeNoneStyle
+	}
 }
 
 // prForChip resolves the open PR (if any) whose head branch this chip

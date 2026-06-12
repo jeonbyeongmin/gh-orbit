@@ -10,7 +10,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -95,8 +94,8 @@ func (m Model) beginBranchesModalDelete() (Model, tea.Cmd) {
 
 // renderBranchesModalInner returns the centered overlay content: bold
 // header, scroll-windowed list with `>` cursor and `←` HEAD marker, and
-// the action hint. Window math mirrors renderBranchPickerInner so the
-// scrolling feel stays uniform across modals.
+// the action hint. Window math is shared with renderBranchPickerInner via
+// renderScrollWindow so the scrolling feel stays uniform across modals.
 func (m Model) renderBranchesModalInner() string {
 	locals := m.refs.LocalRefs()
 	header := modalHeaderS.Render("[Branches]")
@@ -113,38 +112,21 @@ func (m Model) renderBranchesModalInner() string {
 	if len(locals) < visibleRows {
 		visibleRows = len(locals)
 	}
-	top := m.branchesModal.cursor - visibleRows/2
-	if top < 0 {
-		top = 0
-	}
-	end := top + visibleRows
-	if end > len(locals) {
-		end = len(locals)
-		top = end - visibleRows
-		if top < 0 {
-			top = 0
-		}
-	}
 
 	lines := []string{header}
-	if top > 0 {
-		lines = append(lines, help.Render(fmt.Sprintf("↑ %d more", top)))
-	}
-	for i := top; i < end; i++ {
-		ref := locals[i]
-		label := ref.ShortName
-		if ref.IsHead {
-			label = label + " ←"
-		}
-		if i == m.branchesModal.cursor {
-			lines = append(lines, selectedStyle.Render("> "+label))
-		} else {
-			lines = append(lines, "  "+label)
-		}
-	}
-	if rest := len(locals) - end; rest > 0 {
-		lines = append(lines, help.Render(fmt.Sprintf("↓ %d more", rest)))
-	}
+	lines = append(lines, renderScrollWindow(
+		m.branchesModal.cursor-visibleRows/2, visibleRows, len(locals),
+		func(i int) string {
+			ref := locals[i]
+			label := ref.ShortName
+			if ref.IsHead {
+				label = label + " ←"
+			}
+			if i == m.branchesModal.cursor {
+				return selectedStyle.Render("> " + label)
+			}
+			return "  " + label
+		})...)
 	lines = append(lines, help.Render(helpTextBranchesModal))
 	return strings.Join(lines, "\n")
 }

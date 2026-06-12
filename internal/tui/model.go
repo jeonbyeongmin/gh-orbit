@@ -1691,33 +1691,16 @@ func (m Model) renderBranchPickerInner() string {
 	if visibleRows < 1 {
 		visibleRows = 1
 	}
-	top := m.branchPicker.viewportTop
-	if top < 0 {
-		top = 0
-	}
-	end := top + visibleRows
-	if end > len(m.branchPicker.candidates) {
-		end = len(m.branchPicker.candidates)
-		top = end - visibleRows
-		if top < 0 {
-			top = 0
-		}
-	}
 
 	lines := []string{modalHeaderS.Render("[Branch select]")}
-	if top > 0 {
-		lines = append(lines, help.Render(fmt.Sprintf("↑ %d more", top)))
-	}
-	for i := top; i < end; i++ {
-		if i == m.branchPicker.cursor {
-			lines = append(lines, selectedStyle.Render("> "+m.branchPicker.candidates[i]))
-		} else {
-			lines = append(lines, "  "+m.branchPicker.candidates[i])
-		}
-	}
-	if rest := len(m.branchPicker.candidates) - end; rest > 0 {
-		lines = append(lines, help.Render(fmt.Sprintf("↓ %d more", rest)))
-	}
+	lines = append(lines, renderScrollWindow(
+		m.branchPicker.viewportTop, visibleRows, len(m.branchPicker.candidates),
+		func(i int) string {
+			if i == m.branchPicker.cursor {
+				return selectedStyle.Render("> " + m.branchPicker.candidates[i])
+			}
+			return "  " + m.branchPicker.candidates[i]
+		})...)
 	lines = append(lines, help.Render(helpTextBranchPicker))
 
 	return strings.Join(lines, "\n")

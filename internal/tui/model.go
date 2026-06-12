@@ -155,15 +155,6 @@ type Model struct {
 	refs          refModel
 	graph         graphModel
 	diff          diffModel
-	// spinnerFrame is the Braille frame index for "running" agent markers.
-	// Read by the dashboard row; advanced by the gated agentSpinnerTickMsg
-	// (which only runs while a worktree is actually running).
-	spinnerFrame int
-	// spinnerTicking guards the spinner tick lineage: the gated start (in the
-	// agentSessionPollMsg handler) arms a new tick only when this is false, and
-	// the tick handler is the sole re-arm site — so exactly one lineage is ever
-	// in flight, mirroring the agentSessionTickMsg discipline.
-	spinnerTicking bool
 	// statusTickSeq counts every status line that arms a tea.Tick auto-clear
 	// (today: the switch-confirmation in switchWorktree). The dispatcher
 	// captures the value at send time; on receipt the handler only clears
@@ -362,7 +353,6 @@ func (m Model) Init() tea.Cmd {
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 		loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 		loadLocalChangesSummaryCmd(m.workdir),
-		agentSessionTickCmd(),
 	)
 }
 
@@ -401,9 +391,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		worktreeWatchedChangeMsg,
 		worktreesLoadFailedMsg,
 		worktreeDirtyResultMsg,
-		agentSessionTickMsg,
-		agentSessionPollMsg,
-		agentSpinnerTickMsg,
 		worktreeAddSucceededMsg,
 		worktreeAddFailedMsg,
 		worktreeRemoveSucceededMsg,

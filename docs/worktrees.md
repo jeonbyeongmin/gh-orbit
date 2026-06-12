@@ -33,18 +33,15 @@ Layout (N=4 example):
   The Local Changes meta carries `N files · +X -Y · Zm ago` when the
   working tree is dirty (numstat against HEAD + load wall clock); empty
   working tree drops the meta. On narrow widths the label wins.
-- **Worktree row** — `name · ⠋ · branch · ● · subject · time`. `name` is
+- **Worktree row** — `name · branch · ● · subject · time`. `name` is
   the basename of the worktree path, capped at **24** cells (a long
   branch-shaped name would otherwise swallow the row) and padded to the
   widest name in the current set so the columns after it line up across
-  rows. When any tree carries an agent marker the agent column is held to a
-  fixed 1 cell on every row — the glyph where present, a blank placeholder
-  otherwise — so the branch column stays aligned. Both alignments yield to
-  information density on a terminal too narrow to spare the padding. The
+  rows. The alignment yields to information density on a terminal too
+  narrow to spare the padding. The
   current entry (the one `m.workdir` lives in) prefixes with `▶` + bold +
   select color so the user knows which context the rest of the cockpit
-  describes. The Braille glyph reports the Claude Code agent-session state on
-  that tree (see **Agent-session marker**). `subject` +
+  describes. `subject` +
   `time` are the worktree HEAD's last-commit summary (see **Last-commit
   column**) — graph only ever shows the *current* tree's commits, so the
   row carries the others' last activity without a switch.
@@ -69,21 +66,19 @@ probe — see **Dirty fan-out**).
 
 Width-adaptive degradation, since the dashboard stacks full-width above
 the graph and the band's height is capped so the graph never starves.
-Display order is `▶ name · ⠋ · branch · ● · subject · time`; columns are
+Display order is `▶ name · branch · ● · subject · time`; columns are
 allocated in **keep-priority** order — each takes space only if it (plus
 its separator) still fits, but a column that doesn't fit is skipped while
 smaller lower-priority columns still claim the leftover, so a too-long
 `subject` never leaves the row half-empty. Keep-priority, highest first:
 
 1. `name` — always survives (capped + padded as above).
-2. agent-session marker — offered space first after the name (highest-value
-   review signal; a single Braille cell).
-3. `branch`
-4. `subject` — hidden whenever fewer than **12** columns remain for it (a
+2. `branch`
+3. `subject` — hidden whenever fewer than **12** columns remain for it (a
    1–2 char fragment is useless); when shown it takes its own width up to a
    **30**-column cap.
-5. `●` dirty marker
-6. `time`
+4. `●` dirty marker
+5. `time`
 
 So `subject` and `branch` outlive the small `●` / `time` columns under
 width pressure (the inversion the redesign fixed: a long name used to push
@@ -282,7 +277,7 @@ load drops on arrival:
   the worktree reqID and dispatches the inventory + fan-out together.
 - Local Changes `stage` / `unstage` success (explicit, in addition to
   their own status reload — needed for the dashboard `●` to flip).
-- **External git op** (another shell, another worktree's agent session)
+- **External git op** (another shell, another worktree)
   — each known worktree's `.git/HEAD` and `.git/index` are watched via
   fsnotify; a 200ms trailing debounce coalesces burst writes (commit,
   rebase) into one refresh. The watcher emits
@@ -305,87 +300,6 @@ sandboxed env), the cockpit silent-degrades: status paints `external
 watch unavailable — use 'r' to refresh` once, and the rest of the
 refresh trigger list above keeps working. Manual `r` is always
 sufficient — the watcher is an *optional* convenience layer over it.
-
-## Agent-session marker (⠋ / ⠿)
-
-A marker on a worktree row reports the state of a Claude Code agent session
-on that tree — the cockpit's "which worktree is an agent in right now, and
-does it need me?" answer. It joins the row's `·`-separated columns right
-after the name: `▶ name · ⠋ · branch · ● · subject · time`, and is the
-**last** fixed column dropped under width pressure (drop order subject →
-branch → time → ● → agent) because it's the highest-value review signal;
-`▶ name` always survives. There are four states (`agentState`), each a
-single-cell Braille glyph so the column never shifts the row layout:
-
-- **running** — animated spinner (`⠋⠙⠹…`, green): the agent is actively
-  working (last transcript entry is a `tool_use` turn or an incoming `user`
-  message).
-- **parked** — static `⠿` (orange): the agent finished its turn
-  (`end_turn`) and is awaiting your input. This is the "it's your move" row.
-- **unknown-active** — static dim `⠂`: the transcript is fresh but its state
-  couldn't be parsed (schema drift) — a v1-level "something's here" fallback.
-- **none** — no marker: no transcript within `agentSessionFreshness` (10m).
-
-**Detection** lives in `internal/tui/agentsession.go`, not `internal/git/`
-— it's not a git concern. Sessions are located by slug: `<slug>` is the
-worktree's absolute path with every non-alphanumeric byte replaced by `-`
-(`agentSessionSlug`), under `~/.claude/projects/<slug>/*.jsonl`.
-`agentStateForWorktree` takes the **newest** such transcript; its mtime
-still drives presence / staleness (the 10m window doubles as
-stale-correction — an ended session's marker ages out on its own). When
-fresh, it then **seek-reads** that transcript (never the whole file — active
-ones reach 220KB+): the last `agentTranscriptWindow` (16KB) tail decides
-running vs parked from the last assistant/user entry, and the head confirms
-the session's `worktree-state.worktreeSession.worktreePath` matches this row
-(see Slug collision below). Only the slug dir's direct `*.jsonl` files count
-— nested `…/subagents/*.jsonl` are deliberately ignored (a session-count /
-subagent badge is a separate backlog).
-
-**Refresh** has two decoupled lineages:
-
-- **State poll** — a `agentSessionPollInterval` (30s) self-rearming
-  `tea.Tick` (`agentSessionTickCmd` → `agentSessionPollCmd` →
-  `agentSessionPollMsg` re-arms). Not wired into the `loadWorktreesCmd`
-  triggers above: the signal lives outside the worktree's `.git`, so the
-  fsnotify watcher can't see it, and the read-only poll stays decoupled from
-  the `git status` dirty fan-out (no 3s budget, no index locks). Because
-  state is judged only every 30s, a running→parked transition surfaces on
-  the next poll, not instantly.
-- **Spinner tick** — a separate `agentSpinnerInterval` (100ms) tick that only
-  advances the running glyph's frame. It is **gated**: the poll handler arms
-  it solely when a worktree is running and not already ticking, and the tick
-  handler (the sole re-arm site) re-arms only while `AnyAgentRunning` holds,
-  dying to idle once nothing is running. So an idle cockpit re-renders zero
-  times — the animation cost exists only while an agent is actually working.
-
-**Fragility / silent-degrade**: the `<slug>` scheme and the transcript
-schema (`type`, `message.stop_reason`, `worktree-state`) are *undocumented*
-Claude Code internals. Every failure degrades safely: an unreadable home
-dir / absent transcript / stale mtime → **none**; a fresh transcript whose
-state can't be parsed → **unknown-active** (never a regression below the v1
-"something's here"). Process + cwd matching was rejected: background-job and
-desktop-app sessions keep their process cwd at the repo root, never the
-worktree, so they're invisible to a cwd match.
-
-State of the two slug-scheme limitations:
-
-- **Slug collision → false positive (mitigated).** `agentSessionSlug`
-  collapses *every* non-alphanumeric byte to `-`, so two sibling worktrees
-  whose paths differ only by punctuation (e.g. `…/feat-x` and `…/feat+x`,
-  exactly how a `feat-x` branch and a `feat/x` branch's auto-named worktree
-  dirs land) map to the *same* `<slug>` and share a transcript dir. The
-  head-scan `worktreePath` confirm now suppresses the wrong tree: a transcript
-  whose recorded `worktreePath` disagrees with the row reads as **none**. An
-  *absent* `worktree-state` entry (older sessions) can't be confirmed, so the
-  slug locate is trusted as before — collision then falls back to the v1
-  behavior rather than hiding a real session.
-- **Symlinked path → false negative (still inherent).** The slug is computed
-  from the path `git worktree list` reports. If the repo lives under a symlink
-  (macOS `/tmp`→`/private/tmp`, `/var`→`/private/var`, a symlinked `$HOME` or
-  Volume) and Claude Code recorded its `~/.claude/projects/<slug>` from the
-  *resolved* cwd, the two slugs differ, `os.ReadDir` misses, and no marker
-  renders for a live agent — indistinguishable from "no agent". Resolving this
-  (path normalization on both sides) is tracked in a separate backlog.
 
 ## Scope: v1 explicitly excludes
 

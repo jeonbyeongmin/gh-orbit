@@ -380,7 +380,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusBusyS
 		return m, pullCmd(m.workdir, m.pullPrefStrategy)
 	case "r":
-		return m, m.reloadCmd()
+		// Manual reload also refreshes the PR badges — unlike the internal
+		// reloadCmd callers (watcher, post-checkout), `r` is the user
+		// saying "show me current state".
+		return m, tea.Batch(m.reloadCmd(), m.dispatchPRList())
 	case ",":
 		cmd := m.enterLocalChangesMode()
 		m.status = "local changes"
@@ -402,8 +405,8 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Push the current branch (first push auto-sets upstream).
 		return m.beginPush()
 	case "o":
-		// Open the cursor commit on GitHub.
-		return m.beginBrowse()
+		// Open the cursor row's open PR on GitHub (chip badge rows only).
+		return m.beginBrowsePR()
 	case "Z":
 		// Zombie-branch cleanup is a global action now that the sidebar
 		// is gone — the previous paneRefs focus gate had no meaningful

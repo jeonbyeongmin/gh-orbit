@@ -58,8 +58,9 @@ const pairedPrefix = "☁ "
 // Layout: up to 2 body chips + optional "+M" overflow chip. selected
 // paints every chip with the cursor color; dim swaps every kind to a
 // neutral grey so above-HEAD rows still show chip silhouettes. selected
-// wins when both apply.
-func buildChips(refNames []string, selected, dim bool) (string, int) {
+// wins when both apply. prs (head branch → open PR) appends a ` #N✓`-style
+// badge inside the matching branch chip; nil/empty draws no badges.
+func buildChips(refNames []string, prs map[string]prInfo, selected, dim bool) (string, int) {
 	refs, _ := git.ParseDecoration(refNames)
 	chips := git.MergeLocalRemotePairs(refs)
 	if len(chips) == 0 {
@@ -98,7 +99,7 @@ func buildChips(refNames []string, selected, dim bool) (string, int) {
 	}
 
 	for _, c := range visible {
-		add(chipDisplay(c), chipStyleFor(c))
+		add(chipDisplay(c, prs), chipStyleFor(c))
 	}
 	if overflow > 0 {
 		add(fmt.Sprintf("+%d", overflow), chipMoreStyle)
@@ -121,13 +122,55 @@ func chipStyleFor(c git.ChipRef) lipgloss.Style {
 	}
 }
 
-func chipDisplay(c git.ChipRef) string {
+func chipDisplay(c git.ChipRef, prs map[string]prInfo) string {
 	name := c.DisplayName
 	if runewidth.StringWidth(name) > maxChipTextWidth {
 		name = runewidth.Truncate(name, maxChipTextWidth, "…")
+	}
+	if pr, ok := prForChip(c, prs); ok {
+		// The badge survives name truncation — the PR number + CI verdict
+		// is the part a reviewer scans for, the branch name is recoverable
+		// from context.
+		name += " " + prBadge(pr)
 	}
 	if c.PairedRemote {
 		return pairedPrefix + name
 	}
 	return name
+}
+
+// prForChip resolves the open PR (if any) whose head branch this chip
+// names. Remote chips match after their remote prefix is stripped —
+// `origin/feat-x` and `feat-x` carry the same PR. Tags never match.
+func prForChip(c git.ChipRef, prs map[string]prInfo) (prInfo, bool) {
+	if len(prs) == 0 {
+		return prInfo{}, false
+	}
+	switch c.Kind {
+	case git.RefKindLocal:
+		pr, ok := prs[c.DisplayName]
+		return pr, ok
+	case git.RefKindRemote:
+		if i := strings.IndexByte(c.DisplayName, '/'); i >= 0 {
+			pr, ok := prs[c.DisplayName[i+1:]]
+			return pr, ok
+		}
+	}
+	return prInfo{}, false
+}
+
+// prBadge renders the in-chip PR marker: number + 1-cell CI glyph. No
+// glyph when the PR has no checks — `#N` alone still says "has an open
+// PR", which is the load-bearing bit.
+func prBadge(pr prInfo) string {
+	badge := fmt.Sprintf("#%d", pr.Number)
+	switch pr.Checks {
+	case prChecksPassing:
+		badge += "✓"
+	case prChecksFailing:
+		badge += "✗"
+	case prChecksPending:
+		badge += "○"
+	}
+	return badge
 }

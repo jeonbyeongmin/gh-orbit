@@ -47,7 +47,7 @@ var helpCategories = []helpCategory{
 			{"R", "rebase onto cursor"},
 			{"c", "cherry-pick cursor"},
 			{"n", "new branch @ cursor"},
-			{"o", "open on GitHub"},
+			{"o", "open PR on GitHub"},
 			{"d", "patch overlay"},
 			{"y", "copy hash"},
 		},

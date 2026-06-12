@@ -199,6 +199,15 @@ type Model struct {
 	// user can tell whether the refs view is stale. Zero value = "never
 	// fetched"; the footer stays blank until the first attempt.
 	lastFetchAt time.Time
+	// prs is the head-branch → open-PR map behind the chip PR badges and
+	// the `O` key. Loaded by `gh pr list` at startup, on `r`, and after
+	// every successful fetch — the same cadence the user already expects
+	// remote state to refresh on. Nil until the first load lands.
+	prs map[string]prInfo
+	// prsInFlight gates PR-list dispatches so an F-spam can't stack
+	// parallel `gh pr list` calls (and a slow older reply can't overwrite
+	// a newer one). New() arms it because Init always dispatches.
+	prsInFlight bool
 	// pullInFlight gates the p key. Tracked separately from fetchInFlight so
 	// F + P can run in parallel; git's own .git/index.lock is the real
 	// serialization point.
@@ -332,6 +341,7 @@ func New() Model {
 		currentRefs:           []string{refsAllSentinel},
 		streamReqID:           1,
 		sidebarWorktreesReqID: 1,
+		prsInFlight:           true, // Init dispatches the first prListCmd
 	}
 	if wd, err := os.Getwd(); err == nil {
 		m.workdir = wd
@@ -383,6 +393,7 @@ func (m Model) Init() tea.Cmd {
 		loadRefsCmd(m.workdir),
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 		loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
+		prListCmd(m.workdir),
 	)
 }
 
@@ -456,13 +467,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		branchCreateFailedMsg,
 		pushSucceededMsg,
 		pushFailedMsg,
-		browseOpenedMsg,
-		browseFailedMsg:
+		browseFailedMsg,
+		prBrowseOpenedMsg:
 		return m.updateCheckoutMsg(msg)
 
 	case tea.FocusMsg,
 		fetchSucceededMsg,
 		fetchFailedMsg,
+		prsLoadedMsg,
+		prsLoadFailedMsg,
 		pullSucceededMsg,
 		pullConflictMsg,
 		pullFailedMsg:
@@ -740,6 +753,19 @@ func (m *Model) reloadCmd() tea.Cmd {
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 		loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 	)
+}
+
+// dispatchPRList fires prListCmd behind the prsInFlight gate. Returns nil
+// while a list is already loading — callers batch the result only when
+// non-nil. Deliberately not part of reloadCmd: watcher-driven reloads fire
+// on every local commit an agent makes, and local commits don't change PR
+// state — only Init / `r` / a successful fetch do the gh round-trip.
+func (m *Model) dispatchPRList() tea.Cmd {
+	if m.prsInFlight {
+		return nil
+	}
+	m.prsInFlight = true
+	return prListCmd(m.workdir)
 }
 
 // paneSizes holds the inner content dimensions for each rendered box. The

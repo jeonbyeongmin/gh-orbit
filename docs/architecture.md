@@ -52,7 +52,7 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `R`            | graph  | rebase current branch onto cursor (confirm-first; conflicts → terminal) — see [checkout.md](checkout.md) |
 | `c`            | graph  | cherry-pick cursor commit onto current branch (confirm-first; conflicts → terminal) |
 | `n`            | graph  | create branch at cursor + switch (name input modal)                                |
-| `o`            | graph  | open cursor commit on GitHub (`gh browse`)                                          |
+| `o`            | graph  | open the cursor row's open PR on GitHub (`gh pr view --web`; badge rows only)       |
 
 Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `[` / `]` / `esc`. `[` jumps to the previous file header, `]` to the next; both are no-ops past the first / last file (no wrap — surprise jumps make the cockpit harder to read, not easier). The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md).
 
@@ -71,3 +71,5 @@ Bottom hint, single line — just a pressable `? help` token plus the status mes
 ## Commit row
 
 Each commit renders left-to-right: `[graph][message (chips + subject)][author][hash][authored time]`. Hash and authored time are right-anchored and always visible. The message column absorbs truncation; chips and the author column drop (in that order) before the subject is allowed below one cell.
+
+Branch chips carry an open-PR badge when `gh pr list` finds a PR whose head branch matches the chip (remote chips match after their `origin/` prefix is stripped): `#N` plus a 1-cell CI rollup glyph — `✓` passing, `✗` failing, `○` still running, nothing when the PR has no checks. The list refreshes at startup, on `r`, and after every successful fetch/pull; failures (no GitHub remote, logged-out `gh`) go to the runtime log, never the status line — the badge is passive enrichment.

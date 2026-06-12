@@ -9,18 +9,18 @@ import (
 )
 
 func TestBuildChipsEmpty(t *testing.T) {
-	s, w := buildChips(nil, false, false)
+	s, w := buildChips(nil, nil, false, false)
 	if s != "" || w != 0 {
 		t.Errorf("nil: got (%q, %d), want (\"\", 0)", s, w)
 	}
-	s, w = buildChips([]string{}, false, false)
+	s, w = buildChips([]string{}, nil, false, false)
 	if s != "" || w != 0 {
 		t.Errorf("empty: got (%q, %d), want (\"\", 0)", s, w)
 	}
 }
 
 func TestBuildChipsLocalOnly(t *testing.T) {
-	s, w := buildChips([]string{"main"}, false, false)
+	s, w := buildChips([]string{"main"}, nil, false, false)
 	if s == "" || w == 0 {
 		t.Fatalf("got empty result for [main]")
 	}
@@ -30,7 +30,7 @@ func TestBuildChipsLocalOnly(t *testing.T) {
 }
 
 func TestBuildChipsLocalRemotePairCollapses(t *testing.T) {
-	s, _ := buildChips([]string{"HEAD -> main", "origin/main"}, false, false)
+	s, _ := buildChips([]string{"HEAD -> main", "origin/main"}, nil, false, false)
 	plain := ansi.Strip(s)
 	// paired-main chip 만 — HEAD 는 더 이상 chip 으로 그리지 않는다.
 	// "main" 은 한 번만 — pair merging 이 안 됐으면 두 번 등장한다.
@@ -55,8 +55,8 @@ func TestBuildChipsPairedChipPreservesWidth(t *testing.T) {
 	// totalW 가 실제 visible runewidth 와 일치해야 한다 — paired chip 은
 	// chipDisplay 가 이름 앞에 `☁ ` (2 cells) 를 붙이므로 plain 대비 +2 cell
 	// 늘어나고, 그 차이가 totalW 계산에 정확히 반영되어야 한다.
-	pairedRendered, pairedW := buildChips([]string{"main", "origin/main"}, false, false)
-	plainRendered, plainW := buildChips([]string{"feature/x"}, false, false)
+	pairedRendered, pairedW := buildChips([]string{"main", "origin/main"}, nil, false, false)
+	plainRendered, plainW := buildChips([]string{"feature/x"}, nil, false, false)
 
 	if pairedW != runewidth.StringWidth(ansi.Strip(pairedRendered)) {
 		t.Errorf("paired chip totalW (%d) != visible runewidth of stripped output (%q -> %d)",
@@ -76,7 +76,7 @@ func TestBuildChipsPairedChipPreservesWidth(t *testing.T) {
 }
 
 func TestBuildChipsTagStripsPrefix(t *testing.T) {
-	s, _ := buildChips([]string{"tag: v0.0.1"}, false, false)
+	s, _ := buildChips([]string{"tag: v0.0.1"}, nil, false, false)
 	plain := ansi.Strip(s)
 	if !strings.Contains(plain, "v0.0.1") {
 		t.Errorf("plain=%q must contain v0.0.1", plain)
@@ -89,7 +89,7 @@ func TestBuildChipsTagStripsPrefix(t *testing.T) {
 func TestBuildChipsDetachedHeadEmitsNothing(t *testing.T) {
 	// Detached HEAD has only the bare `HEAD` token and no other refs.
 	// HEAD-as-dim-boundary supersedes the chip — buildChips returns nothing.
-	s, w := buildChips([]string{"HEAD"}, false, false)
+	s, w := buildChips([]string{"HEAD"}, nil, false, false)
 	if s != "" || w != 0 {
 		t.Errorf("detached HEAD alone should render no chip; got (%q, %d)", s, w)
 	}
@@ -98,7 +98,7 @@ func TestBuildChipsDetachedHeadEmitsNothing(t *testing.T) {
 func TestBuildChipsHeadArrowSuppressesHEADToken(t *testing.T) {
 	// `HEAD -> main` produces only a `main` chip — the HEAD prefix no longer
 	// emits its own chip slot.
-	s, _ := buildChips([]string{"HEAD -> main"}, false, false)
+	s, _ := buildChips([]string{"HEAD -> main"}, nil, false, false)
 	plain := ansi.Strip(s)
 	if strings.Contains(plain, "HEAD") {
 		t.Errorf("plain=%q must NOT contain HEAD chip", plain)
@@ -109,7 +109,7 @@ func TestBuildChipsHeadArrowSuppressesHEADToken(t *testing.T) {
 }
 
 func TestBuildChipsTruncatesAfterTwoWithoutHead(t *testing.T) {
-	s, _ := buildChips([]string{"a", "b", "c", "d", "e"}, false, false)
+	s, _ := buildChips([]string{"a", "b", "c", "d", "e"}, nil, false, false)
 	plain := ansi.Strip(s)
 	// 첫 두 개 + +3 == 3개 chip. "d" / "e" 는 안 보여야 함.
 	if !strings.Contains(plain, "+3") {
@@ -124,7 +124,7 @@ func TestBuildChipsTruncatesAfterTwoWithoutHead(t *testing.T) {
 }
 
 func TestBuildChipsTruncatesAfterTwoEvenWithHeadInput(t *testing.T) {
-	s, _ := buildChips([]string{"HEAD -> main", "tag: v1", "tag: v2", "tag: v3"}, false, false)
+	s, _ := buildChips([]string{"HEAD -> main", "tag: v1", "tag: v2", "tag: v3"}, nil, false, false)
 	plain := ansi.Strip(s)
 	// HEAD 칩 제거 후 bodyCap=2: main + v1 가 보이고 v2, v3 가 +2 overflow 로 합쳐진다.
 	if strings.Contains(plain, "HEAD") {
@@ -145,7 +145,7 @@ func TestBuildChipsTruncatesAfterTwoEvenWithHeadInput(t *testing.T) {
 }
 
 func TestBuildChipsDropsSymbolicRemoteHead(t *testing.T) {
-	s, _ := buildChips([]string{"HEAD -> develop", "origin/develop", "origin/HEAD"}, false, false)
+	s, _ := buildChips([]string{"HEAD -> develop", "origin/develop", "origin/HEAD"}, nil, false, false)
 	plain := ansi.Strip(s)
 	if strings.Contains(plain, "origin/HEAD") {
 		t.Errorf("origin/HEAD must be dropped; plain=%q", plain)
@@ -154,7 +154,7 @@ func TestBuildChipsDropsSymbolicRemoteHead(t *testing.T) {
 
 func TestBuildChipsTruncatesLongBranchName(t *testing.T) {
 	long := strings.Repeat("a", maxChipTextWidth+10)
-	s, _ := buildChips([]string{long}, false, false)
+	s, _ := buildChips([]string{long}, nil, false, false)
 	plain := ansi.Strip(s)
 	if !strings.Contains(plain, "…") {
 		t.Errorf("long branch name should be truncated with ellipsis; got %q", plain)
@@ -167,7 +167,7 @@ func TestBuildChipsTruncatesLongBranchName(t *testing.T) {
 func TestBuildChipsTruncatedNamePreservesPairPrefix(t *testing.T) {
 	long := strings.Repeat("a", maxChipTextWidth+5)
 	// pair: HEAD -> <long>, origin/<long>
-	s, _ := buildChips([]string{"HEAD -> " + long, "origin/" + long}, false, false)
+	s, _ := buildChips([]string{"HEAD -> " + long, "origin/" + long}, nil, false, false)
 	plain := ansi.Strip(s)
 	// 이름 truncation 은 maxChipTextWidth 한도에서 "…" 로 그대로 동작해야 하고,
 	// paired prefix `☁ ` 는 truncate 와 무관하게 정확히 한 번 등장해야 한다.
@@ -183,13 +183,58 @@ func TestBuildChipsTruncatedNamePreservesPairPrefix(t *testing.T) {
 }
 
 func TestBuildChipsSelectedOverridesBackground(t *testing.T) {
-	unselected, _ := buildChips([]string{"main"}, false, false)
-	selected, _ := buildChips([]string{"main"}, true, false)
+	unselected, _ := buildChips([]string{"main"}, nil, false, false)
+	selected, _ := buildChips([]string{"main"}, nil, true, false)
 	if unselected == selected {
 		t.Errorf("selected output should differ from unselected; both = %q", unselected)
 	}
 	// selected 출력은 colorSelected (205) 배경 ANSI 코드를 포함해야 한다.
 	if !strings.Contains(selected, "48;5;205") {
 		t.Errorf("selected output should set background 205, got %q", selected)
+	}
+}
+
+func TestBuildChipsPRBadgeOnLocalChip(t *testing.T) {
+	prs := map[string]prInfo{"feat-x": {Number: 42, Checks: prChecksPassing}}
+	s, w := buildChips([]string{"feat-x"}, prs, false, false)
+	plain := ansi.Strip(s)
+	if !strings.Contains(plain, "#42✓") {
+		t.Errorf("plain=%q should contain PR badge '#42✓'", plain)
+	}
+	// totalW 는 배지를 포함한 visible runewidth 와 일치해야 한다.
+	if got := runewidth.StringWidth(plain); got != w {
+		t.Errorf("reported width %d != visible width %d (plain=%q)", w, got, plain)
+	}
+}
+
+func TestBuildChipsPRBadgeMatchesRemoteChip(t *testing.T) {
+	// 로컬 ref 없이 원격 chip 만 있는 행 — agent 가 push 만 해둔 브랜치.
+	prs := map[string]prInfo{"feat-x": {Number: 7, Checks: prChecksFailing}}
+	s, _ := buildChips([]string{"origin/feat-x"}, prs, false, false)
+	plain := ansi.Strip(s)
+	if !strings.Contains(plain, "#7✗") {
+		t.Errorf("plain=%q should contain PR badge '#7✗' via stripped remote name", plain)
+	}
+}
+
+func TestBuildChipsPRBadgeSkipsTagAndNonMatching(t *testing.T) {
+	prs := map[string]prInfo{"feat-x": {Number: 9, Checks: prChecksPending}}
+	s, _ := buildChips([]string{"tag: feat-x", "main"}, prs, false, false)
+	plain := ansi.Strip(s)
+	if strings.Contains(plain, "#9") {
+		t.Errorf("plain=%q must not badge a tag or a non-matching branch", plain)
+	}
+}
+
+func TestBuildChipsPRBadgeSurvivesNameTruncation(t *testing.T) {
+	long := strings.Repeat("b", maxChipTextWidth+5)
+	prs := map[string]prInfo{long: {Number: 3, Checks: prChecksNone}}
+	s, _ := buildChips([]string{long}, prs, false, false)
+	plain := ansi.Strip(s)
+	if !strings.Contains(plain, "…") {
+		t.Errorf("plain=%q should still truncate the long name", plain)
+	}
+	if !strings.Contains(plain, "#3") {
+		t.Errorf("plain=%q should keep the PR badge after the truncated name", plain)
 	}
 }

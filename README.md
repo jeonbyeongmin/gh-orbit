@@ -67,6 +67,10 @@ Today the build wires up:
 - ref decoration (`%D`) is parsed into typed branch/tag entries and
   rendered as chips attached to the front of the subject in the message
   column
+- branch chips carry an open-PR badge — `#N` plus a 1-cell CI rollup
+  glyph (`✓` pass / `✗` fail / `○` running) — fed by a background
+  `gh pr list`, refreshed at startup, on `r`, and after fetch / pull;
+  repos without a GitHub remote degrade silently (badge just absent)
 - ref pane: lazy auto-scroll on j/k/g/G with overflow clipping (no fold
   or sticky-header — those were tried and removed)
 - `d` opens a full-screen patch overlay for the focused commit
@@ -96,7 +100,9 @@ Today the build wires up:
   - `P` — push the current branch (first push auto-sets upstream)
   - `c` — cherry-pick the focused commit onto the current branch
   - `n` — create a branch at the focused commit and switch to it
-  - `o` — open the focused commit on GitHub
+  - `o` — open the focused commit's open PR on GitHub (rows whose
+    branch chip carries a `#N` PR badge; bare commits report "no open
+    PR" instead)
   - `ctrl+c` `ctrl+c` — quit (press twice; works anywhere, including
     inside the patch overlay)
   - `R` — rebase the current branch onto the focused commit

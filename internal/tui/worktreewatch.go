@@ -1,6 +1,6 @@
 // External-change detection for worktrees. fsnotify watches each
 // worktree's `.git/HEAD` and `.git/index` so a commit / checkout / rebase
-// from another shell or another worktree's AI agent flips the dashboard
+// from another shell flips the dashboard
 // row without the user pressing `r`. Burst events from a single git op
 // (HEAD.lock → rename, index rewrite, COMMIT_EDITMSG churn) coalesce via
 // a 200ms trailing debounce keyed by worktree path.

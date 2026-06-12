@@ -220,7 +220,7 @@ func TestRenderWorktreeRowSubjectCappedAt30(t *testing.T) {
 func TestRenderWorktreeRowDropOrder(t *testing.T) {
 	wt := git.Worktree{Path: "/repo/wt", Branch: "br"}
 	subject := "hello world here" // 16
-	// Keep-priority name > agent > branch > subject > ● dirty > time, allocated
+	// Keep-priority name > branch > subject > ● dirty > time, allocated
 	// greedily: each column takes space if it fits, smaller lower-priority
 	// columns still fill leftover a skipped bigger column left behind. name "wt"
 	// (2), branch "br" (2), ● (1), time "2m" (2), subject floor 12.

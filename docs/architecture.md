@@ -41,12 +41,16 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `d`            | graph  | open the focused commit's full patch overlay                                        |
 | `F`            | global | `git fetch --all` in background                                                     |
 | `p`            | global | `git pull` in background (strategy in [config.md](config.md))                       |
+| `P`            | global | `git push` in background (first push auto-sets upstream; never forces)             |
 | `r`            | global | reload refs + log                                                                   |
 | `,`            | global | enter Local Changes mode                                                            |
 | `Z`            | global | zombie-branch cleanup — see [branches.md](branches.md)                              |
 | `^C ^C`        | global | quit (press twice; closes patch overlay first)                                      |
 | `?`            | global | toggle inline help reference panel (column layout)                                  |
 | `R`            | graph  | rebase current branch onto cursor (confirm-first; conflicts → terminal) — see [checkout.md](checkout.md) |
+| `c`            | graph  | cherry-pick cursor commit onto current branch (confirm-first; conflicts → terminal) |
+| `n`            | graph  | create branch at cursor + switch (name input modal)                                |
+| `o`            | graph  | open cursor commit on GitHub (`gh browse`)                                          |
 
 Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `[` / `]` / `esc`. `[` jumps to the previous file header, `]` to the next; both are no-ops past the first / last file (no wrap — surprise jumps make the cockpit harder to read, not easier). The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md).
 

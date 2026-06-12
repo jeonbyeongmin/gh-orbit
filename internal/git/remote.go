@@ -177,6 +177,14 @@ func Checkout(ctx context.Context, dir, name string) error {
 	return runCheckout(ctx, dir, []string{name})
 }
 
+// CheckoutNewBranch runs `git checkout -b <name> <startPoint>` — create a
+// branch at an arbitrary commit and switch to it in one step. Same
+// dirty-tree wrapping as Checkout; a name collision surfaces git's own
+// "already exists" message as a generic error.
+func CheckoutNewBranch(ctx context.Context, dir, name, startPoint string) error {
+	return runCheckout(ctx, dir, []string{"-b", name, startPoint})
+}
+
 // CheckoutDetached runs `git checkout --detach <hash>`. Used when the user
 // picks a commit on the graph pane (no ref name) — the result is a detached
 // HEAD pointing at that commit. Same dirty-tree wrapping as Checkout.

@@ -93,6 +93,10 @@ Today the build wires up:
     "merge" | "rebase"`), then git's `pull.rebase` / `pull.ff`,
     falling back to `--ff-only`
   - `r` — reload refs + log
+  - `P` — push the current branch (first push auto-sets upstream)
+  - `c` — cherry-pick the focused commit onto the current branch
+  - `n` — create a branch at the focused commit and switch to it
+  - `o` — open the focused commit on GitHub
   - `ctrl+c` `ctrl+c` — quit (press twice; works anywhere, including
     inside the patch overlay)
   - `R` — rebase the current branch onto the focused commit

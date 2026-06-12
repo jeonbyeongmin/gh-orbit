@@ -400,6 +400,73 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "rebase failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
+
+	case cherryPickSucceededMsg:
+		p := m.pendingCherryPick
+		m.cherryPickInFlight = false
+		m.pendingCherryPick = pendingCherryPick{}
+		m.status = "cherry-pick: done (" + shortHash(p.hash) + " onto " + p.branch + ")"
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case cherryPickConflictMsg:
+		m.cherryPickInFlight = false
+		m.pendingCherryPick = pendingCherryPick{}
+		m.status = "cherry-pick: CONFLICT — resolve in your terminal"
+		m.statusStyle = statusErrS
+		return m, m.reloadCmd()
+
+	case cherryPickFailedMsg:
+		m.cherryPickInFlight = false
+		m.pendingCherryPick = pendingCherryPick{}
+		m.status = "cherry-pick failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case branchCreateSucceededMsg:
+		if msg.reqID != m.branchCreate.reqID {
+			return m, nil
+		}
+		m.branchCreate.inFlight = false
+		m.branchCreate.input = textinput.Model{}
+		m.branchCreate.inlineErr = ""
+		m.mode = viewModeNormal
+		m.status = "branch created: " + msg.name
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case branchCreateFailedMsg:
+		if msg.reqID != m.branchCreate.reqID {
+			return m, nil
+		}
+		m.branchCreate.inFlight = false
+		m.branchCreate.inlineErr = firstLine(msg.err.Error())
+		// Stay in viewModeBranchCreateInput so the user can fix the name.
+		return m, nil
+
+	case pushSucceededMsg:
+		m.pushInFlight = false
+		m.status = "push: done (" + msg.branch + ")"
+		m.statusStyle = statusOkS
+		return m, m.reloadCmd()
+
+	case pushFailedMsg:
+		m.pushInFlight = false
+		m.status = "push failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case browseOpenedMsg:
+		m.status = "opened " + shortHash(msg.hash) + " on GitHub"
+		m.statusStyle = statusOkS
+		return m, nil
+
+	case browseFailedMsg:
+		m.status = "browse failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
 	}
 	return m, nil
 }

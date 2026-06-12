@@ -49,6 +49,12 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == viewModeRebaseConfirm {
 		return m.handleRebaseConfirmKey(msg)
 	}
+	if m.mode == viewModeCherryPickConfirm {
+		return m.handleCherryPickConfirmKey(msg)
+	}
+	if m.mode == viewModeBranchCreateInput {
+		return m.handleBranchCreateInputKey(msg)
+	}
 	if m.mode == viewModeBranchesModal {
 		return m.handleBranchesModalKey(msg)
 	}
@@ -380,6 +386,18 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "R":
 		// Rebase the current branch onto the cursor commit (confirm-first).
 		return m.beginRebase()
+	case "c":
+		// Cherry-pick the cursor commit onto the current branch (confirm-first).
+		return m.beginCherryPick()
+	case "n":
+		// Create a branch at the cursor commit and switch to it.
+		return m.beginBranchCreate()
+	case "P":
+		// Push the current branch (first push auto-sets upstream).
+		return m.beginPush()
+	case "o":
+		// Open the cursor commit on GitHub.
+		return m.beginBrowse()
 	case "Z":
 		// Zombie-branch cleanup is a global action now that the sidebar
 		// is gone — the previous paneRefs focus gate had no meaningful

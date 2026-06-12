@@ -380,3 +380,72 @@ func TestBranchPickerInnerScroll(t *testing.T) {
 		t.Errorf("cursor=0 viewportTop=%d, want 0 (back to top)", s.viewportTop)
 	}
 }
+
+// --- pullAfter tagging (enter on origin/xx → checkout + pull chain) ---
+
+func TestGraphEvaluatorTagsPullAfterOnCrossBranch(t *testing.T) {
+	cursor := "jjjj"
+	locals := []git.Ref{
+		{ShortName: "develop", Kind: git.RefKindLocal, ObjectName: "behind", Upstream: "origin/develop"},
+		{ShortName: "feat/foo", Kind: git.RefKindLocal, ObjectName: "feattip", IsHead: true},
+	}
+	remotes := []git.Ref{
+		{ShortName: "origin/develop", Kind: git.RefKindRemote, ObjectName: cursor},
+	}
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
+	if got.kind != graphActionCheckoutAndFF || !got.pullAfter {
+		t.Errorf("cross-branch from remote chip should tag pullAfter: kind=%v pullAfter=%v", got.kind, got.pullAfter)
+	}
+}
+
+func TestGraphEvaluatorTagsPullAfterOnDwimCheckout(t *testing.T) {
+	cursor := "kkkk"
+	locals := []git.Ref{
+		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: "maintip", IsHead: true},
+	}
+	remotes := []git.Ref{
+		{ShortName: "origin/feat/new", Kind: git.RefKindRemote, ObjectName: cursor},
+	}
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
+	if got.kind != graphActionCheckout || !got.pullAfter {
+		t.Errorf("dwim checkout from remote chip should tag pullAfter: kind=%v pullAfter=%v", got.kind, got.pullAfter)
+	}
+}
+
+func TestGraphEvaluatorTagsPullAfterOnFFWhenRemoteChip(t *testing.T) {
+	cursor := "iiii"
+	headTip := "aaaa"
+	locals := []git.Ref{
+		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true, Upstream: "origin/main"},
+	}
+	remotes := []git.Ref{
+		{ShortName: "origin/main", Kind: git.RefKindRemote, ObjectName: cursor},
+	}
+	stubAdvances(t, map[string]int{headTip + "->" + cursor: 5})
+	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
+	if got.kind != graphActionFF || !got.pullAfter {
+		t.Errorf("FF reached via remote chip should tag pullAfter: kind=%v pullAfter=%v", got.kind, got.pullAfter)
+	}
+}
+
+func TestGraphEvaluatorNoPullAfterOnPlainFFOrLocalChip(t *testing.T) {
+	// Plain commit ahead of HEAD, no remote chip → FF without pull.
+	headTip := "aaaa"
+	locals := []git.Ref{
+		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true},
+	}
+	stubAdvances(t, map[string]int{headTip + "->" + "eeee": 3})
+	got := runGraphEvaluator(t, "eeee", locals)
+	if got.kind != graphActionFF || got.pullAfter {
+		t.Errorf("plain FF should not tag pullAfter: kind=%v pullAfter=%v", got.kind, got.pullAfter)
+	}
+	// Local chip checkout → no pull.
+	locals = []git.Ref{
+		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: "aaaa", IsHead: true},
+		{ShortName: "feat", Kind: git.RefKindLocal, ObjectName: "ffff"},
+	}
+	got = runGraphEvaluator(t, "ffff", locals)
+	if got.kind != graphActionCheckout || got.pullAfter {
+		t.Errorf("local-chip checkout should not tag pullAfter: kind=%v pullAfter=%v", got.kind, got.pullAfter)
+	}
+}

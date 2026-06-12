@@ -62,6 +62,12 @@ type graphActionMsg struct {
 	branch     string
 	advance    int
 	candidates []string
+	// pullAfter marks an action that started from a remote chip on the
+	// cursor row (origin/xx). The outcome handlers chain a `git pull`
+	// after the checkout/FF lands so "enter on origin/xx" means "get me
+	// onto that branch, synced with the network" — not just synced with
+	// the last-fetch snapshot the graph happens to show.
+	pullAfter bool
 }
 
 // branchPickerState backs viewModeBranchPicker. Reset to the zero value
@@ -150,6 +156,13 @@ func evaluateGraphActionCmd(dir, hash string, locals, remotes []git.Ref) tea.Cmd
 	return func() tea.Msg {
 		var headBranch, headHash string
 		var chips []string
+		hasRemoteChip := false
+		for _, r := range remotes {
+			if r.ObjectName == hash {
+				hasRemoteChip = true
+				break
+			}
+		}
 		for _, r := range locals {
 			if r.IsHead {
 				headBranch = r.ShortName
@@ -181,7 +194,7 @@ func evaluateGraphActionCmd(dir, hash string, locals, remotes []git.Ref) tea.Cmd
 		// out of scope (rare; refs panel `p` still works for explicit choice).
 		if crossBranch := findCrossBranchTarget(hash, locals, remotes, headBranch); crossBranch != "" {
 			log.Printf("graph enter: checkout+ff (%s → %s)", crossBranch, shortHash(hash))
-			return graphActionMsg{hash: hash, kind: graphActionCheckoutAndFF, branch: crossBranch}
+			return graphActionMsg{hash: hash, kind: graphActionCheckoutAndFF, branch: crossBranch, pullAfter: true}
 		}
 
 		// New-local path: cursor has a remote chip with no upstream-tracking
@@ -191,7 +204,7 @@ func evaluateGraphActionCmd(dir, hash string, locals, remotes []git.Ref) tea.Cmd
 		// needed afterward.
 		if newLocal := findRemoteCheckoutTarget(hash, locals, remotes); newLocal != "" {
 			log.Printf("graph enter: checkout (dwim from remote → %s)", newLocal)
-			return graphActionMsg{hash: hash, kind: graphActionCheckout, branch: newLocal}
+			return graphActionMsg{hash: hash, kind: graphActionCheckout, branch: newLocal, pullAfter: true}
 		}
 
 		if headBranch == "" || headHash == "" {
@@ -212,7 +225,7 @@ func evaluateGraphActionCmd(dir, hash string, locals, remotes []git.Ref) tea.Cmd
 		}
 		log.Printf("graph enter: ff (%s +%d, %s..%s)",
 			headBranch, advance, shortHash(headHash), shortHash(hash))
-		return graphActionMsg{hash: hash, kind: graphActionFF, branch: headBranch, advance: advance}
+		return graphActionMsg{hash: hash, kind: graphActionFF, branch: headBranch, advance: advance, pullAfter: hasRemoteChip}
 	}
 }
 

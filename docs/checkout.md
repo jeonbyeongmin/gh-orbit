@@ -24,9 +24,9 @@ Single context-aware shortcut. Action depends on the cursor commit's chip state 
 | local branch chip 1 (`B`), HEAD elsewhere                          | —                                               | `checkout B`                                                                                                        |
 | local branch chips ≥ 2, HEAD on one of them                        | —                                               | no-op                                                                                                               |
 | local branch chips ≥ 2, HEAD elsewhere                             | —                                               | open `viewModeBranchPicker` → user picks → `checkout`                                                               |
-| no local chip, remote chip with upstream-tracking local `L` (≠ HEAD) | —                                             | `checkout L` then `git merge --ff-only <cursor>` (cross-branch)                                                     |
-| no local chip, remote chip with no upstream-tracking local         | —                                               | `git checkout <stripped name>` — dwim creates the local tracking branch                                             |
-| no local chip (mid-commit or remote-only chip)                     | attached, tip is ancestor of cursor (≠ cursor)  | `git merge --ff-only <cursor>` (no checkout step)                                                                   |
+| no local chip, remote chip with upstream-tracking local `L` (≠ HEAD) | —                                             | `checkout L` then `git merge --ff-only <cursor>` (cross-branch), then **`git pull`**                                |
+| no local chip, remote chip with no upstream-tracking local         | —                                               | `git checkout <stripped name>` — dwim creates the local tracking branch, then **`git pull`**                        |
+| no local chip (mid-commit or remote-only chip)                     | attached, tip is ancestor of cursor (≠ cursor)  | `git merge --ff-only <cursor>` (no checkout step), then **`git pull`** iff the row carried a remote chip            |
 | no local chip                                                      | detached, **or** not an ancestor of cursor      | `git checkout --detach <cursor>`                                                                                    |
 
 ### Notes
@@ -36,6 +36,25 @@ Fork's "Checkout & Fast-Forward" surfaces in three ways:
 - **Same-branch**: HEAD on local `main`, cursor row has only an `origin/main` chip → chipless Case 1 FF on `main`. No checkout.
 - **Cross-branch**: HEAD on `feat/foo`, cursor row has only an `origin/develop` chip whose upstream-tracking local is `develop` → `checkout develop` then `git merge --ff-only <cursor>`. The local-tracker rule excludes HEAD itself so the same-branch case stays in the FF lane.
 - **New-local**: cursor row has only an `origin/develop` chip and no local tracks it → `git checkout develop` and let dwim create the local tracking branch at the remote's tip.
+
+### Pull-after chain (remote-chip rows)
+
+Every Enter that *started from a remote chip* (the three Fork-style rows
+above) chains a background `git pull` once the checkout/FF lands —
+"enter on `origin/xx`" means "get me onto that branch synced with the
+network", not just synced with the last-fetch snapshot the graph shows.
+Mechanics:
+
+- The evaluator tags the dispatch (`graphActionMsg.pullAfter`); the model
+  arms `pullAfterAction` only for tagged Checkout / FF / CheckoutAndFF
+  dispatches, and clears it on every failure or clean-tree detour, so an
+  aborted chain can never pull later by surprise.
+- On success the status shows `<outcome> · pulling…` and reload + pull run
+  in one batch; the pull respects the same strategy resolution as `p`
+  (`[pull] strategy` → git config → `--ff-only`) and the `pullInFlight`
+  gate (an already-running pull wins; the flag is consumed, not deferred).
+- Plain FF on a chipless row and local-chip checkouts do **not** pull —
+  those are local-only motions.
 
 Other invariants:
 

@@ -40,3 +40,22 @@ func pullCmd(dir, prefs string) tea.Cmd {
 		return pullSucceededMsg{}
 	}
 }
+
+// chainPullAfterAction consumes the pull-after flag armed by a remote-chip
+// graph Enter. When armed (and no pull is already running) it flips the
+// pull gate, paints "<outcome> · pulling…", and returns reload+pull in one
+// batch so the checkout result renders while the network round-trip runs.
+// ok=false means the caller should fall through to its plain reload.
+func (m Model) chainPullAfterAction(outcome string) (Model, tea.Cmd, bool) {
+	if !m.pullAfterAction {
+		return m, nil, false
+	}
+	m.pullAfterAction = false
+	if m.pullInFlight {
+		return m, nil, false
+	}
+	m.pullInFlight = true
+	m.status = outcome + " · pulling…"
+	m.statusStyle = statusBusyS
+	return m, tea.Batch(m.reloadCmd(), pullCmd(m.workdir, m.pullPrefStrategy)), true
+}

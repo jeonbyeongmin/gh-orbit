@@ -240,9 +240,16 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = checkoutLabel(msg.ref, msg.detached)
 		m.statusStyle = statusOkS
 		m.pendingHEADHash = pendingHEADSentinel
+		var pull tea.Cmd
+		var chained bool
+		m, pull, chained = m.chainPullAfterAction(m.status)
+		if chained {
+			return m, pull
+		}
 		return m, m.reloadCmd()
 
 	case checkoutNeedsCleanTreeMsg:
+		m.pullAfterAction = false
 		// Modal owns the next decision; release the in-flight gate.
 		// pendingCheckout stays intact so the modal hint can name the
 		// chain that was about to run.
@@ -253,6 +260,7 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case checkoutFailedMsg:
+		m.pullAfterAction = false
 		m.checkoutInFlight = false
 		m.pendingCheckout = pendingCheckout{}
 		m.status = "checkout failed: " + firstLine(msg.err.Error())
@@ -261,6 +269,9 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case graphActionMsg:
 		m.actionInFlight = false
+		// Every evaluation re-arms or clears the pull-after chain; a stale
+		// flag from a dropped earlier dispatch must not leak into this one.
+		m.pullAfterAction = false
 		// Stale-drop: cursor moved between Enter dispatch and this reply.
 		// Drop silently — the user can re-press Enter on the new row.
 		if c, ok := m.graph.Selected(); !ok || c.Hash != msg.hash {
@@ -273,6 +284,7 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusOkS
 			return m, nil
 		case graphActionCheckout:
+			m.pullAfterAction = msg.pullAfter
 			var cmd tea.Cmd
 			m, cmd = m.beginCheckout(msg.branch, false)
 			return m, cmd
@@ -286,11 +298,13 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusBusyS
 			return m, nil
 		case graphActionFF:
+			m.pullAfterAction = msg.pullAfter
 			m.ffInFlight = true
 			m.status = ffLabel(msg.branch, msg.advance) + " …"
 			m.statusStyle = statusBusyS
 			return m, ffOnlyCmd(m.workdir, msg.branch, msg.hash)
 		case graphActionCheckoutAndFF:
+			m.pullAfterAction = msg.pullAfter
 			m.ffInFlight = true
 			m.status = "fast-forward: " + msg.branch + " (checkout + ff) …"
 			m.statusStyle = statusBusyS
@@ -307,9 +321,16 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ffLabel(msg.branch, msg.advance)
 		m.statusStyle = statusOkS
 		m.pendingHEADHash = pendingHEADSentinel
+		var pull tea.Cmd
+		var chained bool
+		m, pull, chained = m.chainPullAfterAction(m.status)
+		if chained {
+			return m, pull
+		}
 		return m, m.reloadCmd()
 
 	case ffFailedMsg:
+		m.pullAfterAction = false
 		m.ffInFlight = false
 		log.Printf("graph enter: ff failed: %v", msg.err)
 		m.status = "fast-forward failed: " + firstLine(msg.err.Error())
@@ -317,6 +338,7 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ffNeedsCleanTreeMsg:
+		m.pullAfterAction = false
 		m.ffInFlight = false
 		m.pendingCheckout = pendingCheckout{
 			ref:    msg.branch,
@@ -333,9 +355,16 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ffLabel(msg.branch, msg.advance) + " (after checkout)"
 		m.statusStyle = statusOkS
 		m.pendingHEADHash = pendingHEADSentinel
+		var pull tea.Cmd
+		var chained bool
+		m, pull, chained = m.chainPullAfterAction(m.status)
+		if chained {
+			return m, pull
+		}
 		return m, m.reloadCmd()
 
 	case ffCheckoutNeedsCleanTreeMsg:
+		m.pullAfterAction = false
 		m.ffInFlight = false
 		m.pendingCheckout = pendingCheckout{
 			ref:            msg.branch,

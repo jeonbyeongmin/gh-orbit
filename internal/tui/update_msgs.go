@@ -459,14 +459,14 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 
-	case browseOpenedMsg:
-		m.status = "opened " + shortHash(msg.hash) + " on GitHub"
-		m.statusStyle = statusOkS
-		return m, nil
-
 	case browseFailedMsg:
 		m.status = "browse failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
+		return m, nil
+
+	case prBrowseOpenedMsg:
+		m.status = fmt.Sprintf("opened PR #%d on GitHub", msg.number)
+		m.statusStyle = statusOkS
 		return m, nil
 	}
 	return m, nil
@@ -495,15 +495,18 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case fetchSucceededMsg:
 		m.fetchInFlight = false
+		// Remote state just refreshed — re-pull the open-PR list on the
+		// same beat so chip badges track what fetch saw.
+		prCmd := m.dispatchPRList()
 		// While a pull is still in flight, its "pulling…" status outranks
 		// fetch's outcome and the pending pullSucceededMsg / pullConflictMsg
 		// will reload. Skip status overwrite + the redundant reload.
 		if m.pullInFlight {
-			return m, nil
+			return m, prCmd
 		}
 		m.status = "fetch: done"
 		m.statusStyle = statusOkS
-		return m, m.reloadCmd()
+		return m, tea.Batch(m.reloadCmd(), prCmd)
 
 	case fetchFailedMsg:
 		m.fetchInFlight = false
@@ -519,7 +522,9 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "pull: done"
 		m.statusStyle = statusOkS
 		m.pendingHEADHash = pendingHEADSentinel
-		return m, m.reloadCmd()
+		// Pull's fetch leg refreshed remote state — same badge re-pull as
+		// the fetchSucceededMsg path.
+		return m, tea.Batch(m.reloadCmd(), m.dispatchPRList())
 
 	case pullConflictMsg:
 		m.pullInFlight = false
@@ -533,6 +538,20 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pullInFlight = false
 		m.status = "pull failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
+		return m, nil
+
+	case prsLoadedMsg:
+		m.prsInFlight = false
+		m.prs = msg.prs
+		m.graph.SetPRs(msg.prs)
+		return m, nil
+
+	case prsLoadFailedMsg:
+		m.prsInFlight = false
+		// Quiet on purpose: the badge is passive enrichment, and a repo
+		// without a GitHub remote (or a logged-out gh) would otherwise
+		// error-spam the status line on every refresh.
+		log.Printf("pr list failed: %v", msg.err)
 		return m, nil
 	}
 	return m, nil

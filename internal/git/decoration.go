@@ -111,7 +111,7 @@ func MergeLocalRemotePairs(refs []DecoratedRef) []ChipRef {
 		if r.Kind != RefKindRemote {
 			continue
 		}
-		stripped, ok := stripRemotePrefix(r.ShortName)
+		stripped, ok := StripRemotePrefix(r.ShortName)
 		if !ok {
 			continue
 		}
@@ -136,13 +136,17 @@ func MergeLocalRemotePairs(refs []DecoratedRef) []ChipRef {
 }
 
 func classifyRefName(name string) RefKind {
-	if _, ok := stripRemotePrefix(name); ok {
+	if _, ok := StripRemotePrefix(name); ok {
 		return RefKindRemote
 	}
 	return RefKindLocal
 }
 
-func stripRemotePrefix(name string) (string, bool) {
+// StripRemotePrefix removes the leading remote name from a remote ref's
+// short name ("origin/feat-x" → "feat-x"). ok=false when no known remote
+// prefix matches. Exported so chip-level consumers (PR badge matching)
+// share the same commonRemotePrefixes allowlist as the pair-merge logic.
+func StripRemotePrefix(name string) (string, bool) {
 	for _, p := range commonRemotePrefixes {
 		if strings.HasPrefix(name, p) {
 			return strings.TrimPrefix(name, p), true

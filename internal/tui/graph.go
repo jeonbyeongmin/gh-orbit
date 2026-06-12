@@ -102,6 +102,10 @@ type commitDelegate struct {
 	graphWidth    int
 	headRowIndex  int
 	headAncestors map[string]struct{}
+	// prs (head branch → open PR) feeds the chip PR badge. nil until the
+	// first `gh pr list` lands; kept across reloads so the badges don't
+	// flicker while a fresh list is in flight.
+	prs map[string]prInfo
 }
 
 func (commitDelegate) Height() int                             { return 2 }
@@ -150,7 +154,7 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		}
 	}
 	connectorLine := renderConnectorLine(connectorPrefix, connectorWidth, connectorColW, width, dim)
-	commitLine := renderCommitLine(ci.c, commitPrefix, ci.commitGraphWidth, commitColW, width, selected, dim)
+	commitLine := renderCommitLine(ci.c, d.prs, commitPrefix, ci.commitGraphWidth, commitColW, width, selected, dim)
 
 	_, _ = fmt.Fprint(w, connectorLine+"\n"+commitLine)
 }
@@ -232,7 +236,7 @@ func shortHash(h string) string {
 // priority: chips → author → subject truncates to a single cell → if
 // even that won't fit, the message segment disappears and only hash (then
 // hash + time) remain to the right of the graph.
-func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColWidth, width int, selected, dim bool) string {
+func renderCommitLine(c git.Commit, prs map[string]prInfo, graphPrefix string, graphRowWidth, graphColWidth, width int, selected, dim bool) string {
 	hash := shortHash(c.Hash)
 	rel := relativeShort(c.AuthorTime)
 
@@ -302,7 +306,7 @@ func renderCommitLine(c git.Commit, graphPrefix string, graphRowWidth, graphColW
 	// Chip cluster, attached to the front of the subject in the message
 	// column. Dropped wholesale rather than partially when there isn't
 	// room for both chip and subject.
-	chipText, chipW := buildChips(c.RefNames, selected, dim)
+	chipText, chipW := buildChips(c.RefNames, prs, selected, dim)
 	chipSeg := ""
 	chipSegW := 0
 	if chipW > 0 {
@@ -771,6 +775,14 @@ func (g *graphModel) applyHeadDim() {
 	g.delegate.headAncestors = g.headAncestors
 	g.list.SetDelegate(g.delegate)
 	g.headDimDirty = false
+}
+
+// SetPRs pushes the head-branch → open-PR map into the delegate so chip
+// rendering can badge branch tips. Called from Model.Update on
+// prsLoadedMsg; survives ResetForReload on purpose (see commitDelegate).
+func (g *graphModel) SetPRs(prs map[string]prInfo) {
+	g.delegate.prs = prs
+	g.list.SetDelegate(g.delegate)
 }
 
 // SetHeadAncestors stores the HEAD-reachable hash set. Called from

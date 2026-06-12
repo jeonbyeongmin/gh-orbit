@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -168,30 +169,65 @@ func TestBranchCreateFailureStaysInModal(t *testing.T) {
 	}
 }
 
-// --- browse (`o`) ---
+// --- browse PR (`o`) ---
 
-func TestBrowseKeyOpensCursorCommit(t *testing.T) {
-	prev := browseExec
-	t.Cleanup(func() { browseExec = prev })
-	var gotHash string
-	browseExec = func(_ context.Context, _, hash string) error {
-		gotHash = hash
+// browsePRFixture seeds a cursor commit whose chips name an open-PR head
+// branch, plus the loaded PR map — the row `o` is specified against.
+func browsePRFixture(t *testing.T) Model {
+	t.Helper()
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	updated, _ = m.Update(commitsAppendedMsg{
+		reqID: 1,
+		done:  true,
+		rows: []graphRow{
+			{commit: git.Commit{Hash: "cursor99", Subject: "first", AuthorTime: time.Now(), RefNames: []string{"feat-x", "origin/feat-x"}}},
+		},
+	})
+	m = updated.(Model)
+	updated, _ = m.Update(commitsStreamDoneMsg{reqID: 1})
+	m = updated.(Model)
+	updated, _ = m.Update(prsLoadedMsg{prs: map[string]prInfo{"feat-x": {Number: 42, Checks: prChecksPassing}}})
+	return updated.(Model)
+}
+
+func TestBrowseKeyOpensCursorRowPR(t *testing.T) {
+	prev := browsePRExec
+	t.Cleanup(func() { browsePRExec = prev })
+	var gotNumber int
+	browsePRExec = func(_ context.Context, _ string, number int) error {
+		gotNumber = number
 		return nil
 	}
 
-	m := rebaseFixture(t)
+	m := browsePRFixture(t)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("o should dispatch browseCmd")
+		t.Fatal("o should dispatch browsePRCmd")
 	}
 	msg := cmd()
-	if gotHash != "cursor99" {
-		t.Errorf("browse hash = %q, want cursor99", gotHash)
+	if gotNumber != 42 {
+		t.Errorf("browse PR number = %d, want 42", gotNumber)
 	}
 	updated, _ = m.Update(msg)
 	m = updated.(Model)
-	if !strings.Contains(m.status, "opened") {
+	if !strings.Contains(m.status, "opened PR #42") {
 		t.Errorf("opened status expected, got %q", m.status)
+	}
+}
+
+func TestBrowseKeyWithoutPRChipReports(t *testing.T) {
+	// rebaseFixture's cursor commit carries no RefNames and no PR map is
+	// loaded — `o` must report instead of dispatching.
+	m := rebaseFixture(t)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Fatal("o without a PR-bearing chip should not dispatch")
+	}
+	if !strings.Contains(m.status, "no open PR") {
+		t.Errorf("status should report no open PR, got %q", m.status)
 	}
 }

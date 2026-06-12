@@ -56,8 +56,7 @@ func TestRebaseLiveConflictCarriesSentinel(t *testing.T) {
 	if !errors.Is(err, ErrRebaseConflict) {
 		t.Fatalf("error should carry ErrRebaseConflict, got %v", err)
 	}
-	// Leave-in-place contract: REBASE_HEAD exists mid-rebase.
-	if gitOutput(t, dir, "rev-parse", "--verify", "REBASE_HEAD") == "" {
-		t.Error("mid-rebase state should be left in place")
-	}
+	// Leave-in-place contract: REBASE_HEAD must exist mid-rebase —
+	// gitOutput fails the test itself if the ref is gone.
+	_ = gitOutput(t, dir, "rev-parse", "--verify", "REBASE_HEAD")
 }

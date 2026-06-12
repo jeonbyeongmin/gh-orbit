@@ -397,7 +397,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// PR B2; the bottom tab pane was retired with the subtract-
 		// bottom-pane change. Worktree switch + Local Changes enter
 		// come from `w` modal and `,` global.
-		if m.actionInFlight || m.checkoutInFlight || m.ffInFlight {
+		if m.actionInFlight || m.checkoutInFlight || m.ffInFlight || m.rebaseInFlight {
 			return m, nil
 		}
 		c, ok := m.graph.Selected()

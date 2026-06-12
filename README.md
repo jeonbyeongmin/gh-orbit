@@ -75,7 +75,7 @@ Today the build wires up:
 - `d` opens a full-screen patch overlay for the focused commit
   (entire `git show -p` body); inside, `[` / `]` jump between files
   and the bottom hint shows `<path> [N/M]` so you always know which
-  file the cursor is in; `esc` / `q` close it without quitting the app
+  file the cursor is in; `esc` closes it without quitting the app
 - vim-style key bindings (full table in [docs/architecture.md](./docs/architecture.md)):
   - `j` / `k` / `g` / `G` — navigate the commit graph
   - `enter` — context-sensitive on the graph: checkout / FF / detach
@@ -96,7 +96,8 @@ Today the build wires up:
     "merge" | "rebase"`), then git's `pull.rebase` / `pull.ff`,
     falling back to `--ff-only`
   - `r` — reload refs + log
-  - `q` / `ctrl+c` — quit (closes the patch overlay first)
+  - `ctrl+c` `ctrl+c` — quit (press twice; works anywhere, including
+    inside the patch overlay)
   - `R` is reserved for a future Rebase action
 - a status line next to the help row surfaces fetch progress, errors,
   and hash-copy confirmation

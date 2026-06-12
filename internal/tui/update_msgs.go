@@ -18,8 +18,8 @@ import (
 )
 
 // updateWorktreeMsg handles the sidebar worktree domain: inventory
-// loads, fsnotify-driven refreshes, dirty/agent-session polling, and
-// add/remove action replies.
+// loads, fsnotify-driven refreshes, dirty polling, and add/remove
+// action replies.
 func (m Model) updateWorktreeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case switchWorktreeMsg:
@@ -45,14 +45,7 @@ func (m Model) updateWorktreeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// add/remove/switch all funnel through this case, so Sync sees every
 		// gitDir set change. nil-safe for the silent-degrade path.
 		m.watcher.Sync(msg.entries)
-		// Event-driven agent poll alongside the dirty fan-out: every inventory
-		// change (startup, add/remove, switch) lights the agent column now instead
-		// of waiting up to one poll interval for the next tick. The 30s tick
-		// stays as the ongoing refresh + freshness-aging loop.
-		return m, tea.Batch(
-			worktreeDirtyFanoutCmd(m.sidebarWorktreesReqID, paths),
-			agentSessionPollCmd(agentSessionProjectsDir(), paths, time.Now(), m.sidebarWorktreesReqID),
-		)
+		return m, worktreeDirtyFanoutCmd(m.sidebarWorktreesReqID, paths)
 
 	case worktreeWatchedChangeMsg:
 		// fsnotify saw HEAD or index settle on a watched worktree. Always
@@ -88,52 +81,6 @@ func (m Model) updateWorktreeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refs.SetWorktreeDirty(msg.path, msg.dirty, msg.timedOut)
 		m.refs.SetWorktreeLastCommit(msg.path, msg.subject, msg.when)
 		return m, nil
-
-	case agentSessionTickMsg:
-		// Poll cadence fired. Stat the current worktree set off the main loop
-		// and re-arm the next tick in the same batch — the tick handler is the
-		// sole re-arm site, so the loop stays single-lineage and survives a
-		// dropped (stale) poll reply. Reading Worktrees() scopes the poll to
-		// the live inventory; the reqID lets the reply drop if it races a change.
-		wts := m.refs.Worktrees()
-		paths := make([]string, 0, len(wts))
-		for _, wt := range wts {
-			paths = append(paths, wt.Path)
-		}
-		return m, tea.Batch(
-			agentSessionPollCmd(agentSessionProjectsDir(), paths, time.Now(), m.sidebarWorktreesReqID),
-			agentSessionTickCmd(),
-		)
-
-	case agentSessionPollMsg:
-		// Drop a poll that raced an inventory change (mirrors the
-		// worktreeDirtyResultMsg reqID guard) so it can't re-insert a key for a
-		// pruned worktree. No re-arm here — the tick handler owns that.
-		if msg.reqID != m.sidebarWorktreesReqID {
-			return m, nil
-		}
-		for path, state := range msg.states {
-			m.refs.SetAgentState(path, state)
-		}
-		// Gated spinner start: if a worktree is now running and the spinner
-		// lineage isn't already live, arm it. The tick handler owns stop + re-arm.
-		if !m.spinnerTicking && m.refs.AnyAgentRunning() {
-			m.spinnerTicking = true
-			return m, agentSpinnerTickCmd()
-		}
-		return m, nil
-
-	case agentSpinnerTickMsg:
-		// Advance the frame and re-arm only while something is still running;
-		// otherwise drop spinnerTicking and let the lineage die so the cockpit
-		// goes idle (zero re-renders). The poll handler re-arms it next time a
-		// worktree starts running.
-		if !m.refs.AnyAgentRunning() {
-			m.spinnerTicking = false
-			return m, nil
-		}
-		m.spinnerFrame++
-		return m, agentSpinnerTickCmd()
 
 	case worktreeAddSucceededMsg:
 		if msg.reqID != m.worktreeAction.reqID {

@@ -5,21 +5,17 @@
 //   - byKind ([local, remote, tag]) backs graph Enter's chip evaluator
 //     and the branches modal's source list (via LocalRefs / RemoteRefs).
 //   - worktrees + dirty/timed-out maps + currentWorktreePath back the
-//     top dashboard and the worktrees modal (via Worktrees /
+//     the worktrees modal (via Worktrees /
 //     WorktreeDirty / SelectedWorktree-style consumers in worktree.go).
-//   - localChangesSummary + lastFetchAt back the dashboard's inline
-//     Local Changes meta and the fetched-Xm-ago footer.
+//   - lastFetchAt backs the worktrees modal's fetched-Xm-ago line.
 //
-// The helper render funcs (renderWorktreeSidebarRow, composeLocalChangesRow,
-// formatLocalChangesMeta, formatFetchFooter) live here because the
-// dashboard reuses them with the same visual vocabulary — moving them to
-// dashboard.go would only push their package-private callers around. The
-// "Sidebar" in those names is now a historical artifact, not a place.
+// The row render func (renderWorktreeSidebarRow) lives here because it
+// reads refModel state with the same visual vocabulary as its caller.
+// The "Sidebar" in the name is a historical artifact, not a place.
 package tui
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -43,14 +39,11 @@ type refModel struct {
 	worktreeTimedOut    map[string]bool
 	worktreeLastCommit  map[string]worktreeCommitMeta
 
-	localChangesSummary         git.LocalChangesSummary
-	localChangesSummaryLoadedAt time.Time
-
 	lastFetchAt time.Time
 }
 
 // worktreeCommitMeta caches one worktree's last-commit subject + time for
-// the dashboard row. The zero value (empty subject, zero time) renders as a
+// the modal row. The zero value (empty subject, zero time) renders as a
 // blank last-commit column — used both while the fan-out is in flight and
 // when the worktree has no commits yet (unborn HEAD / bare).
 type worktreeCommitMeta struct {
@@ -88,7 +81,7 @@ func (r *refModel) ResetForReload() {
 
 // Update only consumes refsLoaded* messages. KeyMsg handling lived here
 // when the sidebar owned a cursor; the cursor moved into branchesModal
-// and the top-dashboard focus mode, so refModel.Update is purely about
+// and the worktrees modal, so refModel.Update is purely about
 // ingesting fresh for-each-ref output.
 func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	switch m := msg.(type) {
@@ -114,7 +107,7 @@ func (r refModel) LocalRefs() []git.Ref { return r.byKind[0] }
 func (r refModel) RemoteRefs() []git.Ref { return r.byKind[1] }
 
 // SetWorktrees rewrites the inventory. Dirty / timed-out maps drop
-// entries that disappeared so the dashboard never paints a marker for a
+// entries that disappeared so the modal never paints a marker for a
 // pruned worktree.
 func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 	r.worktrees = entries
@@ -182,28 +175,14 @@ func (r refModel) WorktreeDirty(path string) bool {
 
 // WorktreeLastCommit returns the cached last-commit subject + time for a
 // worktree path. Missing / not-yet-loaded paths return the zero value, which
-// the dashboard row renders as a blank last-commit column.
+// the modal row renders as a blank last-commit column.
 func (r refModel) WorktreeLastCommit(path string) (string, time.Time) {
 	m := r.worktreeLastCommit[path]
 	return m.subject, m.when
 }
 
-// SetLocalChangesSummary publishes the latest numstat + reload time so
-// the dashboard's inline meta can render `N files · +X -Y · Zm ago`.
-func (r *refModel) SetLocalChangesSummary(summary git.LocalChangesSummary, loadedAt time.Time) {
-	r.localChangesSummary = summary
-	r.localChangesSummaryLoadedAt = loadedAt
-}
-
-// ResetLocalChangesSummary clears the inline meta — used when the
-// freshness signal is no longer trustworthy (e.g. directory change).
-func (r *refModel) ResetLocalChangesSummary() {
-	r.localChangesSummary = git.LocalChangesSummary{}
-	r.localChangesSummaryLoadedAt = time.Time{}
-}
-
 // SetLastFetchAt records the wall-clock of the most recent fetch
-// attempt. The dashboard footer formats it as `fetched Xm ago`.
+// attempt. The worktrees modal formats it as `fetched Xm ago`.
 func (r *refModel) SetLastFetchAt(t time.Time) { r.lastFetchAt = t }
 
 // partitionByKind sorts refs into [local, remote, tag] slots. The Q5
@@ -237,60 +216,6 @@ func partitionByKind(refs []git.Ref) [3][]git.Ref {
 
 var refHeaderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime)).Bold(true)
 
-// formatLocalChangesMeta builds the `N files · +X -Y · Zm ago` string.
-// Returns "" when the summary carries no signal so the dashboard header
-// falls back to a bare "Worktrees (N)" label instead of a stale meta.
-func (r refModel) formatLocalChangesMeta(now time.Time) string {
-	if r.localChangesSummary.Empty() {
-		return ""
-	}
-	s := r.localChangesSummary
-	filesWord := "files"
-	if s.FilesChanged == 1 {
-		filesWord = "file"
-	}
-	parts := []string{
-		fmt.Sprintf("%d %s", s.FilesChanged, filesWord),
-		fmt.Sprintf("+%d -%d", s.Insertions, s.Deletions),
-	}
-	if !r.localChangesSummaryLoadedAt.IsZero() {
-		age := relativeShortAt(r.localChangesSummaryLoadedAt, now)
-		if age == "just now" {
-			parts = append(parts, age)
-		} else {
-			parts = append(parts, age+" ago")
-		}
-	}
-	return strings.Join(parts, " · ")
-}
-
-// composeLocalChangesRow lays out label + meta against a width budget.
-// Kept here because the dashboard header reuses the same truncation
-// rule for the right-aligned Local Changes meta.
-func composeLocalChangesRow(label, meta string, width int, selected bool) string {
-	labelStyle := cursorStyle
-	if selected {
-		labelStyle = selectedStyle
-	}
-	if meta == "" {
-		text := runewidth.Truncate(label, width, "…")
-		return labelStyle.Render(text)
-	}
-	const sep = "  "
-	labelW := runewidth.StringWidth(label)
-	sepW := runewidth.StringWidth(sep)
-	if labelW+sepW >= width {
-		text := runewidth.Truncate(label, width, "…")
-		return labelStyle.Render(text)
-	}
-	availForMeta := width - labelW - sepW
-	metaOut := meta
-	if runewidth.StringWidth(meta) > availForMeta {
-		metaOut = runewidth.Truncate(meta, availForMeta, "…")
-	}
-	return labelStyle.Render(label) + sep + timeStyle.Render(metaOut)
-}
-
 // worktreeSubjectFloor is the minimum leftover width (after the fixed
 // columns + separator) the last-commit subject needs before it renders at
 // all. Below it the subject column is dropped whole rather than chopped to a
@@ -308,7 +233,7 @@ const (
 const worktreeNameCap = 24
 
 // worktreeDisplayName is the basename of a worktree path, capped at
-// worktreeNameCap. Shared by the row renderer and the dashboard caller (which
+// worktreeNameCap. Shared by the row renderer and the modal caller (which
 // pre-measures it to compute the aligned name-column width) so the cap lives
 // in one place.
 func worktreeDisplayName(path string) string {
@@ -319,9 +244,9 @@ func worktreeDisplayName(path string) string {
 	return runewidth.Truncate(name, worktreeNameCap, "…")
 }
 
-// renderWorktreeSidebarRow formats one worktree entry inside the dashboard
+// renderWorktreeSidebarRow formats one worktree entry inside the worktrees-modal
 // row body. `▶` + bold for the current entry; 2-col indent for the rest. The
-// `Sidebar` in the name is a historical artifact — the dashboard reuses the
+// `Sidebar` in the name is a historical artifact — the modal reuses the
 // same row shape.
 //
 // Display order is `▶ name · branch · ● · subject · time`. `name` is capped
@@ -417,11 +342,11 @@ func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMa
 	body := runewidth.Truncate(strings.Join(parts, sep), avail, "…")
 	// isCurrent paints the "you're here" body styling (bold + accent fg)
 	// independent of focus — Decision 4 keeps the ▶ row visually salient
-	// whether or not the dashboard has the cursor.
+	// whether or not the modal has the cursor.
 	if isCurrent {
 		body = selectedStyle.Render(body)
 	}
-	// selected overlays a background tint to mark the dashboard cursor
+	// selected overlays a background tint to mark the modal cursor
 	// row. fg / bg are independent channels in lipgloss, so the bold +
 	// accent fg above survives the bg overlay.
 	if selected {

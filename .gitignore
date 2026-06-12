@@ -22,3 +22,6 @@ coverage.txt
 # AI coding agent local artifacts
 .context/
 .antigravitycli/
+
+# `go build ./...` artifact (cmd/orbit without -o)
+/orbit

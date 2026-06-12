@@ -1,6 +1,6 @@
 # branches
 
-Single delete-branch entry: the global `b` modal (centered overlay listing every local branch). Branch creation and rename are handled by worktree workflows (top dashboard's `w` focus mode) and PR-driven naming; the cockpit doesn't surface modals for them.
+Single delete-branch entry: the global `b` modal (centered overlay listing every local branch). Branch creation and rename are handled by worktree workflows (the `w` worktrees modal) and PR-driven naming; the cockpit doesn't surface modals for them.
 
 ## Modal (`b`, global)
 

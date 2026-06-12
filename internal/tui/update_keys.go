@@ -2,9 +2,8 @@
 // updateKey owns the shared quit-disarm preamble and routes to one
 // handle*Key method per viewMode, preserving the original guard order:
 // overlay/modal modes first (so esc closes the surface instead of the
-// app), then the dashboard-focus partial handler (which deliberately
-// falls through to the normal-mode switch for unhandled keys), then the
-// normal-mode global shortcuts with the graph as final fallthrough.
+// app), then the normal-mode global shortcuts with the graph as final
+// fallthrough.
 package tui
 
 import (
@@ -50,13 +49,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == viewModeBranchesModal {
 		return m.handleBranchesModalKey(msg)
 	}
-	if m.focused == paneDashboard && m.mode == viewModeNormal {
-		if next, cmd, handled := m.handleDashboardFocusKey(msg); handled {
-			return next, cmd
-		}
-		// `w` and any other key fall through to the normal-mode
-		// switch so the toggle-off case in `case "w"` fires and
-		// global shortcuts (r, F, p, ?, ,) still work.
+	if m.mode == viewModeWorktreesModal {
+		return m.handleWorktreesModalKey(msg)
 	}
 	if m.mode == viewModeZombieCleanupConfirm {
 		return m.handleZombieCleanupConfirmKey(msg)
@@ -233,35 +227,29 @@ func (m Model) handleBranchesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleDashboardFocusKey is the only partial key handler: keys it does
-// not own return handled=false so updateKey lets them fall through to
-// the normal-mode switch (`w` toggle-off, global shortcuts).
-func (m Model) handleDashboardFocusKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "j", "down":
-		return m.dashboardMoveCursor(1), nil, true
+		return m.worktreesModalMoveCursor(1), nil
 	case "k", "up":
-		return m.dashboardMoveCursor(-1), nil, true
+		return m.worktreesModalMoveCursor(-1), nil
 	case "enter":
-		next, cmd := m.dashboardEnter()
-		return next, cmd, true
+		return m.worktreesModalEnter()
 	case "a":
-		next, cmd := m.dashboardAdd()
-		return next, cmd, true
+		return m.beginWorktreeAdd()
 	case "d":
-		next, cmd := m.dashboardRemove()
-		return next, cmd, true
+		return m.worktreesModalRemove()
 	case "s":
-		return m.dashboardToggleSort(), nil, true
-	case "esc":
-		m.focused = paneGraph
-		m.dashboardFocus = dashboardFocusState{}
-		return m, nil, true
+		return m.worktreesModalToggleSort(), nil
+	case "w", "esc":
+		// `w` toggles the modal closed, mirroring how it opens.
+		m.mode = viewModeNormal
+		m.worktreesModal = worktreesModalState{}
+		return m, nil
 	case "ctrl+c":
-		next, cmd := m.handleCtrlC()
-		return next, cmd, true
+		return m.handleCtrlC()
 	}
-	return m, nil, false
+	return m, nil
 }
 
 func (m Model) handleZombieCleanupConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -443,15 +431,9 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// entry. Global, independent of focused pane.
 		return m.beginBranchesModal()
 	case "w":
-		// Toggle the top dashboard's focus mode. While focused, the
-		// dashboard owns j/k/enter/a/d/esc; everything else (r, F, p,
-		// ?, ,) still falls through to the normal-mode switch.
-		if m.focused == paneDashboard {
-			m.focused = paneGraph
-			m.dashboardFocus = dashboardFocusState{}
-			return m, nil
-		}
-		return m.enterDashboardFocus()
+		// Worktrees modal — same overlay pattern as `b`. Global,
+		// independent of focused pane.
+		return m.beginWorktreesModal()
 	}
 	var cmd tea.Cmd
 	m.graph, cmd = m.graph.Update(msg)

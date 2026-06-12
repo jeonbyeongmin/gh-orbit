@@ -33,10 +33,6 @@ func (m Model) updateWorktreeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.refs.SetWorktrees(msg.entries, m.workdir)
-		// Dashboard height is data-driven on len(worktrees); going from
-		// 0 → N (or N → 0) shrinks/grows the graph pane, so resize the
-		// graph viewport now to keep the bubbles list in sync.
-		m.applyPaneSizes()
 		paths := make([]string, 0, len(msg.entries))
 		for _, e := range msg.entries {
 			paths = append(paths, e.Path)
@@ -53,7 +49,7 @@ func (m Model) updateWorktreeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the new state. If the event hit the current worktree, also fire
 		// reloadCmd so graph + refs stay coherent — an external commit on
 		// the tree we're viewing must surface as a new graph row, not just
-		// a relabeled dashboard line. reloadCmd bumps reqID a second time,
+		// a relabeled modal row. reloadCmd bumps reqID a second time,
 		// which only burns one generation (stale-drop logic is reqID-equal,
 		// not monotonic).
 		m.sidebarWorktreesReqID++
@@ -493,7 +489,6 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebarWorktreesReqID++
 		return m, tea.Batch(
 			loadStatusCmd(m.workdir),
-			loadLocalChangesSummaryCmd(m.workdir),
 			loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 		)
 
@@ -508,7 +503,6 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebarWorktreesReqID++
 		return m, tea.Batch(
 			loadStatusCmd(m.workdir),
-			loadLocalChangesSummaryCmd(m.workdir),
 			loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 		)
 
@@ -517,16 +511,6 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 
-	case localChangesSummaryLoadedMsg:
-		m.refs.SetLocalChangesSummary(msg.summary, msg.loadedAt)
-		return m, nil
-
-	case localChangesSummaryFailedMsg:
-		// Sidebar inline meta is a nice-to-have — a failed numstat (rare
-		// outside detached HEAD without a HEAD ref) should not noise up
-		// status; the bare label still renders.
-		m.refs.ResetLocalChangesSummary()
-		return m, nil
 	}
 	return m, nil
 }

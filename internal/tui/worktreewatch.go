@@ -1,7 +1,7 @@
 // External-change detection for worktrees. fsnotify watches each
 // worktree's `.git/HEAD` and `.git/index` so a commit / checkout / rebase
-// from another shell flips the dashboard
-// row without the user pressing `r`. Burst events from a single git op
+// from another shell refreshes the worktree inventory and graph
+// without the user pressing `r`. Burst events from a single git op
 // (HEAD.lock → rename, index rewrite, COMMIT_EDITMSG churn) coalesce via
 // a 200ms trailing debounce keyed by worktree path.
 //
@@ -122,7 +122,7 @@ func (w *worktreeWatcher) run() {
 // goroutine and from tests.
 func (w *worktreeWatcher) onRawEvent(eventName string, op fsnotify.Op) {
 	// Chmod-only events (attribute / timestamp touches) are never a real
-	// HEAD/index content change. `git status` — which the dashboard dirty
+	// HEAD/index content change. `git status` — which the worktree dirty
 	// fan-out runs on every reload — touches .git/index's metadata even with
 	// --no-optional-locks, emitting a lone Chmod. Reacting to it would feed a
 	// reload → status → Chmod → reload flicker loop. Real commits / checkouts

@@ -151,9 +151,9 @@ func prForChip(c git.ChipRef, prs map[string]prInfo) (prInfo, bool) {
 		pr, ok := prs[c.DisplayName]
 		return pr, ok
 	case git.RefKindRemote:
-		if i := strings.IndexByte(c.DisplayName, '/'); i >= 0 {
-			pr, ok := prs[c.DisplayName[i+1:]]
-			return pr, ok
+		if stripped, ok := git.StripRemotePrefix(c.DisplayName); ok {
+			pr, found := prs[stripped]
+			return pr, found
 		}
 	}
 	return prInfo{}, false

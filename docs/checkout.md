@@ -106,11 +106,13 @@ collision, dirty tree) surface as an inline error and keep the modal
 open for correction; success closes the modal, reloads, and HEAD-jumps
 the graph cursor onto the new branch tip.
 
-## Push (`P`) / open on GitHub (`o`)
+## Push (`P`) / open PR on GitHub (`o`)
 
 `P` completes the network triad (`F` fetch · `p` pull · `P` push):
 plain `git push` for the current branch, with a one-shot
 `--set-upstream origin <branch>` retry when the branch has no upstream
 yet. Never forces; detached HEAD is rejected up front. `o` runs
-`gh browse <cursor-hash>` to open the commit on GitHub — gh's own
-error (non-GitHub remote, auth) lands on the status line.
+`gh pr view --web <number>` for the open PR named by the cursor row's
+chip badge — rows without a PR-bearing chip report "no open PR on this
+commit" instead; gh's own error (non-GitHub remote, auth) lands on the
+status line.

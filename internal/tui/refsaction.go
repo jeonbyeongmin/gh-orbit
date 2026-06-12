@@ -13,11 +13,8 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
-// refDeleteState backs the inline delete-confirm prompt. force=true means
-// the `Y` keystroke was previously seen (post-not-merged retry) or the
-// caller pre-armed force; the bottom-hint renderer reads it to swap
-// `[y] delete` → `[Y] force delete`. localName is the resolved branch
-// name dispatched to BranchDelete.
+// refDeleteState backs the delete-confirm dialog. localName is the
+// resolved branch name dispatched to BranchDelete.
 type refDeleteState struct {
 	localName string
 }
@@ -43,7 +40,7 @@ type branchDeleteFailedMsg struct {
 
 // branchDeleteNotMergedMsg fires when `git branch -d` was rejected because
 // the branch isn't fully merged into HEAD or its upstream. The model
-// surfaces the "press [Y] to force" hint and leaves the inline prompt
+// surfaces the "press [Y] to force" hint and leaves the confirm dialog
 // re-armed; pressing `Y` retries with -D.
 type branchDeleteNotMergedMsg struct {
 	localName string
@@ -52,7 +49,7 @@ type branchDeleteNotMergedMsg struct {
 // branchDeleteCmd runs `git branch -d/-D <localName>` and routes the result
 // onto the typed msg vocabulary above. force=true picks -D; false picks -d
 // and routes ErrBranchNotFullyMerged into branchDeleteNotMergedMsg so the
-// inline prompt can ask the user to force.
+// confirm dialog can ask the user to force.
 func branchDeleteCmd(dir, localName string, force bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), checkoutTimeout)

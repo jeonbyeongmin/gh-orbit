@@ -563,10 +563,9 @@ func (m Model) updateBranchOpsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case branchDeleteNotMergedMsg:
-		// Re-arm the inline confirm with force=true so the user can press
-		// `Y` to retry with -D. Stay in viewModeRefDeleteConfirm; the
-		// renderer swaps the hint from "[y] delete" to "[Y] force delete"
-		// off pendingRefDelete (which is still populated).
+		// Stay in viewModeRefDeleteConfirm so the user can press `Y` to
+		// retry with -D. The dialog's status row surfaces the not-merged
+		// message; the hint row already offers [Y] force.
 		m.refActionInFlight = false
 		m.status = "'" + msg.localName + "' not fully merged — press [Y] to force"
 		m.statusStyle = statusErrS

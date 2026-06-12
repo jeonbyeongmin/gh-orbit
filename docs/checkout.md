@@ -71,11 +71,11 @@ The old `C` (detach) shortcut is subsumed — graph `enter` produces it as the d
 "my feature branch is behind develop, replay it" move, driven from the
 same graph cursor as `enter`.
 
-- **Confirm-first**: `R` arms an inline bottom-line prompt
+- **Confirm-first**: `R` arms a centered confirm dialog
   (`rebase <head> onto <label>? [y] rebase · [esc] cancel`) — same
-  surface as the branch-delete confirm, so the cursor stays anchored on
-  the onto-row. `<label>` is the first local chip on the row, else the
-  first remote chip, else the short hash.
+  surface as the branch-delete confirm; the graph stays visible
+  (dimmed) underneath. `<label>` is the first local chip on the row,
+  else the first remote chip, else the short hash.
 - **Rejections up front**: detached HEAD (`checkout a branch first`),
   cursor on HEAD itself (no-op), or any in-flight graph action.
 - **Conflicts delegate to the terminal**: a conflict stop reports
@@ -91,7 +91,7 @@ same graph cursor as `enter`.
 ## Cherry-pick (`c`)
 
 `c` applies the **cursor commit onto the current branch** — the same
-confirm-first inline prompt and conflict contract as `R`
+confirm-first dialog and conflict contract as `R`
 (`cherry-pick <hash> onto <head>? [y]/[esc]`; conflicts report
 `resolve in your terminal` and leave the mid-pick state in place).
 Rejections mirror rebase: detached HEAD, cursor on HEAD, in-flight

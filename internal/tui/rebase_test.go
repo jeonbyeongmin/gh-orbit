@@ -50,9 +50,9 @@ func TestRebaseKeyArmsConfirmWithChipLabel(t *testing.T) {
 	if m.pendingRebase.label != "develop" {
 		t.Errorf("label should prefer the local chip, got %q", m.pendingRebase.label)
 	}
-	hint := m.rebaseInlineHint()
-	if !strings.Contains(hint, "rebase main onto develop?") {
-		t.Errorf("inline hint should name the chain, got %q", hint)
+	dialog := m.renderRebaseConfirmInner()
+	if !strings.Contains(dialog, "rebase main onto develop?") {
+		t.Errorf("confirm dialog should name the chain, got %q", dialog)
 	}
 }
 

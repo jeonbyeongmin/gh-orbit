@@ -85,8 +85,8 @@ func TestCherryPickConfirmFlow(t *testing.T) {
 	if m.mode != viewModeCherryPickConfirm {
 		t.Fatalf("c should arm the confirm, mode=%v", m.mode)
 	}
-	if !strings.Contains(m.cherryPickInlineHint(), "onto main?") {
-		t.Errorf("hint should name the head branch: %q", m.cherryPickInlineHint())
+	if !strings.Contains(m.renderCherryPickConfirmInner(), "onto main?") {
+		t.Errorf("confirm dialog should name the head branch: %q", m.renderCherryPickConfirmInner())
 	}
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})

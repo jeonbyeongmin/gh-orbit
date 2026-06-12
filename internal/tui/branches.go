@@ -108,14 +108,10 @@ func (m Model) renderBranchesModalInner() string {
 	}
 
 	const visibleBudget = 16
-	visibleRows := visibleBudget
-	if len(locals) < visibleRows {
-		visibleRows = len(locals)
-	}
 
 	lines := []string{header}
 	lines = append(lines, renderScrollWindow(
-		m.branchesModal.cursor-visibleRows/2, visibleRows, len(locals),
+		m.branchesModal.cursor-visibleBudget/2, visibleBudget, len(locals),
 		func(i int) string {
 			ref := locals[i]
 			label := ref.ShortName

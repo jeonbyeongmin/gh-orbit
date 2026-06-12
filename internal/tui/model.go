@@ -464,7 +464,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // quitArmHint is the status line shown after the first ctrl+c. Kept as a
-// const so the disarm chokepoint in Update can match it exactly before
+// const so the disarm chokepoint in updateKey can match it exactly before
 // clearing — an unrelated status message is left untouched.
 const quitArmHint = "^C again to quit"
 

@@ -46,11 +46,11 @@ func TestDKeyOnGraphFocusOpensPatchOverlay(t *testing.T) {
 	}
 }
 
-// TestDeleteInlineConfirmKeystrokeSequence pins the user-facing keystroke
-// matrix of the inline branch-delete confirm. After the refs-LIST subtract
+// TestDeleteConfirmKeystrokeSequence pins the user-facing keystroke
+// matrix of the branch-delete confirm dialog. After the refs-LIST subtract
 // the only entry into this confirm is the branches modal — open it with
 // `b`, move to a non-HEAD branch, and press `d` to arm.
-func TestDeleteInlineConfirmKeystrokeSequence(t *testing.T) {
+func TestDeleteConfirmKeystrokeSequence(t *testing.T) {
 	open := func(t *testing.T) (Model, *bool, *string) {
 		t.Helper()
 		called, callForce := false, false
@@ -104,8 +104,8 @@ func TestDeleteInlineConfirmKeystrokeSequence(t *testing.T) {
 		if !m.refActionInFlight {
 			t.Error("y should arm refActionInFlight")
 		}
-		if !strings.Contains(m.status, "deleting 'feat/foo'") {
-			t.Errorf("status = %q, want 'deleting feat/foo…'", m.status)
+		if !strings.Contains(m.renderRefDeleteConfirmInner(), "deleting…") {
+			t.Errorf("dialog = %q, want in-flight 'deleting…' hint", m.renderRefDeleteConfirmInner())
 		}
 		if cmd == nil {
 			t.Fatal("y should dispatch branchDeleteCmd")
@@ -126,8 +126,8 @@ func TestDeleteInlineConfirmKeystrokeSequence(t *testing.T) {
 		if m.mode != viewModeRefDeleteConfirm {
 			t.Errorf("Y should keep confirm visible during dispatch, mode = %v", m.mode)
 		}
-		if !strings.Contains(m.status, "(forced)") {
-			t.Errorf("status = %q, want it to mention '(forced)'", m.status)
+		if !m.refActionInFlight {
+			t.Error("Y should arm refActionInFlight")
 		}
 		if cmd == nil {
 			t.Fatal("Y should dispatch branchDeleteCmd")
@@ -138,6 +138,27 @@ func TestDeleteInlineConfirmKeystrokeSequence(t *testing.T) {
 		}
 		if *seenName != "feat/foo" {
 			t.Errorf("delete called with %q, want feat/foo", *seenName)
+		}
+	})
+
+	t.Run("keys gated while delete in flight", func(t *testing.T) {
+		m, _, _ := open(t)
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+		m = updated.(Model)
+		// In flight: a second y must not re-dispatch, esc must not close.
+		for _, k := range []tea.KeyMsg{
+			{Type: tea.KeyRunes, Runes: []rune{'y'}},
+			{Type: tea.KeyRunes, Runes: []rune{'Y'}},
+			{Type: tea.KeyEsc},
+		} {
+			updated, cmd := m.Update(k)
+			m = updated.(Model)
+			if cmd != nil {
+				t.Errorf("key %v should be gated in flight, dispatched a cmd", k)
+			}
+			if m.mode != viewModeRefDeleteConfirm {
+				t.Errorf("key %v should keep the dialog open, mode = %v", k, m.mode)
+			}
 		}
 	})
 
@@ -163,10 +184,10 @@ func TestDeleteInlineConfirmKeystrokeSequence(t *testing.T) {
 	})
 }
 
-func TestDeleteInlineConfirmYRetryAfterNotMerged(t *testing.T) {
+func TestDeleteConfirmYRetryAfterNotMerged(t *testing.T) {
 	// Press `y`, get back branchDeleteNotMergedMsg, then press `Y` to retry
-	// with force. Mirrors the user-facing flow: the inline prompt re-arms
-	// with a "press [Y] to force" hint after the not-merged sentinel.
+	// with force. Mirrors the user-facing flow: the confirm dialog re-arms
+	// with a "press [Y] to force" row after the not-merged sentinel.
 	var attempts int
 	var lastForce bool
 	withRefsActionStubs(t, refsActionStubs{
@@ -197,10 +218,13 @@ func TestDeleteInlineConfirmYRetryAfterNotMerged(t *testing.T) {
 	updated, _ = m.Update(cmd())
 	m = updated.(Model)
 	if m.mode != viewModeRefDeleteConfirm {
-		t.Errorf("after not-merged the prompt should stay open, mode = %v", m.mode)
+		t.Errorf("after not-merged the dialog should stay open, mode = %v", m.mode)
 	}
-	if !strings.Contains(m.status, "not fully merged") {
-		t.Errorf("status = %q, want 'not fully merged' hint", m.status)
+	if !m.pendingRefDelete.notMerged {
+		t.Error("not-merged reply should flag pendingRefDelete.notMerged")
+	}
+	if !strings.Contains(m.renderRefDeleteConfirmInner(), "not fully merged") {
+		t.Errorf("dialog = %q, want 'not fully merged' row", m.renderRefDeleteConfirmInner())
 	}
 
 	// Second Y: force-delete.

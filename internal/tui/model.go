@@ -274,12 +274,13 @@ type Model struct {
 	// pushInFlight gates `P` while pushCmd is running.
 	pushInFlight bool
 	// pendingRefDelete backs viewModeRefDeleteConfirm. Stamped on `d`
-	// keypress with the cursor's local-branch name; the inline-confirm
+	// keypress with the cursor's local-branch name; the confirm-dialog
 	// renderer / key router reads it without re-deriving from refs.
 	pendingRefDelete refDeleteState
-	// refActionInFlight gates the `d` key while a branch-delete cmd is
-	// running. Distinct from checkoutInFlight so a stuck refs write can't
-	// deadlock checkout / pull / FF chains.
+	// refActionInFlight gates the confirm dialog's keys (and swaps its
+	// hint to deleting…) while a branch-delete cmd is running. Distinct
+	// from checkoutInFlight so a stuck refs write can't deadlock
+	// checkout / pull / FF chains.
 	refActionInFlight bool
 	// zombieCleanup backs viewModeZombieCleanupConfirm. Populated when the
 	// detect dispatch returns a non-empty list; the modal renderer + key
@@ -678,18 +679,13 @@ func checkoutLabel(ref string, detached bool) string {
 
 // dispatchRefDelete fires branchDeleteCmd with the in-flight gate armed.
 // force=false picks `git branch -d`; force=true picks `-D`. The confirm
-// dialog stays open while the cmd runs — branchDeleteSucceededMsg /
-// FailedMsg / NotMergedMsg close (or re-arm) it.
+// dialog stays open while the cmd runs (its hint row swaps to deleting…
+// and the key handler swallows everything but ctrl+c) —
+// branchDeleteSucceededMsg / FailedMsg / NotMergedMsg close (or re-arm)
+// it.
 func (m Model) dispatchRefDelete(force bool) (Model, tea.Cmd) {
-	d := m.pendingRefDelete
 	m.refActionInFlight = true
-	if force {
-		m.status = "deleting '" + d.localName + "' (forced)…"
-	} else {
-		m.status = "deleting '" + d.localName + "'…"
-	}
-	m.statusStyle = statusBusyS
-	return m, branchDeleteCmd(m.workdir, d.localName, force)
+	return m, branchDeleteCmd(m.workdir, m.pendingRefDelete.localName, force)
 }
 
 // ffLabel renders the user-facing "fast-forward: <branch> +<N>" status
@@ -877,16 +873,22 @@ func (m Model) renderBranchPickerInner() string {
 }
 
 // renderRefDeleteConfirmInner returns the branch-delete confirm dialog
-// content. The middle row mirrors m.status so the deleting… progress and
-// the not-merged force-retry message land inside the box — the bottom
-// line is blanked while a modal is up.
+// content. Delete-flow feedback renders from refDeleteState + the
+// in-flight gate — never from the global m.status, which mode-blind
+// async handlers (fetch / push / pull done) keep writing while the
+// dialog is open. The in-flight hint swap mirrors the worktree-remove
+// and zombie-cleanup confirms.
 func (m Model) renderRefDeleteConfirmInner() string {
 	d := m.pendingRefDelete
 	rows := []string{confirmPromptS.Render("delete '" + d.localName + "'?")}
-	if m.status != "" {
-		rows = append(rows, m.statusStyle.Render(m.status))
+	if d.notMerged {
+		rows = append(rows, statusErrS.Render("not fully merged — press [Y] to force"))
 	}
-	rows = append(rows, help.Render("[y] delete · [Y] force · [esc] cancel"))
+	hintText := "[y] delete · [Y] force · [esc] cancel"
+	if m.refActionInFlight {
+		hintText = "deleting…"
+	}
+	rows = append(rows, help.Render(hintText))
 	return strings.Join(rows, "\n")
 }
 

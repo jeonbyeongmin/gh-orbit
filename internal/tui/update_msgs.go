@@ -564,11 +564,11 @@ func (m Model) updateBranchOpsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case branchDeleteNotMergedMsg:
 		// Stay in viewModeRefDeleteConfirm so the user can press `Y` to
-		// retry with -D. The dialog's status row surfaces the not-merged
-		// message; the hint row already offers [Y] force.
+		// retry with -D. The dialog renders the not-merged row off
+		// pendingRefDelete — not m.status, which mode-blind async
+		// handlers could overwrite while the dialog is open.
 		m.refActionInFlight = false
-		m.status = "'" + msg.localName + "' not fully merged — press [Y] to force"
-		m.statusStyle = statusErrS
+		m.pendingRefDelete.notMerged = true
 		return m, nil
 
 	case zombieDetectedMsg:

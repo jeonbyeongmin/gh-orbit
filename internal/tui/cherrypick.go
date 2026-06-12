@@ -6,7 +6,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -83,10 +82,8 @@ func (m Model) beginCherryPick() (Model, tea.Cmd) {
 // content — same surface as the rebase confirm.
 func (m Model) renderCherryPickConfirmInner() string {
 	p := m.pendingCherryPick
-	return strings.Join([]string{
-		confirmPromptS.Render("cherry-pick " + shortHash(p.hash) + " onto " + p.branch + "?"),
-		help.Render("[y] pick · [esc] cancel"),
-	}, "\n")
+	return confirmPromptS.Render("cherry-pick "+shortHash(p.hash)+" onto "+p.branch+"?") + "\n" +
+		help.Render("[y] pick · [esc] cancel")
 }
 
 func (m Model) handleCherryPickConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

@@ -8,7 +8,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -110,10 +109,8 @@ func (m Model) rebaseTargetLabel(hash string) string {
 // the same prompt + hint rows as the cherry-pick confirm.
 func (m Model) renderRebaseConfirmInner() string {
 	p := m.pendingRebase
-	return strings.Join([]string{
-		confirmPromptS.Render("rebase " + p.branch + " onto " + p.label + "?"),
-		help.Render("[y] rebase · [esc] cancel"),
-	}, "\n")
+	return confirmPromptS.Render("rebase "+p.branch+" onto "+p.label+"?") + "\n" +
+		help.Render("[y] rebase · [esc] cancel")
 }
 
 func (m Model) handleRebaseConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

@@ -14,9 +14,12 @@ import (
 )
 
 // refDeleteState backs the delete-confirm dialog. localName is the
-// resolved branch name dispatched to BranchDelete.
+// resolved branch name dispatched to BranchDelete; notMerged flags the
+// post-`-d`-rejection state so the dialog can explain the [Y] force
+// retry.
 type refDeleteState struct {
 	localName string
+	notMerged bool
 }
 
 // Package-level seam over git.BranchDelete so tests can stub the subprocess

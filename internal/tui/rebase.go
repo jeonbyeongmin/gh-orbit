@@ -53,7 +53,7 @@ func rebaseCmd(dir, onto string) tea.Cmd {
 // up front when another graph action is mid-flight, when HEAD is detached
 // (nothing to replay), or when the cursor is HEAD itself (no-op).
 func (m Model) beginRebase() (Model, tea.Cmd) {
-	if m.actionInFlight || m.checkoutInFlight || m.ffInFlight || m.rebaseInFlight {
+	if m.gitMutationInFlight() {
 		return m, nil
 	}
 	c, ok := m.graph.Selected()

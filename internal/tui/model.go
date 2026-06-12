@@ -490,6 +490,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// gitMutationInFlight reports whether any working-tree / history mutating
+// action is mid-flight (graph enter chain, rebase, cherry-pick, branch
+// create, push). Every mutating begin* gate checks this one predicate so
+// two git writers can never race on the same index/HEAD.
+func (m Model) gitMutationInFlight() bool {
+	return m.actionInFlight || m.checkoutInFlight || m.ffInFlight ||
+		m.rebaseInFlight || m.cherryPickInFlight || m.branchCreate.inFlight ||
+		m.pushInFlight
+}
+
 // quitArmHint is the status line shown after the first ctrl+c. Kept as a
 // const so the disarm chokepoint in updateKey can match it exactly before
 // clearing — an unrelated status message is left untouched.

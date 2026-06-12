@@ -229,9 +229,10 @@ func (m Model) updateCommitsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateCheckoutMsg handles the graph Enter action chain: evaluator
-// replies and checkout / fast-forward outcomes (including the
-// needs-clean-tree detours into viewModeCheckoutConfirm).
+// updateCheckoutMsg handles graph-action outcomes: the Enter evaluator
+// chain (checkout / fast-forward, including the needs-clean-tree detours
+// into viewModeCheckoutConfirm) plus the rebase / cherry-pick /
+// branch-create / push / browse replies.
 func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case checkoutSucceededMsg:

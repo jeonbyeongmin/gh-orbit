@@ -53,7 +53,7 @@ func branchCreateCmd(dir, name, startPoint string, reqID uint64) tea.Cmd {
 // beginBranchCreate opens the name-input modal anchored at the cursor
 // commit.
 func (m Model) beginBranchCreate() (Model, tea.Cmd) {
-	if m.branchCreate.inFlight {
+	if m.gitMutationInFlight() {
 		return m, nil
 	}
 	c, ok := m.graph.Selected()

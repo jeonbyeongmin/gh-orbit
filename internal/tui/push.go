@@ -38,7 +38,7 @@ func pushCmd(dir, branch string) tea.Cmd {
 // detached HEAD (nothing to push) and gated by pushInFlight so a held-down
 // P can't stack pushes.
 func (m Model) beginPush() (Model, tea.Cmd) {
-	if m.pushInFlight {
+	if m.gitMutationInFlight() {
 		return m, nil
 	}
 	var headBranch string

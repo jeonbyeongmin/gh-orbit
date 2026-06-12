@@ -47,7 +47,7 @@ func cherryPickCmd(dir, hash string) tea.Cmd {
 // Same up-front rejections as rebase: detached HEAD, cursor==HEAD,
 // anything already in flight.
 func (m Model) beginCherryPick() (Model, tea.Cmd) {
-	if m.actionInFlight || m.checkoutInFlight || m.ffInFlight || m.rebaseInFlight || m.cherryPickInFlight {
+	if m.gitMutationInFlight() {
 		return m, nil
 	}
 	c, ok := m.graph.Selected()

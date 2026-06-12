@@ -375,6 +375,31 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "checkout+fast-forward: " + msg.branch + " — uncommitted changes"
 		m.statusStyle = statusErrS
 		return m, nil
+
+	case rebaseSucceededMsg:
+		p := m.pendingRebase
+		m.rebaseInFlight = false
+		m.pendingRebase = pendingRebase{}
+		m.status = "rebase: done (" + p.branch + " onto " + p.label + ")"
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case rebaseConflictMsg:
+		m.rebaseInFlight = false
+		m.pendingRebase = pendingRebase{}
+		m.status = "rebase: CONFLICT — resolve in your terminal"
+		m.statusStyle = statusErrS
+		// Reload so the graph reflects the mid-rebase state. No HEAD jump —
+		// the user is mid-conflict (mirrors the pull-conflict handler).
+		return m, m.reloadCmd()
+
+	case rebaseFailedMsg:
+		m.rebaseInFlight = false
+		m.pendingRebase = pendingRebase{}
+		m.status = "rebase failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
 	}
 	return m, nil
 }

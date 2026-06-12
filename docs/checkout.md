@@ -64,3 +64,26 @@ Other invariants:
 - Status surfaces are one-line: `fast-forward: main +3`, `fast-forward: develop +2 (after checkout)`, `fast-forward failed: <reason>`, `already on main`, `branch select cancelled`.
 
 The old `C` (detach) shortcut is subsumed — graph `enter` produces it as the detached-HEAD outcome.
+
+## Rebase (`R`)
+
+`R` rebases the **current branch onto the cursor commit** — the everyday
+"my feature branch is behind develop, replay it" move, driven from the
+same graph cursor as `enter`.
+
+- **Confirm-first**: `R` arms an inline bottom-line prompt
+  (`rebase <head> onto <label>? [y] rebase · [esc] cancel`) — same
+  surface as the branch-delete confirm, so the cursor stays anchored on
+  the onto-row. `<label>` is the first local chip on the row, else the
+  first remote chip, else the short hash.
+- **Rejections up front**: detached HEAD (`checkout a branch first`),
+  cursor on HEAD itself (no-op), or any in-flight graph action.
+- **Conflicts delegate to the terminal**: a conflict stop reports
+  `rebase: CONFLICT — resolve in your terminal`, reloads so the graph
+  shows the mid-rebase state, and never auto-aborts — identical contract
+  to pull conflicts. Success reloads with a HEAD jump
+  (`rebase: done (<head> onto <label>)`); a dirty-tree refusal surfaces
+  git's own message as `rebase failed: …`.
+- Wrapper: `git.Rebase` (plain `git rebase <onto>`), conflict detection
+  via the same merge-like stderr/stdout scan as `git.Pull`
+  (`ErrRebaseConflict`).

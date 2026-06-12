@@ -95,7 +95,8 @@ Today the build wires up:
   - `r` — reload refs + log
   - `ctrl+c` `ctrl+c` — quit (press twice; works anywhere, including
     inside the patch overlay)
-  - `R` is reserved for a future Rebase action
+  - `R` — rebase the current branch onto the focused commit
+    (inline confirm; conflicts are left for your terminal)
 - a status line next to the help row surfaces fetch progress, errors,
   and hash-copy confirmation
 - `internal/git` exposes typed wrappers around `git log`, `git show

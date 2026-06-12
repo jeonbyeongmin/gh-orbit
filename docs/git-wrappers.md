@@ -19,6 +19,7 @@ We want `.gitconfig`, hooks, commit signing, and LFS to keep working with zero e
 Stderr matching turns common git failures into typed sentinels so the TUI can branch on them:
 
 - `ErrCheckoutNeedsCleanTree` — "Please commit your changes or stash them" / "would be overwritten" / "Your local changes". Drives the dirty-tree confirm flow ([checkout.md](checkout.md)).
+- `ErrPullConflict` / `ErrRebaseConflict` — a "CONFLICT" token in `git pull` / `git rebase` output. Drives the "resolve in your terminal" delegation ([checkout.md](checkout.md)); the mid-merge/mid-rebase state is left in place.
 - `ErrBranchAlreadyExists`, `ErrInvalidRefName`, `ErrBranchNotFullyMerged` — branch lifecycle ([branches.md](branches.md)).
 
 Add new sentinels when a TUI flow needs to react to a specific git failure mode; otherwise pass stderr through unchanged.

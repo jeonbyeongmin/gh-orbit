@@ -12,6 +12,10 @@ func TestRebaseLiveFastForwardAndReplay(t *testing.T) {
 		t.Skip("git not available")
 	}
 	dir := initRepoWithFile(t, "a.txt", "base\n")
+	// Rebase replays commits through the production wrapper (user env, no
+	// injected identity), so the CI runner needs a repo-local one.
+	gitRun(t, dir, "config", "user.name", "Test")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
 	base := gitOutput(t, dir, "rev-parse", "HEAD")
 	// main advances with a non-conflicting file; feature branches off base.
 	gitRun(t, dir, "checkout", "-b", "feature", base)
@@ -39,6 +43,10 @@ func TestRebaseLiveConflictCarriesSentinel(t *testing.T) {
 		t.Skip("git not available")
 	}
 	dir := initRepoWithFile(t, "a.txt", "base\n")
+	// Rebase replays commits through the production wrapper (user env, no
+	// injected identity), so the CI runner needs a repo-local one.
+	gitRun(t, dir, "config", "user.name", "Test")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
 	base := gitOutput(t, dir, "rev-parse", "HEAD")
 	gitRun(t, dir, "checkout", "-b", "feature", base)
 	mustWrite(t, dir, "a.txt", "feature edit\n")

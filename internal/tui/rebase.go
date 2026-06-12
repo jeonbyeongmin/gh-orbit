@@ -1,5 +1,5 @@
 // `R` — rebase the current branch onto the graph cursor. The flow is
-// confirm-first (an inline bottom-line prompt, same surface as the
+// confirm-first (a centered confirm dialog, same surface as the
 // branch-delete confirm) because rebase rewrites history; conflicts are
 // delegated to the terminal exactly like pull conflicts — the cockpit
 // reports and reloads, it never auto-aborts a mid-rebase state.
@@ -105,12 +105,11 @@ func (m Model) rebaseTargetLabel(hash string) string {
 	return shortHash(hash)
 }
 
-// rebaseInlineHint paints the confirm prompt into the bottom hint line —
-// no overlay box, so the cursor stays anchored on the onto-row (matching
-// the branch-delete inline pattern).
-func (m Model) rebaseInlineHint() string {
+// renderRebaseConfirmInner returns the rebase confirm dialog content —
+// the same prompt + hint rows as the cherry-pick confirm.
+func (m Model) renderRebaseConfirmInner() string {
 	p := m.pendingRebase
-	return confirmPromptS.Render("rebase "+p.branch+" onto "+p.label+"?") + " " +
+	return confirmPromptS.Render("rebase "+p.branch+" onto "+p.label+"?") + "\n" +
 		help.Render("[y] rebase · [esc] cancel")
 }
 

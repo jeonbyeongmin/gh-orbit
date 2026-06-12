@@ -1,6 +1,6 @@
 // branches modal: viewModeBranchesModal hosts a centered overlay listing
 // every local branch. `b` opens it from viewModeNormal; `d` arms the
-// existing inline delete confirm (viewModeRefDeleteConfirm) against the
+// existing delete confirm dialog (viewModeRefDeleteConfirm) against the
 // modal's cursor row, mirroring the refs-pane `d` flow so the delete-
 // branch chain stays single-codepath.
 //

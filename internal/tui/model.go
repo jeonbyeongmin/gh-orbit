@@ -74,11 +74,11 @@ const (
 	// chips at the cursor row (graphActionPicker). The 3-pane layout stays
 	// visible underneath; only j/k/enter/esc are accepted while open.
 	viewModeBranchPicker
-	// viewModeRefDeleteConfirm gates the screen on the inline branch-delete
-	// confirm. Unlike the centered overlay modes above, this one paints its
-	// prompt into the bottom hint line — no overlay box — to match the
-	// worktree-remove pattern and keep the cursor anchored on the row being
-	// acted upon. Only y/Y/esc/ctrl+c are accepted.
+	// viewModeRefDeleteConfirm gates the screen on the branch-delete
+	// confirm dialog (centered overlay, same surface as every other
+	// confirm). The status row inside the box carries the deleting… /
+	// not-merged-retry feedback while the dialog stays open. Only
+	// y/Y/esc/ctrl+c are accepted.
 	viewModeRefDeleteConfirm
 	// viewModeLocalChanges replaces the graph view with a file-tree + diff
 	// layout for working-tree work. Entered via the `,` keybind.
@@ -110,14 +110,13 @@ const (
 	// branches modal. enter switches, a/d reuse the existing add-input /
 	// remove-confirm sub-modals, s toggles last-commit sort.
 	viewModeWorktreesModal
-	// viewModeRebaseConfirm gates the screen on the inline "rebase <head>
-	// onto <cursor>?" confirm. Bottom-hint style like the branch-delete
-	// confirm — the cursor stays anchored on the onto-row. Only
-	// y/esc/ctrl+c are accepted.
+	// viewModeRebaseConfirm gates the screen on the "rebase <head>
+	// onto <cursor>?" confirm dialog (centered overlay like the
+	// branch-delete confirm). Only y/esc/ctrl+c are accepted.
 	viewModeRebaseConfirm
-	// viewModeCherryPickConfirm gates the screen on the inline
-	// "cherry-pick <hash> onto <head>?" confirm. Same surface contract as
-	// the rebase confirm.
+	// viewModeCherryPickConfirm gates the screen on the
+	// "cherry-pick <hash> onto <head>?" confirm dialog. Same surface
+	// contract as the rebase confirm.
 	viewModeCherryPickConfirm
 	// viewModeBranchCreateInput hosts the branch-name textinput for `n`
 	// (create branch at cursor + switch). Same modal shape as the
@@ -275,12 +274,13 @@ type Model struct {
 	// pushInFlight gates `P` while pushCmd is running.
 	pushInFlight bool
 	// pendingRefDelete backs viewModeRefDeleteConfirm. Stamped on `d`
-	// keypress with the cursor's local-branch name; the inline-confirm
+	// keypress with the cursor's local-branch name; the confirm-dialog
 	// renderer / key router reads it without re-deriving from refs.
 	pendingRefDelete refDeleteState
-	// refActionInFlight gates the `d` key while a branch-delete cmd is
-	// running. Distinct from checkoutInFlight so a stuck refs write can't
-	// deadlock checkout / pull / FF chains.
+	// refActionInFlight gates the confirm dialog's keys (and swaps its
+	// hint to deleting…) while a branch-delete cmd is running. Distinct
+	// from checkoutInFlight so a stuck refs write can't deadlock
+	// checkout / pull / FF chains.
 	refActionInFlight bool
 	// zombieCleanup backs viewModeZombieCleanupConfirm. Populated when the
 	// detect dispatch returns a non-empty list; the modal renderer + key
@@ -678,19 +678,14 @@ func checkoutLabel(ref string, detached bool) string {
 }
 
 // dispatchRefDelete fires branchDeleteCmd with the in-flight gate armed.
-// force=false picks `git branch -d`; force=true picks `-D`. The inline
-// prompt stays open while the cmd runs — branchDeleteSucceededMsg /
-// FailedMsg / NotMergedMsg close (or re-arm) it.
+// force=false picks `git branch -d`; force=true picks `-D`. The confirm
+// dialog stays open while the cmd runs (its hint row swaps to deleting…
+// and the key handler swallows everything but ctrl+c) —
+// branchDeleteSucceededMsg / FailedMsg / NotMergedMsg close (or re-arm)
+// it.
 func (m Model) dispatchRefDelete(force bool) (Model, tea.Cmd) {
-	d := m.pendingRefDelete
 	m.refActionInFlight = true
-	if force {
-		m.status = "deleting '" + d.localName + "' (forced)…"
-	} else {
-		m.status = "deleting '" + d.localName + "'…"
-	}
-	m.statusStyle = statusBusyS
-	return m, branchDeleteCmd(m.workdir, d.localName, force)
+	return m, branchDeleteCmd(m.workdir, m.pendingRefDelete.localName, force)
 }
 
 // ffLabel renders the user-facing "fast-forward: <branch> +<N>" status
@@ -877,26 +872,24 @@ func (m Model) renderBranchPickerInner() string {
 	return strings.Join(lines, "\n")
 }
 
-// refDeleteInlineHint returns the bottom-hint prompt rendered while
-// viewModeRefDeleteConfirm is active. It paints into the standard status
-// line (no centered overlay) so the cursor row stays anchored to the ref
-// being acted upon — matching the worktree-remove inline pattern.
-func (m Model) refDeleteInlineHint() string {
+// renderRefDeleteConfirmInner returns the branch-delete confirm dialog
+// content. Delete-flow feedback renders from refDeleteState + the
+// in-flight gate — never from the global m.status, which mode-blind
+// async handlers (fetch / push / pull done) keep writing while the
+// dialog is open. The in-flight hint swap mirrors the worktree-remove
+// and zombie-cleanup confirms.
+func (m Model) renderRefDeleteConfirmInner() string {
 	d := m.pendingRefDelete
-	prompt := confirmPromptS.Render("delete '"+d.localName+"'?") + " " +
-		help.Render("[y] delete · [Y] force · [esc] cancel")
-	if m.status == "" {
-		return prompt
+	rows := []string{confirmPromptS.Render("delete '" + d.localName + "'?")}
+	if d.notMerged {
+		rows = append(rows, statusErrS.Render("not fully merged — press [Y] to force"))
 	}
-	statusRendered := m.statusStyle.Render(m.status)
-	avail := m.width - lipgloss.Width(prompt) - 1
-	if avail < 1 {
-		return prompt
+	hintText := "[y] delete · [Y] force · [esc] cancel"
+	if m.refActionInFlight {
+		hintText = "deleting…"
 	}
-	if lipgloss.Width(statusRendered) > avail {
-		return prompt
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, prompt, " ", statusRendered)
+	rows = append(rows, help.Render(hintText))
+	return strings.Join(rows, "\n")
 }
 
 // renderCheckoutConfirmInner returns the 3-row content for the dirty-tree
@@ -1026,6 +1019,12 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderWorktreesModalInner()), m.width, m.height)
 	case viewModeBranchCreateInput:
 		return composeOverlay(base, renderModalBox(m.renderBranchCreateInputInner()), m.width, m.height)
+	case viewModeRefDeleteConfirm:
+		return composeOverlay(base, renderModalBox(m.renderRefDeleteConfirmInner()), m.width, m.height)
+	case viewModeRebaseConfirm:
+		return composeOverlay(base, renderModalBox(m.renderRebaseConfirmInner()), m.width, m.height)
+	case viewModeCherryPickConfirm:
+		return composeOverlay(base, renderModalBox(m.renderCherryPickConfirmInner()), m.width, m.height)
 	}
 	return base
 }
@@ -1041,16 +1040,11 @@ func boxStyle(focused bool) lipgloss.Style {
 // terminal is too narrow to fit both, status wins — the user just triggered
 // an action and seeing its outcome matters more than the help reminder.
 //
-// Centered modal modes (branch picker / dirty-tree checkout confirm /
-// worktree modals) drop their hint here: the modal box owns its own [esc]
-// hint row, so duplicating it on the bottom line would just double the
-// prompt. A blank space keeps the row count stable across the modal toggle
-// so View()'s base frame doesn't jump in height.
-//
-// viewModeRefDeleteConfirm renders inline: there is no overlay box, so the
-// bottom line itself shows the `delete '<branch>'? [y] / [Y] / [esc]`
-// prompt. The cursor stays on the row being acted upon — matching the
-// worktree-remove inline pattern.
+// Centered modal modes (branch picker / confirms / worktree modals) drop
+// their hint here: the modal box owns its own hint row, so duplicating it
+// on the bottom line would just double the prompt. A blank space keeps the
+// row count stable across the modal toggle so View()'s base frame doesn't
+// jump in height.
 //
 // viewModeHelp expands the bottom line into a multi-row panel so the
 // shortcut reference can fit the full key matrix.
@@ -1059,14 +1053,9 @@ func (m Model) renderHelpStatus() string {
 	case viewModeBranchPicker, viewModeBranchesModal,
 		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
 		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm,
-		viewModeBranchCreateInput:
+		viewModeBranchCreateInput, viewModeRefDeleteConfirm,
+		viewModeRebaseConfirm, viewModeCherryPickConfirm:
 		return " "
-	case viewModeRefDeleteConfirm:
-		return m.refDeleteInlineHint()
-	case viewModeRebaseConfirm:
-		return m.rebaseInlineHint()
-	case viewModeCherryPickConfirm:
-		return m.cherryPickInlineHint()
 	case viewModeHelp:
 		// Inline column reference panel, grown out of the footer over the rows
 		// helpReservedRows() carved from the graph.

@@ -203,6 +203,12 @@ func (m Model) handleBranchPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleRefDeleteConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.refActionInFlight {
+		if msg.String() == "ctrl+c" {
+			return m.handleCtrlC()
+		}
+		return m, nil
+	}
 	switch msg.String() {
 	case "esc":
 		m.mode = viewModeNormal

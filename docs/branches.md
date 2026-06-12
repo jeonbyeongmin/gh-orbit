@@ -9,7 +9,7 @@ Single delete-branch entry: the global `b` modal (centered overlay listing every
 Key matrix:
 
 - `j` / `down` / `k` / `up` → move cursor (bounded; no wrap).
-- `d` → arms the inline `viewModeRefDeleteConfirm` for the cursor row. HEAD rejected (`cannot delete current branch`).
+- `d` → arms the `viewModeRefDeleteConfirm` dialog (centered overlay) for the cursor row. HEAD rejected (`cannot delete current branch`).
 - `esc` → close modal.
 - `ctrl+c` `ctrl+c` → quit (first press arms, second quits).
 

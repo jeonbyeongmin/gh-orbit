@@ -88,7 +88,7 @@ func (m Model) renderCherryPickConfirmInner() string {
 
 func (m Model) handleCherryPickConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc":
+	case "q", "esc":
 		m.mode = viewModeNormal
 		m.pendingCherryPick = pendingCherryPick{}
 		m.status = "cherry-pick: cancelled"

@@ -9,22 +9,18 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
-// TestLocalChangesQInert — q no longer exits the local changes view (`,` /
-// esc exit, ctrl+c twice quits). q must be inert: the view stays open and
-// nothing quits.
-func TestLocalChangesQInert(t *testing.T) {
+// TestLocalChangesQExits — q exits the local changes view like `,` / esc do.
+// Quitting is still ctrl+c twice, so q must not arm quit.
+func TestLocalChangesQExits(t *testing.T) {
 	m := initSized(t)
 	m, _ = pressRune(t, m, ',')
 	if m.mode != viewModeLocalChanges {
 		t.Fatalf("setup: mode = %v, want viewModeLocalChanges", m.mode)
 	}
 
-	m, cmd := pressRune(t, m, 'q')
-	if m.mode != viewModeLocalChanges {
-		t.Errorf("q must not exit local changes, got mode %v", m.mode)
-	}
-	if cmd != nil {
-		t.Errorf("q in local changes must not dispatch a cmd, got %v", cmd)
+	m, _ = pressRune(t, m, 'q')
+	if m.mode != viewModeNormal {
+		t.Errorf("q should exit local changes, got mode %v", m.mode)
 	}
 	if m.quitArmed {
 		t.Errorf("q must not arm quit")

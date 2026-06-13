@@ -58,10 +58,11 @@ var helpCategories = []helpCategory{
 	{
 		title: "Local Changes",
 		entries: []helpEntry{
-			{"space", "stage/unstage"},
+			{"space", "stage/unstage (file / hunk)"},
 			{"j/k", "nav"},
 			{"g/G", "top/bot"},
 			{"tab", "focus tree/diff"},
+			{"[/]", "prev/next hunk (diff)"},
 			{"r", "reload"},
 			{",", "exit"},
 		},

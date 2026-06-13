@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
@@ -74,6 +75,14 @@ type localChangesModel struct {
 	diffText    string
 	diffLoading bool
 	diffErr     error
+
+	// hunkStarts holds the line index (into diffText's lines) of each `@@`
+	// hunk header, recomputed on every diff load. hunkCursor indexes into it
+	// — the hunk `[`/`]` navigate and `space` stages while the diff pane is
+	// focused. Both reset on each diff load. Empty for diffs with no hunks
+	// (rename-only, "(no file)").
+	hunkStarts []int
+	hunkCursor int
 
 	// diffReqID is the freshest dispatch id. ApplyDiffLoaded ignores stale
 	// responses whose reqID doesn't match, so a slow git-diff for a file the
@@ -170,8 +179,14 @@ func (m *localChangesModel) ApplyDiffLoaded(reqID uint64, text string) {
 	m.diffLoading = false
 	m.diffText = text
 	m.diffErr = nil
-	m.diff.SetContent(text)
-	m.diff.GotoTop()
+	m.hunkStarts = parseHunkStarts(text)
+	m.hunkCursor = 0
+	m.refreshDiffViewport()
+	if m.focused == paneLCDiff && len(m.hunkStarts) > 0 {
+		m.scrollToHunk()
+	} else {
+		m.diff.GotoTop()
+	}
 }
 
 // ApplyDiffFailed records a diff load error so DiffView can show the cause.
@@ -189,7 +204,83 @@ func (m *localChangesModel) ApplyDiffFailed(reqID uint64, err error) {
 // large untracked-file diff resident.
 func (m *localChangesModel) ClosePatch() {
 	m.diffText = ""
+	m.hunkStarts = nil
+	m.hunkCursor = 0
 	m.diff.SetContent("")
+}
+
+// parseHunkStarts records the line index of every `@@` hunk header in the
+// diff. Lines are ANSI-stripped first because the viewport diff is colored
+// (git's `color.ui=always`), so a header line starts with an escape, not `@@`.
+func parseHunkStarts(diffText string) []int {
+	if diffText == "" {
+		return nil
+	}
+	var starts []int
+	for i, ln := range strings.Split(diffText, "\n") {
+		if strings.HasPrefix(ansi.Strip(ln), "@@") {
+			starts = append(starts, i)
+		}
+	}
+	return starts
+}
+
+// refreshDiffViewport repaints the viewport. When the diff pane is focused and
+// has hunks, the selected hunk's `@@` header is reverse-highlighted so the
+// reviewer sees which hunk `space` will stage. The header is ANSI-stripped
+// before restyling so the reverse doesn't fight git's inline color codes (a
+// .Render over an already-colored line breaks on the inner reset).
+func (m *localChangesModel) refreshDiffViewport() {
+	if m.diffText == "" {
+		m.diff.SetContent("")
+		return
+	}
+	if m.focused != paneLCDiff || len(m.hunkStarts) == 0 {
+		m.diff.SetContent(m.diffText)
+		return
+	}
+	lines := strings.Split(m.diffText, "\n")
+	sel := m.hunkStarts[m.hunkCursor]
+	if sel >= 0 && sel < len(lines) {
+		lines[sel] = lcSelectedStyle.Render(ansi.Strip(lines[sel]))
+	}
+	m.diff.SetContent(strings.Join(lines, "\n"))
+}
+
+// scrollToHunk slides the viewport so the selected hunk's header sits at the
+// top. The viewport clamps the offset, so the last hunk just scrolls as far
+// as it can.
+func (m *localChangesModel) scrollToHunk() {
+	if len(m.hunkStarts) == 0 {
+		return
+	}
+	m.diff.SetYOffset(m.hunkStarts[m.hunkCursor])
+}
+
+// MoveHunk shifts the hunk selection by delta (clamped) and follows it into
+// view. No-op when the diff has no hunks. Driven by `[` / `]` in the diff pane.
+func (m *localChangesModel) MoveHunk(delta int) {
+	if len(m.hunkStarts) == 0 {
+		return
+	}
+	m.hunkCursor += delta
+	if m.hunkCursor < 0 {
+		m.hunkCursor = 0
+	}
+	if m.hunkCursor >= len(m.hunkStarts) {
+		m.hunkCursor = len(m.hunkStarts) - 1
+	}
+	m.refreshDiffViewport()
+	m.scrollToHunk()
+}
+
+// CurrentHunk returns the selected hunk index, or false when the diff has no
+// hunks (rename-only, "(no file)").
+func (m localChangesModel) CurrentHunk() (int, bool) {
+	if len(m.hunkStarts) == 0 || m.hunkCursor < 0 || m.hunkCursor >= len(m.hunkStarts) {
+		return 0, false
+	}
+	return m.hunkCursor, true
 }
 
 // CurrentEntry returns the entry the tree cursor is on, or false when the
@@ -240,16 +331,20 @@ func (m *localChangesModel) JumpCursor(toBottom bool) (localChangesEntry, bool) 
 // preference when both rows exist). Returns false when no match is found —
 // the caller falls back to MoveCursor(0) or similar to keep cursor valid.
 func (m *localChangesModel) SelectByPath(path string, preferStaged bool) bool {
+	// Prefer the requested side. This matters when a file sits in BOTH
+	// sections at once — per-hunk staging leaves the rest of the file on the
+	// other side — so staying on the side you acted from lets you keep
+	// working through hunks instead of the cursor jumping across.
+	want := sectionUnstaged
+	if preferStaged {
+		want = sectionStaged
+	}
 	for i, e := range m.entries {
-		if e.Path != path {
-			continue
+		if e.Path == path && e.Section == want {
+			m.cursor = i
+			m.followCursor()
+			return true
 		}
-		if preferStaged && e.Section != sectionStaged {
-			continue
-		}
-		m.cursor = i
-		m.followCursor()
-		return true
 	}
 	for i, e := range m.entries {
 		if e.Path == path {
@@ -267,6 +362,12 @@ func (m *localChangesModel) SelectByPath(path string, preferStaged bool) bool {
 func (m localChangesModel) Focused() localChangesPane { return m.focused }
 func (m *localChangesModel) SetFocus(p localChangesPane) {
 	m.focused = p
+	// The hunk highlight is baked into the viewport content, so a focus flip
+	// has to repaint to add it (→ diff) or drop it (→ tree).
+	m.refreshDiffViewport()
+	if p == paneLCDiff && len(m.hunkStarts) > 0 {
+		m.scrollToHunk()
+	}
 }
 
 func (m *localChangesModel) clampCursor() {

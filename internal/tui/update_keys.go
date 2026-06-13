@@ -398,11 +398,22 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, loadStatusCmd(m.workdir)
 	}
 	// Tree sub-focus owns cursor movement + stage/unstage.
-	// Diff sub-focus owns viewport scroll.
+	// Diff sub-focus owns hunk navigation (`[`/`]`), per-hunk staging
+	// (`space`), and viewport scroll (everything else).
 	switch m.localChanges.Focused() {
 	case paneLCTree:
 		return m.handleLocalChangesTreeKey(msg)
 	case paneLCDiff:
+		switch msg.String() {
+		case "[":
+			m.localChanges.MoveHunk(-1)
+			return m, nil
+		case "]":
+			m.localChanges.MoveHunk(1)
+			return m, nil
+		case " ", "space":
+			return m.dispatchLocalChangesStageHunk()
+		}
 		return m, m.localChanges.ScrollDiff(msg)
 	}
 	return m, nil

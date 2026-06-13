@@ -1,29 +1,25 @@
 # gh-orbit
 
-A `gh` CLI extension that gives you a terminal **review cockpit for
-AI-coding-agent work** — local diff, commit graph, refs, and (soon)
-PR review in one TUI.
+A `gh` CLI extension that gives you a terminal **review cockpit** —
+local diff, commit graph, refs, and (soon) PR review in one TUI.
 
 ## Why?
 
-AI coding agents (Claude Code, Cursor agents, Codex, etc.) produce
-commits, branches, and PRs faster than the usual review chain keeps up
-with. The bottleneck stops being "write the code" and starts being
-"figure out what the agent just did, on which branch, against which
-base, and whether to keep it." Today that loop is split across:
+Reviewing a batch of work — "what changed, on which branch, against
+which base, and whether to keep it" — is usually split across:
 
 - `git status` / `git diff` in one terminal,
-- `gh dash` or the GitHub web UI for the agent's PR,
+- `gh dash` or the GitHub web UI for the PR,
 - `lazygit` or Fork for the local commit graph,
-- a fourth window for `git log` on the agent's worktree.
+- a fourth window for `git log` on another worktree.
 
 [`gh dash`](https://github.com/dlvhdr/gh-dash) covers remote PRs but
 ignores local git state. [`lazygit`](https://github.com/jesseduffield/lazygit)
 covers local git but its commit-graph view is secondary — Fork's
 strength is the opposite, and Fork has no terminal build. `gh-orbit`
-collapses the loop into one TUI optimized for the "an agent just did
-30 minutes of work — what changed, is it good, ship or scrap" review
-pattern.
+collapses the loop into one TUI optimized for the "a branch just
+landed 30 minutes of work — what changed, is it good, ship or scrap"
+review pattern.
 
 Concretely, the design assumes:
 
@@ -31,13 +27,13 @@ Concretely, the design assumes:
   patch overlay (`d`) is the primary review surface, with `[` / `]`
   to jump between files; the Local Changes view covers the working
   tree on the same overlay-first pattern.
-- You **switch branches a lot** because each agent run lands on a
+- You **switch branches a lot** because each unit of work lands on a
   fresh branch / worktree. Graph-cursor checkout (`enter`) + worktree
   modal (`w`) + branches modal (`b`) are built around that.
 - You want **machine-reproducible git operations**, not a wrapper
   with its own opinions. Every git call shells out to your `git`
   binary so `.gitconfig`, hooks, signing, and LFS keep working — the
-  same git an agent would invoke from a shell.
+  same git you would invoke from a shell.
 
 The aesthetic is closer to `tig` than to Fork — a dense commit-graph
 cockpit with metadata on top, modal patch viewer for the actual diff
@@ -47,7 +43,7 @@ neighborhood for remote PRs, which is the next milestone.
 ## Status
 
 **Early WIP.** The MVP scope is the local-side review surface
-(agent-diff review on top of a tig-style cockpit); PR review/merge is
+(diff review on top of a tig-style cockpit); PR review/merge is
 the next milestone.
 Today the build wires up:
 
@@ -120,8 +116,8 @@ Today the build wires up:
 Ordered by current intent, not commitment:
 
 1. **Per-hunk staging** — extend the existing Local Changes stage /
-   unstage with per-hunk operations so reviewing an agent's working
-   tree doesn't require dropping to a second shell.
+   unstage with per-hunk operations so reviewing a working tree
+   doesn't require dropping to a second shell.
 2. **PR review pane** — the original Fork+`gh dash` half: pull a PR
    into the same layout, read its diff in the patch overlay, approve
    / request-changes / merge inline.
@@ -145,6 +141,4 @@ golangci-lint run                     # lint
 tail -f ~/.local/state/gh-orbit/log   # follow runtime logs (TUI owns stdout)
 ```
 
-See [CLAUDE.md](./CLAUDE.md) for the behavioral contract this repo
-uses with its own AI coding agents (this project is built that way),
-and [`docs/`](./docs/) for feature-level reference.
+See [`docs/`](./docs/) for feature-level reference.

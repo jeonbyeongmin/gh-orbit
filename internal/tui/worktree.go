@@ -16,7 +16,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -70,10 +69,10 @@ type worktreesLoadFailedMsg struct {
 // budget was exhausted (E3) — the row renders a `?` placeholder so the
 // sidebar never silently lies about a slow worktree.
 type worktreeDirtyResultMsg struct {
-	reqID    uint64
-	path     string
-	dirty    bool
-	timedOut bool
+	reqID      uint64
+	path       string
+	dirtyCount int // changed-file count (0 = clean or unknown/timed-out)
+	timedOut   bool
 	// subject / when carry the row's last-commit metadata, fetched in the
 	// same goroutine as the dirty probe so they land in one msg (no
 	// incremental jitter between the `●` marker and the subject/time
@@ -81,6 +80,11 @@ type worktreeDirtyResultMsg struct {
 	// the probe timed out — the modal renders a blank last-commit column.
 	subject string
 	when    time.Time
+	// ahead / behind / hasUpstream carry the worktree's position vs its
+	// upstream, from the same goroutine. hasUpstream=false (no upstream /
+	// detached) omits the `↑↓` column.
+	ahead, behind int
+	hasUpstream   bool
 }
 
 // worktreeAddSucceededMsg / worktreeAddFailedMsg report the outcome of
@@ -130,10 +134,11 @@ func loadWorktreesCmd(dir string, reqID uint64) tea.Cmd {
 // lets Bubble Tea schedule them concurrently — the rows light up
 // incrementally instead of waiting for the slowest tree.
 //
-// Each goroutine gets a worktreeDirtyBudget deadline (3s) shared across both
-// probes it runs: the dirty `git status` and the last-commit `git log -1`.
-// Folding the two into one goroutine keeps a single reqID-tagged msg and
-// makes the `●` marker and the subject/time columns appear together. On
+// Each goroutine gets a worktreeDirtyBudget deadline (3s) shared across the
+// three probes it runs: the dirty `git status`, the last-commit `git log -1`,
+// and the ahead/behind `git rev-list`. Folding them into one goroutine keeps a
+// single reqID-tagged msg and makes the `●` marker, the subject/time columns,
+// and the `↑↓` counts appear together. On
 // timeout the msg carries timedOut=true so the sidebar can render a `?`
 // dirty placeholder instead of trusting the (effectively unknown) value;
 // the last-commit columns just stay blank. Without the budget, a stuck NFS
@@ -154,11 +159,12 @@ func worktreeDirtyFanoutCmd(reqID uint64, paths []string) tea.Cmd {
 			defer cancel()
 			entries, err := git.Status(ctx, path)
 			subject, when, _ := git.WorktreeLastCommit(ctx, path)
+			ahead, behind, hasUpstream, _ := git.WorktreeAheadBehind(ctx, path)
 			if err != nil {
 				timedOut := errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded
-				return worktreeDirtyResultMsg{reqID: reqID, path: path, dirty: false, timedOut: timedOut, subject: subject, when: when}
+				return worktreeDirtyResultMsg{reqID: reqID, path: path, dirtyCount: 0, timedOut: timedOut, subject: subject, when: when, ahead: ahead, behind: behind, hasUpstream: hasUpstream}
 			}
-			return worktreeDirtyResultMsg{reqID: reqID, path: path, dirty: len(entries) > 0, subject: subject, when: when}
+			return worktreeDirtyResultMsg{reqID: reqID, path: path, dirtyCount: len(entries), subject: subject, when: when, ahead: ahead, behind: behind, hasUpstream: hasUpstream}
 		})
 	}
 	return tea.Batch(cmds...)
@@ -431,13 +437,14 @@ func validateWorktreePath(path string) error {
 	return nil
 }
 
-// worktreesModalState backs viewModeWorktreesModal — the centered
-// worktree-list modal toggled by `w`, same overlay pattern as the
-// branches modal. An int cursor into m.modalWorktrees() (the active
-// display order) at open time; reloads (after add / remove) clamp via
-// beginWorktreesModal on re-entry. sortByCommit is the session-local
-// last-commit sort toggle (`s`); it resets on close because the whole
-// struct is zeroed there.
+// worktreesModalState backs viewModeWorktreesModal — the full-screen
+// worktree dashboard toggled by `w` (renders via renderWorktreesView, the
+// same graph-replacing seam Local Changes uses). An int cursor into
+// m.modalWorktrees() (the active display order) at open time; reloads (after
+// add / remove) clamp via beginWorktreesModal on re-entry. sortByCommit is
+// the session-local last-commit sort toggle (`s`); it resets on close because
+// the whole struct is zeroed there. ("Modal" in the name is a historical
+// artifact from when it was a centered overlay.)
 type worktreesModalState struct {
 	cursor       int
 	sortByCommit bool
@@ -562,72 +569,4 @@ func (m Model) worktreesModalRemove() (Model, tea.Cmd) {
 	target := wts[m.worktreesModal.cursor]
 	m = m.beginWorktreeRemove(target)
 	return m, nil
-}
-
-// renderWorktreesModalInner returns the centered overlay content: bold
-// header (with the ↓time sort tag while active), scroll-windowed worktree
-// rows reusing the standard row renderer, an optional fetch-freshness
-// line, and the action hint. Row width adapts to the terminal but stays
-// inside the modal-friendly 40–76 band.
-func (m Model) renderWorktreesModalInner() string {
-	wts := m.modalWorktrees()
-	headerText := "[Worktrees]"
-	if m.worktreesModal.sortByCommit {
-		headerText += "  ↓time"
-	}
-	header := modalHeaderS.Render(headerText)
-	if len(wts) == 0 {
-		return strings.Join([]string{
-			header,
-			help.Render("(no worktrees)"),
-			help.Render(helpTextWorktreesModal),
-		}, "\n")
-	}
-
-	rowW := m.width - 12
-	if rowW > 76 {
-		rowW = 76
-	}
-	if rowW < 40 {
-		rowW = 40
-	}
-	nameColW := 0
-	for _, wt := range wts {
-		if w := runewidth.StringWidth(worktreeDisplayName(wt.Path)); w > nameColW {
-			nameColW = w
-		}
-	}
-
-	now := time.Now()
-	const visibleBudget = 16
-	visibleRows := visibleBudget
-	if len(wts) < visibleRows {
-		visibleRows = len(wts)
-	}
-
-	lines := []string{header}
-	lines = append(lines, renderScrollWindow(
-		m.worktreesModal.cursor-visibleRows/2, visibleRows, len(wts),
-		func(i int) string {
-			wt := wts[i]
-			dirtyMark := ""
-			if m.refs.worktreeTimedOut[wt.Path] {
-				dirtyMark = "?"
-			} else if m.refs.worktreeDirty[wt.Path] {
-				dirtyMark = "●"
-			}
-			subject, when := m.refs.WorktreeLastCommit(wt.Path)
-			return renderWorktreeSidebarRow(
-				wt, wt.Path == m.workdir, i == m.worktreesModal.cursor,
-				dirtyMark, subject, when, now, rowW, nameColW)
-		})...)
-	if !m.refs.lastFetchAt.IsZero() {
-		fresh := "fetched " + relativeShortAt(m.refs.lastFetchAt, now)
-		if !strings.HasSuffix(fresh, "just now") {
-			fresh += " ago"
-		}
-		lines = append(lines, help.Render(fresh))
-	}
-	lines = append(lines, help.Render(helpTextWorktreesModal))
-	return strings.Join(lines, "\n")
 }

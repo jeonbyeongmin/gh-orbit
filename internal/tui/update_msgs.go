@@ -95,8 +95,9 @@ func (m Model) updateWorktreeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.reqID != m.sidebarWorktreesReqID {
 			return m, nil
 		}
-		m.refs.SetWorktreeDirty(msg.path, msg.dirty, msg.timedOut)
+		m.refs.SetWorktreeDirty(msg.path, msg.dirtyCount, msg.timedOut)
 		m.refs.SetWorktreeLastCommit(msg.path, msg.subject, msg.when)
+		m.refs.SetWorktreeSync(msg.path, msg.ahead, msg.behind, msg.hasUpstream)
 		return m, nil
 
 	case worktreeAddSucceededMsg:

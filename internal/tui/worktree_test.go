@@ -188,13 +188,13 @@ func TestSidebarDirtyFanoutAppliesAndDropsStale(t *testing.T) {
 	reqID := m.sidebarWorktreesReqID
 	m.refs.SetWorktrees([]git.Worktree{{Path: "/tmp/feat", Branch: "feat"}}, "/tmp/feat")
 
-	updated, _ := m.Update(worktreeDirtyResultMsg{reqID: reqID, path: "/tmp/feat", dirty: true})
+	updated, _ := m.Update(worktreeDirtyResultMsg{reqID: reqID, path: "/tmp/feat", dirtyCount: 2})
 	got := updated.(Model)
 	if !got.refs.WorktreeDirty("/tmp/feat") {
 		t.Errorf("expected dirty=true after applied msg")
 	}
 
-	updated, _ = got.Update(worktreeDirtyResultMsg{reqID: reqID - 1, path: "/tmp/other", dirty: true})
+	updated, _ = got.Update(worktreeDirtyResultMsg{reqID: reqID - 1, path: "/tmp/other", dirtyCount: 1})
 	got = updated.(Model)
 	if got.refs.WorktreeDirty("/tmp/other") {
 		t.Errorf("stale fan-out msg should not mutate sidebar dirty map")
@@ -209,7 +209,7 @@ func TestDirtyFanoutTimeoutMarksWorktreeMap(t *testing.T) {
 	reqID := m.sidebarWorktreesReqID
 	m.refs.SetWorktrees([]git.Worktree{{Path: "/slow", Branch: "feat"}}, "/somewhere")
 	updated, _ := m.Update(worktreeDirtyResultMsg{
-		reqID: reqID, path: "/slow", dirty: false, timedOut: true,
+		reqID: reqID, path: "/slow", dirtyCount: 0, timedOut: true,
 	})
 	got := updated.(Model)
 	if !got.refs.worktreeTimedOut["/slow"] {
@@ -557,7 +557,7 @@ func TestWorktreeRemoveConfirmDirtyRequiresUppercaseY(t *testing.T) {
 		{Path: "/r/main", Branch: "main", IsMain: true},
 		{Path: "/r/feat", Branch: "feat"},
 	}, "/r/main")
-	m.refs.SetWorktreeDirty("/r/feat", true, false)
+	m.refs.SetWorktreeDirty("/r/feat", 1, false)
 	m = m.beginWorktreeRemove(git.Worktree{Path: "/r/feat", Branch: "feat"})
 
 	// lowercase y on dirty → cancels and surfaces "use [Y] to force".

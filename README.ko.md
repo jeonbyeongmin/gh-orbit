@@ -78,9 +78,10 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 
 ### worktree (`w`)
 
+- `w` 는 전체화면 대시보드를 연다 — worktree 당 3줄 카드(브랜치 + PR/CI + dirty/시각 · 경로 · 마지막 커밋) 로 모든 트리 상태를 한눈에 본다. `esc` 로 그래프로 돌아간다.
 - `enter` 는 UI 전체를 다른 worktree 로 프로세스 내부에서 전환한다.
 - `a` 로 worktree 추가(형제 경로 자동 도출), `d` 로 제거(dirty/locked 는 force 확인), `s` 로 마지막 커밋 시각순 정렬.
-- 각 행에 `●` dirty 마커와 worktree HEAD 의 마지막 커밋 제목·상대 시각이 표시된다.
+- 각 카드에 열린 PR `#N` + CI 배지(있을 때), upstream 대비 `↑a↓b`(ahead/behind), `●N` dirty 마커(`N` = 변경 파일 수), worktree HEAD 의 마지막 커밋 제목·상대 시각이 표시된다.
 - `.git/HEAD` 와 `.git/index` 를 fsnotify 로 감시해 외부 커밋·rebase 가 목록을 갱신하고, `r` 은 항상 수동 폴백이다.
 
 ### 브랜치 & 체크아웃
@@ -119,7 +120,7 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | `,` | 전역 | Local Changes 뷰 |
 | `space` | local changes | focus 파일 stage / unstage (diff 패널에선 hunk) |
 | `[` / `]` | local changes diff | 이전 / 다음 hunk |
-| `w` / `b` | 전역 | worktree / 브랜치 모달 |
+| `w` / `b` | 전역 | worktree 대시보드 / 브랜치 모달 |
 | `c` / `R` / `v` / `x` | 그래프 | cherry-pick / rebase / revert / reset |
 | `n` | 그래프 | 커서에 브랜치 생성 + 전환 |
 | `F` / `p` / `P` | 전역 | fetch / pull / push |

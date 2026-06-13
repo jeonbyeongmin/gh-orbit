@@ -194,18 +194,11 @@ func (d commitDelegate) shouldDim(index int, hash string) bool {
 	return !isAncestor
 }
 
-// colorCursorRowBg is xterm 237 — a dark grey one step above colorDim
-// (240). Used as the worktrees-modal cursor row's background tint so it stays
-// visible against the default body fg without competing with the
-// colorSelected (205) accent that paints the `▶` current-row body.
-const colorCursorRowBg = "237"
-
 var (
-	timeStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime))
-	authorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAuthor))
-	cursorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected))
-	selectedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected)).Bold(true)
-	cursorRowBgStyle = lipgloss.NewStyle().Background(lipgloss.Color(colorCursorRowBg))
+	timeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime))
+	authorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAuthor))
+	cursorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected))
+	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected)).Bold(true)
 )
 
 // shortHash truncates a 40-char object name to the conventional 7-char abbrev.

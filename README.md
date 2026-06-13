@@ -2,7 +2,7 @@
 
 # gh-orbit
 
-A `gh` CLI extension for reviewing local git in the terminal — commit graph, diffs, branches, and worktrees in one keyboard-driven view.
+A `gh` CLI extension for reviewing local git in the terminal — read the commit graph and diffs, then review and land each worktree's PR from one keyboard-driven dashboard.
 
 [![release](https://img.shields.io/github/v/release/jeonbyeongmin/gh-orbit?color=7c6f9f&label=release)](https://github.com/jeonbyeongmin/gh-orbit/releases)
 &nbsp;[![gh extension](https://img.shields.io/badge/gh-extension-24292f?logo=github)](https://github.com/jeonbyeongmin/gh-orbit)
@@ -16,7 +16,7 @@ English · [한국어](./README.ko.md)
 
 ---
 
-gh-orbit shows a repository's commit graph, commit and working-tree diffs, branches, and worktrees in a single terminal UI. Every git operation shells out to your own `git` binary, so `.gitconfig`, hooks, commit signing, and LFS work unchanged; PR data comes from the `gh` CLI.
+gh-orbit shows a repository's commit graph, commit and working-tree diffs, branches, and worktrees in a single terminal UI. The worktree dashboard surfaces every branch's open PR and CI state at once, so when work is spread across worktrees — several coding agents, or just your own parallel branches — you review and land each one's PR without leaving the terminal. Every git operation shells out to your own `git` binary, so `.gitconfig`, hooks, commit signing, and LFS work unchanged; PR data comes from the `gh` CLI.
 
 ## Install
 

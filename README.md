@@ -1,129 +1,22 @@
+<div align="center">
+
 # gh-orbit
 
-A `gh` CLI extension that gives you a terminal **review cockpit** —
-local diff, commit graph, refs, and (soon) PR review in one TUI.
+A `gh` CLI extension for reviewing local git in the terminal — commit graph, diffs, branches, and worktrees in one keyboard-driven view.
 
-## Why?
+[![release](https://img.shields.io/github/v/release/jeonbyeongmin/gh-orbit?color=7c6f9f&label=release)](https://github.com/jeonbyeongmin/gh-orbit/releases)
+&nbsp;[![gh extension](https://img.shields.io/badge/gh-extension-24292f?logo=github)](https://github.com/jeonbyeongmin/gh-orbit)
+&nbsp;![platform](https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-555)
 
-Reviewing a batch of work — "what changed, on which branch, against
-which base, and whether to keep it" — is usually split across:
+English · [한국어](./README.ko.md)
 
-- `git status` / `git diff` in one terminal,
-- `gh dash` or the GitHub web UI for the PR,
-- `lazygit` or Fork for the local commit graph,
-- a fourth window for `git log` on another worktree.
+<img src="./docs/assets/demo.gif" alt="gh-orbit demo" width="860">
 
-[`gh dash`](https://github.com/dlvhdr/gh-dash) covers remote PRs but
-ignores local git state. [`lazygit`](https://github.com/jesseduffield/lazygit)
-covers local git but its commit-graph view is secondary — Fork's
-strength is the opposite, and Fork has no terminal build. `gh-orbit`
-collapses the loop into one TUI optimized for the "a branch just
-landed 30 minutes of work — what changed, is it good, ship or scrap"
-review pattern.
+</div>
 
-Concretely, the design assumes:
+---
 
-- You read **diffs more often than you write them.** The full-screen
-  patch overlay (`d`) is the primary review surface, with `[` / `]`
-  to jump between files; the Local Changes view covers the working
-  tree on the same overlay-first pattern.
-- You **switch branches a lot** because each unit of work lands on a
-  fresh branch / worktree. Graph-cursor checkout (`enter`) + worktree
-  modal (`w`) + branches modal (`b`) are built around that.
-- You want **machine-reproducible git operations**, not a wrapper
-  with its own opinions. Every git call shells out to your `git`
-  binary so `.gitconfig`, hooks, signing, and LFS keep working — the
-  same git you would invoke from a shell.
-
-The aesthetic is closer to `tig` than to Fork — a dense commit-graph
-cockpit with metadata on top, modal patch viewer for the actual diff
-work — not a three-pane file-browser. `gh dash` lives in the same
-neighborhood for remote PRs, which is the next milestone.
-
-## Status
-
-**Early WIP.** The MVP scope is the local-side review surface
-(diff review on top of a tig-style cockpit); PR review/merge is
-the next milestone.
-Today the build wires up:
-
-- Single-pane layout — the commit graph fills the whole terminal;
-  worktrees (`w`), branches (`b`), and the per-commit diff (`d`,
-  full-screen patch overlay) all live in overlays
-- Local Changes view — `,` jumps into a working-tree diff view
-  (file tree + diff, stage/unstage) so you can read what hasn't
-  been committed yet without leaving the TUI
-- the graph runs against the unified `--all` revision spec by default
-  so every local/remote/tag is one walk; `enter` from the refs pane
-  jumps the graph cursor to a ref tip without changing the base
-- commit row reads left-to-right as `graph | message (chips + subject) |
-  author | authored`; the time anchors to the right edge (the hash isn't
-  rendered — `y` copies it), the message column absorbs truncation, and
-  chips/author drop (in that order) before the subject shrinks below one
-  cell
-- ref decoration (`%D`) is parsed into typed branch/tag entries and
-  rendered as chips attached to the front of the subject in the message
-  column
-- branch chips carry an open-PR badge — `#N` plus a 1-cell CI rollup
-  glyph (`✓` pass / `✗` fail / `○` running) — fed by a background
-  `gh pr list`, refreshed at startup, on `r`, and after fetch / pull;
-  repos without a GitHub remote degrade silently (badge just absent)
-- ref pane: lazy auto-scroll on j/k/g/G with overflow clipping (no fold
-  or sticky-header — those were tried and removed)
-- `d` opens a full-screen patch overlay for the focused commit
-  (entire `git show -p` body); inside, `[` / `]` jump between files
-  and the bottom hint shows `<path> [N/M]` so you always know which
-  file the cursor is in; `esc` closes it without quitting the app
-- vim-style key bindings (full table in [docs/architecture.md](./docs/architecture.md)):
-  - `j` / `k` / `g` / `G` — navigate the commit graph
-  - `enter` — context-sensitive on the graph: checkout / FF / detach
-  - `d` — open the focused commit's patch overlay; inside, `[` / `]`
-    jump prev / next file
-  - `,` — open the Local Changes view (working-tree diff)
-  - `w` / `b` — open the worktrees / branches modal; see
-    [docs/worktrees.md](./docs/worktrees.md) and
-    [docs/branches.md](./docs/branches.md)
-  - `Z` — bulk-clean zombie branches (every local branch merged into
-    the default branch with `upstream:track [gone]` and not checked
-    out anywhere is offered for delete in a single confirm modal);
-    see [docs/branches.md](./docs/branches.md)
-  - `y` — copy the focused commit's hash to the clipboard
-  - `F` — `git fetch --all` in the background
-  - `p` — `git pull` in the background; strategy from
-    `~/.config/gh-orbit/config.toml` (`[pull] strategy = "ff-only" |
-    "merge" | "rebase"`), then git's `pull.rebase` / `pull.ff`,
-    falling back to `--ff-only`
-  - `r` — reload refs + log
-  - `P` — push the current branch (first push auto-sets upstream)
-  - `c` — cherry-pick the focused commit onto the current branch
-  - `n` — create a branch at the focused commit and switch to it
-  - `o` — open the focused commit's open PR on GitHub (rows whose
-    branch chip carries a `#N` PR badge; bare commits report "no open
-    PR" instead)
-  - `ctrl+c` `ctrl+c` — quit (press twice; works anywhere, including
-    inside the patch overlay)
-  - `R` — rebase the current branch onto the focused commit
-    (confirm dialog; conflicts are left for your terminal)
-- a status line next to the help row surfaces fetch progress, errors,
-  and hash-copy confirmation
-- `internal/git` exposes typed wrappers around `git log`, `git show
-  --numstat`, `git show -p` (full and per-file), `git show --no-patch`
-  metadata bundle, refs decoration, and `git fetch`, all shelling out
-  to the user's `git` binary
-
-## Roadmap
-
-Ordered by current intent, not commitment:
-
-1. **Per-hunk staging** — extend the existing Local Changes stage /
-   unstage with per-hunk operations so reviewing a working tree
-   doesn't require dropping to a second shell.
-2. **PR review pane** — the original Fork+`gh dash` half: pull a PR
-   into the same layout, read its diff in the patch overlay, approve
-   / request-changes / merge inline.
-
-Neither is wired up yet — they're listed so the project's trajectory
-is legible from the README.
+gh-orbit shows a repository's commit graph, commit and working-tree diffs, branches, and worktrees in a single terminal UI. Every git operation shells out to your own `git` binary, so `.gitconfig`, hooks, commit signing, and LFS work unchanged; PR data comes from the `gh` CLI.
 
 ## Install
 
@@ -131,6 +24,111 @@ is legible from the README.
 gh extension install jeonbyeongmin/gh-orbit
 gh orbit
 ```
+
+Run `gh orbit` inside any git repository.
+
+## Underlying git / gh
+
+Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reimplementation.
+
+| Action | Runs |
+| --- | --- |
+| Commit graph (on launch) | `git log --all --graph --oneline --decorate` |
+| `d` patch overlay + `[` / `]` | `git show -p <commit>`, navigated file by file |
+| `,` Local Changes + `space` | `git status` + `git diff` + `git add` / `git restore --staged` |
+| `enter` (checkout / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
+| `w` worktrees (switch / add / remove) | `git worktree list` / `add` / `remove` |
+| `b` → `d` (delete branch) | `git branch -d <branch>` |
+| `Z` (zombie cleanup) | `git branch --merged` + a `git branch -d` loop |
+| `c` / `R` | `git cherry-pick <commit>` / `git rebase <onto>` |
+| `v` / `x` | `git revert <commit>` / `git reset --soft\|--mixed\|--hard <commit>` |
+| `n` | `git checkout -b <name> <commit>` |
+| `F` / `p` / `P` | `git fetch --all` / `git pull` / `git push` |
+| `o` (open PR) | `gh pr view --web <number>` |
+| PR badges on branch chips | `gh pr list` + `gh pr checks <number>` |
+| `y` | `git rev-parse <commit>` → clipboard |
+
+## Features
+
+### Commit graph
+
+- Unified graph across all local branches, remotes, and tags (`--all`) on launch.
+- Dot vocabulary: `●` commit · `○` merge · `◉` HEAD. Lane colors rotate an 8-hue palette.
+- Each row reads `graph │ message (chips + subject) │ author │ authored time`. Time is right-anchored and always visible; the message column absorbs truncation, dropping chips then author before the subject shrinks below one cell.
+- Branch/tag decorations render as chips. A matching open PR adds a `#N` badge with a CI rollup glyph (`✓` pass · `✗` fail · `○` running), refreshed at launch, on `r`, and after each fetch/pull. Repos with no GitHub remote omit the badge.
+- Reloads are stale-while-revalidate: the current graph stays on screen while the new one streams in.
+
+### Diff review
+
+- `d` opens the focused commit's full patch (`git show -p`) as a full-screen overlay.
+- `[` / `]` jump file-to-file inside the patch; the footer shows `<path> [N/M]`.
+- `,` opens Local Changes — a working-tree diff (file tree + diff pane) split into Conflicts / Unstaged / Staged. `space` stages/unstages the focused file, `tab` cycles tree ↔ diff focus, `r` reloads.
+
+### Worktrees (`w`)
+
+- `enter` switches the whole UI to another worktree in-process.
+- `a` adds a worktree (sibling path auto-derived), `d` removes it (force-confirm for dirty/locked), `s` sorts by last-commit time.
+- Each row shows a `●` dirty marker and the worktree HEAD's last-commit subject and relative time.
+- `.git/HEAD` and `.git/index` are watched (fsnotify), so external commits/rebases refresh the list; `r` is always a manual fallback.
+
+### Branches & checkout
+
+- `enter` on the graph picks checkout / fast-forward / detach from the cursor's chips and HEAD relationship. Ambiguous rows open a branch picker; remote-chip rows chain a `git pull`.
+- When checkout needs a clean tree, `s` stashes and continues, `a` / `esc` aborts.
+- `n` creates a branch at the cursor and switches to it.
+- `b` lists local branches; `d` deletes the cursor branch (HEAD protected).
+- `Z` bulk-deletes branches that are merged into the default branch, have a `[gone]` upstream, and aren't checked out anywhere — behind one confirm with a reflog recovery hint.
+
+### History operations
+
+- `c` cherry-picks the cursor commit onto the current branch; `R` rebases the current branch onto the cursor commit.
+- `v` reverts the cursor commit (records a new commit; safe on pushed history).
+- `x` resets the current branch to the cursor commit — `[s]` soft / `[m]` mixed / `[h]` hard. A reset that would rewrite already-pushed history is refused and steered to `v`.
+- All four confirm first; conflicts are left in the working tree to resolve in your terminal.
+
+### Network & other keys
+
+- `F` fetch (`git fetch --all`) · `p` pull (strategy-resolved) · `P` push (first push sets upstream; never forces).
+- `o` opens the focused commit's PR on GitHub · `y` copies the commit hash · `r` reloads refs + log.
+- `?` toggles an inline help panel (Global / Graph / Local Changes columns).
+
+## Key bindings
+
+| Key | Where | Action |
+| --- | --- | --- |
+| `j` / `k` · `g` / `G` | graph | navigate · jump to top / bottom |
+| `enter` | graph | checkout / fast-forward / detach |
+| `d` | graph | open the full-screen patch overlay |
+| `[` / `]` | patch | jump to previous / next file |
+| `,` | global | Local Changes view |
+| `space` | local changes | stage / unstage the focused file |
+| `w` / `b` | global | worktrees / branches modal |
+| `c` / `R` / `v` / `x` | graph | cherry-pick / rebase / revert / reset |
+| `n` | graph | create a branch at the cursor + switch |
+| `F` / `p` / `P` | global | fetch / pull / push |
+| `o` / `y` | graph | open PR on GitHub / copy hash |
+| `Z` / `r` | global | zombie-branch cleanup / reload |
+| `?` | global | toggle help panel |
+| `ctrl+c` `ctrl+c` | global | quit (press twice) |
+
+## Configuration
+
+XDG-conformant paths (`internal/config` owns resolution):
+
+- Prefs — `$XDG_CONFIG_HOME/gh-orbit/config.toml` (optional):
+
+  ```toml
+  [pull]
+  strategy = "rebase"   # "ff-only" | "merge" | "rebase"
+  ```
+
+  Pull strategy resolves as: prefs `[pull] strategy` → git config `pull.rebase` → `pull.ff` → fallback `--ff-only`.
+- Log — `$XDG_STATE_HOME/gh-orbit/log` (the TUI owns stdout, so runtime logging goes here).
+
+## Roadmap
+
+1. Per-hunk staging in Local Changes.
+2. PR review pane — pull a PR into the same layout, read its diff in the patch overlay, approve / request-changes / merge inline.
 
 ## Develop
 
@@ -141,4 +139,11 @@ golangci-lint run                     # lint
 tail -f ~/.local/state/gh-orbit/log   # follow runtime logs (TUI owns stdout)
 ```
 
-See [`docs/`](./docs/) for feature-level reference.
+Regenerate the demo GIF with [VHS](https://github.com/charmbracelet/vhs):
+
+```bash
+go build -o /tmp/orbit-demo ./cmd/orbit
+vhs docs/assets/demo.tape
+```
+
+See [`docs/`](./docs/) for feature-level reference — start at [`docs/index.md`](./docs/index.md).

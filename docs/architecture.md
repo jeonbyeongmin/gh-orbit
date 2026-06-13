@@ -51,6 +51,8 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `?`            | global | toggle inline help reference panel (column layout)                                  |
 | `R`            | graph  | rebase current branch onto cursor (confirm-first; conflicts → terminal) — see [checkout.md](checkout.md) |
 | `c`            | graph  | cherry-pick cursor commit onto current branch (confirm-first; conflicts → terminal) |
+| `v`            | graph  | revert cursor commit (confirm-first; history-preserving; conflicts → terminal)      |
+| `x`            | graph  | reset current branch to cursor (soft/mixed/hard; pushed-history → revert)           |
 | `n`            | graph  | create branch at cursor + switch (name input modal)                                |
 | `o`            | graph  | open the cursor row's open PR on GitHub (`gh pr view --web`; badge rows only)       |
 

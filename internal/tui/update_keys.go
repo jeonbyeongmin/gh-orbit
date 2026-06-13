@@ -52,6 +52,12 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == viewModeCherryPickConfirm {
 		return m.handleCherryPickConfirmKey(msg)
 	}
+	if m.mode == viewModeRevertConfirm {
+		return m.handleRevertConfirmKey(msg)
+	}
+	if m.mode == viewModeResetConfirm {
+		return m.handleResetConfirmKey(msg)
+	}
 	if m.mode == viewModeBranchCreateInput {
 		return m.handleBranchCreateInputKey(msg)
 	}
@@ -429,6 +435,14 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		// Cherry-pick the cursor commit onto the current branch (confirm-first).
 		return m.beginCherryPick()
+	case "v":
+		// Revert the cursor commit on the current branch (confirm-first).
+		// History-preserving — the "scrap a shared commit" path.
+		return m.beginRevert()
+	case "x":
+		// Reset the current branch to the cursor commit (confirm-first,
+		// soft/mixed/hard). Pushed-history resets are refused → revert.
+		return m.beginReset()
 	case "n":
 		// Create a branch at the cursor commit and switch to it.
 		return m.beginBranchCreate()

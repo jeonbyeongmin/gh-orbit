@@ -157,6 +157,7 @@ func (m Model) beginPRReview() (Model, tea.Cmd) {
 	m.reviewPRNumber = pr.Number
 	m.prAction = prActionNone
 	m.prReviewNotice = ""
+	m.prReviewNoticeErr = false
 	m.diff.SetPatchViewportSize(m.width, m.height-1)
 	return m, loadPRDiffCmd(m.workdir, pr.Number, m.diffReqID)
 }

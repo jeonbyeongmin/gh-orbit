@@ -84,6 +84,31 @@ func TestPRsModalEnterOpensReview(t *testing.T) {
 	}
 }
 
+// TestPRsModalCursorClampsOnShrink locks the defensive clamp: a refreshed PR
+// list landing while the modal is open (a fetch/pull that was in flight) must
+// not leave the cursor past the new end — otherwise it vanishes and enter
+// dead-no-ops.
+func TestPRsModalCursorClampsOnShrink(t *testing.T) {
+	m := initSized(t)
+	m.prList = samplePRs() // 3 PRs
+	m, _ = m.beginPRsModal()
+	m = m.prsModalMoveCursor(2) // cursor → last (index 2)
+
+	// Refresh arrives with a shorter list while the modal is open.
+	updated, _ := m.Update(prsLoadedMsg{prs: map[string]prInfo{}, list: samplePRs()[:1]})
+	m = updated.(Model)
+	if m.prsModal.cursor != 0 {
+		t.Errorf("cursor after shrink to 1 = %d, want 0 (clamped)", m.prsModal.cursor)
+	}
+
+	// An empty refresh clamps to 0, never negative.
+	updated, _ = m.Update(prsLoadedMsg{prs: map[string]prInfo{}, list: nil})
+	m = updated.(Model)
+	if m.prsModal.cursor != 0 {
+		t.Errorf("cursor after empty refresh = %d, want 0", m.prsModal.cursor)
+	}
+}
+
 func TestRenderPRModalRow(t *testing.T) {
 	pr := samplePRs()[0] // #42, passing, alice
 

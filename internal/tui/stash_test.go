@@ -115,12 +115,16 @@ func TestModelCheckoutConfirmStashDispatchesChain(t *testing.T) {
 			})
 			m.mode = viewModeCheckoutConfirm
 			m.pendingCheckout = variant.p
+			m.pullAfterAction = true
 
 			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 			m = updated.(Model)
 
 			if m.mode != viewModeNormal {
 				t.Errorf("mode = %v, want viewModeNormal", m.mode)
+			}
+			if !m.pullAfterAction {
+				t.Error("[s] must not clear pullAfterAction — the retry carries the pull chain")
 			}
 			if cmd == nil {
 				t.Fatal("[s] should dispatch the stash retry cmd")
@@ -183,6 +187,34 @@ func TestModelStashNoticeConsumedOnRetryFailure(t *testing.T) {
 	m = updated.(Model)
 	if !strings.Contains(m.status, "stashed on develop") {
 		t.Errorf("status = %q, want the stash named on failure too", m.status)
+	}
+}
+
+// TestModelStashNoticeConsumedOnReentryAbort guards the re-entry leak: a
+// stash that landed, hit dirty again on the retry, and got aborted must
+// surface its notice on the abort line — not on a later unrelated status.
+func TestModelStashNoticeConsumedOnReentryAbort(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	m.mode = viewModeCheckoutConfirm
+	m.pendingCheckout = pendingCheckout{ref: "feat"}
+	m.stashNotice = "develop"
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = updated.(Model)
+	if !strings.Contains(m.status, "stashed on develop") {
+		t.Errorf("status = %q, want the armed notice folded into the abort line", m.status)
+	}
+	if m.stashNotice != "" {
+		t.Errorf("stashNotice = %q, want consumed on abort", m.stashNotice)
+	}
+
+	// A later unrelated checkout must come out clean.
+	updated, _ = m.Update(checkoutSucceededMsg{ref: "other"})
+	m = updated.(Model)
+	if strings.Contains(m.status, "stashed on") {
+		t.Errorf("status = %q, notice leaked past the abort", m.status)
 	}
 }
 

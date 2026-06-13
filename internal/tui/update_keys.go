@@ -366,6 +366,11 @@ func (m Model) handleCheckoutConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "checkout: aborted"
 		}
 		m.statusStyle = statusOkS
+		// A re-entered modal (stash landed, retry hit dirty again) can be
+		// aborted with the notice still armed — the changes really are in
+		// the stash, so say so here instead of leaking the suffix onto a
+		// later unrelated status.
+		m = m.consumeStashNotice()
 		return m, nil
 	case "ctrl+c":
 		return m.handleCtrlC()

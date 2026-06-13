@@ -82,12 +82,22 @@ func TestSwitchWorktreeUpdatesWorkdirAndDispatchesReload(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	m.workdir = main
+	updated, _ = m.Update(commitsAppendedMsg{reqID: m.streamReqID, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "old tree"}},
+	}})
+	m = updated.(Model)
 
 	updated, cmd := m.Update(switchWorktreeMsg{path: feat})
 	got := updated.(Model)
 
 	if got.workdir != feat {
 		t.Errorf("workdir not updated: got %q want %q", got.workdir, feat)
+	}
+	// Worktree switch is the hard-reset path: the old tree's graph would
+	// mislead, so it must NOT survive via stale-while-revalidate.
+	if got.graph.loaded || got.graph.pendingSwap {
+		t.Errorf("switch should hard-reset the graph (loaded=%v pendingSwap=%v)",
+			got.graph.loaded, got.graph.pendingSwap)
 	}
 	if got.pendingHEADHash != pendingHEADSentinel {
 		t.Errorf("HEAD jump not armed: got %q", got.pendingHEADHash)

@@ -100,8 +100,7 @@ func (m Model) handleCherryPickConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		p := m.pendingCherryPick
 		m.mode = viewModeNormal
 		m.cherryPickInFlight = true
-		m.status = "cherry-pick: " + shortHash(p.hash) + " onto " + p.branch + " …"
-		m.statusStyle = statusBusyS
+		m.setBusyStatus("cherry-pick: " + shortHash(p.hash) + " onto " + p.branch + " …")
 		return m, cherryPickCmd(m.workdir, p.hash)
 	}
 	return m, nil

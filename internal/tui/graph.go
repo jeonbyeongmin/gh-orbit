@@ -400,6 +400,17 @@ type graphModel struct {
 	headRowIndex  int
 	headAncestors map[string]struct{}
 	headDimDirty  bool
+
+	// pendingSwap is the stale-while-revalidate flag: a reload is in flight
+	// but the previous graph stays on screen (no blank "loading…" flash).
+	// The next stream's first batch replaces the list instead of appending;
+	// a batch-less stream end clears the list instead. Set by
+	// MarkStaleForReload, never by the hard ResetForReload path.
+	pendingSwap bool
+
+	// spinnerFrame is pushed in by Model on every spinnerTickMsg so the
+	// loading placeholder animates. Only read while !loaded.
+	spinnerFrame int
 }
 
 func newGraphModel() graphModel {
@@ -601,10 +612,21 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 	case commitsStreamDoneMsg:
 		g.streaming = false
 		g.loaded = true
+		var cmd tea.Cmd
+		if g.pendingSwap {
+			// The reload finished without a single batch — the new window
+			// is empty, so the kept-on-screen old graph must go now.
+			g.pendingSwap = false
+			g.headRowIndex = -1
+			g.headAncestors = nil
+			g.headDimDirty = true
+			g.applyHeadDim()
+			cmd = g.list.SetItems(nil)
+		}
 		if m.err != nil && len(g.list.Items()) == 0 {
 			g.err = m.err
 		}
-		return g, nil
+		return g, cmd
 	case tea.KeyMsg:
 		prevHash := ""
 		if c, ok := g.Selected(); ok {
@@ -644,13 +666,31 @@ func appendCommitItems(dst []list.Item, rows []graphRow) []list.Item {
 
 // handleAppended folds one streaming batch into the list. Tail-follow on
 // subsequent batches is gated by userHasMoved (PR #14 회귀 가드).
+//
+// The first branch covers two cases that both want "replace, don't append":
+// a fresh load (nothing on screen yet) and the first batch after
+// MarkStaleForReload, where the old graph stayed visible to avoid a blank
+// flash and this batch is the moment it gets swapped out.
 func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
-	if !g.loaded {
+	if !g.loaded || g.pendingSwap {
+		swap := g.pendingSwap
+		g.pendingSwap = false
+		// Decoration state describes the old window — clear it the same
+		// way ResetForReload would have, then let captureHeadRow /
+		// applyHeadDim rebuild it from the fresh rows.
+		g.headRowIndex = -1
+		g.headAncestors = nil
+		g.headDimDirty = true
 		items := appendCommitItems(make([]list.Item, 0, len(m.rows)), m.rows)
 		g.captureHeadRow(m.rows, 0)
 		g.applyGraphCap()
 		g.applyHeadDim()
 		setCmd := g.list.SetItems(items)
+		if swap {
+			// Same cursor semantics as the hard reset: start at the top;
+			// tryHEADJump may still move it afterwards.
+			g.list.Select(0)
+		}
 		g.loaded = true
 		g.streaming = !m.done
 		g.err = nil
@@ -717,7 +757,7 @@ func hasIsHead(refs []git.DecoratedRef) bool {
 
 func (g graphModel) View() string {
 	if !g.loaded {
-		return "loading…"
+		return centerPlaceholder(g.width, g.height, loadingPlaceholder(g.spinnerFrame))
 	}
 	if g.err != nil {
 		return fmt.Sprintf("(load error: %s)", g.err)
@@ -783,13 +823,27 @@ func (g *graphModel) SetHeadAncestors(ancestors map[string]struct{}) {
 	g.applyHeadDim()
 }
 
+// MarkStaleForReload arms the soft reload path: the current graph keeps
+// rendering (no blank flash) and the next stream's first batch swaps it
+// out — see pendingSwap. No-op before the first load; the fresh-load
+// branch of handleAppended covers that case on its own.
+func (g *graphModel) MarkStaleForReload() {
+	if !g.loaded {
+		return
+	}
+	g.pendingSwap = true
+	g.userHasMoved = false
+}
+
 // ResetForReload clears state so View renders the "loading…" placeholder
-// again. Use this before dispatching a fresh loadCommitsCmd so the UI
-// reflects that the visible commits no longer match the requested ref. The
-// returned cmd is non-nil only when a list filter is active (filter rebuild) —
-// callers should batch it with the new load cmd.
+// again. This is the hard variant — reserved for reloads where showing the
+// old graph would mislead (worktree switch: different tree entirely);
+// every other reload goes through MarkStaleForReload. The returned cmd is
+// non-nil only when a list filter is active (filter rebuild) — callers
+// should batch it with the new load cmd.
 func (g *graphModel) ResetForReload() tea.Cmd {
 	g.loaded = false
+	g.pendingSwap = false
 	g.streaming = false
 	g.userHasMoved = false
 	g.err = nil

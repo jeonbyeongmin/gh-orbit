@@ -324,14 +324,12 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case graphActionFF:
 			m.pullAfterAction = msg.pullAfter
 			m.ffInFlight = true
-			m.status = ffLabel(msg.branch, msg.advance) + " …"
-			m.statusStyle = statusBusyS
+			m.setBusyStatus(ffLabel(msg.branch, msg.advance) + " …")
 			return m, ffOnlyCmd(m.workdir, msg.branch, msg.hash)
 		case graphActionCheckoutAndFF:
 			m.pullAfterAction = msg.pullAfter
 			m.ffInFlight = true
-			m.status = "fast-forward: " + msg.branch + " (checkout + ff) …"
-			m.statusStyle = statusBusyS
+			m.setBusyStatus("fast-forward: " + msg.branch + " (checkout + ff) …")
 			return m, checkoutThenFFCmd(m.workdir, msg.branch, msg.hash)
 		case graphActionDetach:
 			var cmd tea.Cmd

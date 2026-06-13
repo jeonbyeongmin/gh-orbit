@@ -368,8 +368,8 @@ func TestRenderCommitLineGraphTruncatedAtNarrowWidth(t *testing.T) {
 
 func TestGraphModelInitialView(t *testing.T) {
 	g := newGraphModel()
-	if got := g.View(); got != "loading…" {
-		t.Errorf("initial view = %q, want %q", got, "loading…")
+	if got := g.View(); !strings.Contains(got, "loading…") {
+		t.Errorf("initial view = %q, want it to contain %q", got, "loading…")
 	}
 }
 
@@ -404,8 +404,8 @@ func TestGraphModelResetForReloadReturnsToLoading(t *testing.T) {
 	if g.delegate.graphWidth != 0 {
 		t.Errorf("ResetForReload should clear delegate.graphWidth, got %d", g.delegate.graphWidth)
 	}
-	if got := g.View(); got != "loading…" {
-		t.Errorf("after reset, View = %q, want %q", got, "loading…")
+	if got := g.View(); !strings.Contains(got, "loading…") {
+		t.Errorf("after reset, View = %q, want it to contain %q", got, "loading…")
 	}
 }
 
@@ -638,8 +638,8 @@ func TestGraphModelTailFollowStaysWhenCursorNotOnTail(t *testing.T) {
 func TestGraphModelStreamDoneClearsLoadingOnEmpty(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(80, 10)
-	if g.View() != "loading…" {
-		t.Fatalf("initial View = %q, want %q", g.View(), "loading…")
+	if !strings.Contains(g.View(), "loading…") {
+		t.Fatalf("initial View = %q, want it to contain %q", g.View(), "loading…")
 	}
 	g, _ = g.Update(commitsStreamDoneMsg{reqID: 1})
 	if !g.loaded {
@@ -647,6 +647,27 @@ func TestGraphModelStreamDoneClearsLoadingOnEmpty(t *testing.T) {
 	}
 	if got := g.View(); got != "(no commits)" {
 		t.Errorf("after empty done, View = %q, want %q", got, "(no commits)")
+	}
+}
+
+func TestGraphModelStaleReloadSwapsToEmptyOnBatchlessDone(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	g.MarkStaleForReload()
+	if !strings.Contains(g.View(), "first") {
+		t.Fatalf("stale reload should keep the old content on screen, got %q", g.View())
+	}
+	// The reload's stream ends without a single batch — the new window is
+	// empty, so the kept-on-screen old graph must clear now.
+	g, _ = g.Update(commitsStreamDoneMsg{reqID: 2})
+	if g.pendingSwap {
+		t.Error("batch-less done should consume pendingSwap")
+	}
+	if got := g.View(); got != "(no commits)" {
+		t.Errorf("batch-less done should clear the old window, got %q", got)
 	}
 }
 

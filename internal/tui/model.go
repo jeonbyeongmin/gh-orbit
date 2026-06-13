@@ -227,6 +227,19 @@ type Model struct {
 	// statusStyle decides the color; zero value renders without color.
 	status      string
 	statusStyle lipgloss.Style
+	// statusBusyText remembers the exact text of the last setBusyStatus
+	// call. While m.status still equals it, the status line is an
+	// in-flight operation and gets the animated spinner prefix; any
+	// handler that overwrites m.status breaks the match and the spinner
+	// disappears with it. Never cleared — a stale value can't match a
+	// non-busy status text.
+	statusBusyText string
+	// spinnerFrame / spinnerArmed drive the gated loading-spinner tick.
+	// armed means a spinnerTickCmd is in flight; the Update wrapper arms
+	// it whenever spinnerVisible() flips true, and the spinnerTickMsg
+	// handler stops re-arming once nothing is loading.
+	spinnerFrame int
+	spinnerArmed bool
 	// quitArmed is set by the first ctrl+c and cleared by any other key.
 	// While armed, the status line shows the quit hint and a second ctrl+c
 	// actually quits. No timer — disarm is purely key-driven, handled at the
@@ -410,8 +423,61 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
+// Update wraps update with the spinner-tick arming gate: after any message
+// lands, if something is now loading and no tick is in flight, one gets
+// armed. Centralizing the arm here means no dispatch site has to remember
+// to start the animation.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	nm, ok := next.(Model)
+	if !ok {
+		return next, cmd
+	}
+	if !nm.spinnerArmed && nm.spinnerVisible() {
+		nm.spinnerArmed = true
+		cmd = tea.Batch(cmd, spinnerTickCmd())
+	}
+	return nm, cmd
+}
+
+// spinnerVisible reports whether anything on screen is currently rendering
+// the loading spinner — the gate for keeping the animation tick alive.
+// Every branch terminates: graph/local-changes loads flip loaded=true even
+// on error, diff clears loadingPatch on failure, and a busy status only
+// matches statusBusyText until the operation's terminal handler overwrites
+// the status line.
+func (m Model) spinnerVisible() bool {
+	// Before the first WindowSizeMsg nothing renders ("starting…"), so
+	// there is no spinner to animate yet.
+	if m.width == 0 {
+		return false
+	}
+	if m.status != "" && m.status == m.statusBusyText {
+		return true
+	}
+	switch m.mode {
+	case viewModeDiffWindow:
+		return m.diff.loadingPatch
+	case viewModeLocalChanges:
+		return !m.localChanges.loaded || m.localChanges.diffLoading
+	default:
+		return !m.graph.loaded
+	}
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinnerTickMsg:
+		if !m.spinnerVisible() {
+			m.spinnerArmed = false
+			return m, nil
+		}
+		m.spinnerFrame++
+		m.graph.spinnerFrame = m.spinnerFrame
+		m.diff.spinnerFrame = m.spinnerFrame
+		m.localChanges.spinnerFrame = m.spinnerFrame
+		return m, spinnerTickCmd()
+
 	case tea.WindowSizeMsg:
 		// Terminals re-emit WindowSizeMsg on focus changes / SIGWINCH bursts.
 		// Skip the SetSize cascade when nothing actually changed so the
@@ -649,13 +715,11 @@ func (m Model) dispatchLocalChangesStage() (tea.Model, tea.Cmd) {
 	}
 	if e.Section == sectionStaged {
 		m.localChanges.ScheduleSelectAfterReload(e.Path, false)
-		m.status = "unstage " + e.Path + "…"
-		m.statusStyle = statusBusyS
+		m.setBusyStatus("unstage " + e.Path + "…")
 		return m, restoreStagedCmd(m.workdir, e.Path)
 	}
 	m.localChanges.ScheduleSelectAfterReload(e.Path, true)
-	m.status = "stage " + e.Path + "…"
-	m.statusStyle = statusBusyS
+	m.setBusyStatus("stage " + e.Path + "…")
 	return m, addCmd(m.workdir, e.Path)
 }
 
@@ -689,9 +753,19 @@ func (m Model) beginCheckout(ref string, detached bool) (Model, tea.Cmd) {
 	}
 	m.checkoutInFlight = true
 	m.pendingCheckout = pendingCheckout{ref: ref, detached: detached}
-	m.status = checkoutLabel(ref, detached) + " …"
-	m.statusStyle = statusBusyS
+	m.setBusyStatus(checkoutLabel(ref, detached) + " …")
 	return m, checkoutCmd(m.workdir, ref, detached)
+}
+
+// setBusyStatus paints an in-flight status line (busy color) and records
+// its exact text in statusBusyText so renderHelpStatus prefixes the
+// animated spinner while — and only while — that text is still on screen.
+// Use for statuses that describe work in progress; terminal outcomes keep
+// the plain m.status assignment.
+func (m *Model) setBusyStatus(text string) {
+	m.status = text
+	m.statusStyle = statusBusyS
+	m.statusBusyText = text
 }
 
 // consumeStashNotice folds the one-shot stash-and-continue reminder into
@@ -763,22 +837,27 @@ func (m *Model) cancelStream() {
 	}
 }
 
-// reloadCmd resets both panes to their loading state and dispatches fresh
-// log + refs queries. A stale ref in m.currentRefs surfaces via the new
-// stream's commitsStreamDoneMsg.err. The sidebar's cursor state
-// (onWorktree / onLocalChanges) is preserved across the reload by
-// refModel.ResetForReload — no per-ref persist handle needed now that the
-// refs LIST is gone. Worktree inventory + its dirty fan-out are refreshed
-// here too — sidebarWorktreesReqID bumps before dispatch so any in-flight
-// fan-out from the previous load is invalidated by stale-drop.
+// reloadCmd marks the graph stale-while-revalidate and dispatches fresh
+// log + refs queries: the old graph keeps rendering until the new stream's
+// first batch swaps it out, so reload-heavy paths (watcher, post-checkout)
+// don't flash a blank "loading…" frame. A stale ref in m.currentRefs
+// surfaces via the new stream's commitsStreamDoneMsg.err. The sidebar's
+// cursor state (onWorktree / onLocalChanges) is preserved across the
+// reload by refModel.ResetForReload — no per-ref persist handle needed now
+// that the refs LIST is gone. Worktree inventory + its dirty fan-out are
+// refreshed here too — sidebarWorktreesReqID bumps before dispatch so any
+// in-flight fan-out from the previous load is invalidated by stale-drop.
+//
+// Reloads where the old graph would mislead (worktree switch — a different
+// tree entirely) must hard-reset via graph.ResetForReload before calling
+// this; MarkStaleForReload then no-ops on the unloaded graph.
 func (m *Model) reloadCmd() tea.Cmd {
 	m.cancelStream()
 	m.streamReqID++
 	m.sidebarWorktreesReqID++
-	resetCmd := m.graph.ResetForReload()
+	m.graph.MarkStaleForReload()
 	m.refs.ResetForReload()
 	return tea.Batch(
-		resetCmd,
 		loadCommitsCmd(m.workdir, m.currentRefs, m.streamReqID),
 		loadRefsCmd(m.workdir),
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
@@ -1124,7 +1203,11 @@ func (m Model) renderHelpStatus() string {
 	if m.status == "" {
 		return collapsedHintRendered
 	}
-	statusRendered := m.statusStyle.Render(m.status)
+	statusText := m.status
+	if m.statusBusyText != "" && m.status == m.statusBusyText {
+		statusText = spinnerGlyph(m.spinnerFrame) + " " + m.status
+	}
+	statusRendered := m.statusStyle.Render(statusText)
 
 	avail := m.width - lipgloss.Width(statusRendered) - 1 // 1 for the spacer
 	if avail < 1 {

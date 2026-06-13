@@ -370,22 +370,102 @@ func TestModelRKeyReloadsBothPanes(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	m = updated.(Model)
-	if m.graph.loaded {
-		t.Errorf("r should reset graph.loaded")
+	// Stale-while-revalidate: the old graph stays on screen (no blank
+	// "loading…" flash); pendingSwap is what marks the reload in flight.
+	if !m.graph.loaded {
+		t.Errorf("r should keep graph.loaded (stale-while-revalidate)")
 	}
-	if m.refs.loaded {
-		t.Errorf("r should reset refs.loaded")
+	if !m.graph.pendingSwap {
+		t.Errorf("r should arm graph.pendingSwap")
+	}
+	if !strings.Contains(m.graph.View(), "first") {
+		t.Errorf("graph view should keep old content during reload, got %q", m.graph.View())
+	}
+	// `r` is deliberately status-silent — the in-place swap is the feedback.
+	if m.status != "" {
+		t.Errorf("r should not paint a status, got %q", m.status)
 	}
 	if cmd == nil {
 		t.Fatal("r should return a batched load cmd")
-	}
-	if !strings.Contains(m.graph.View(), "loading") {
-		t.Errorf("graph view should show loading after r, got %q", m.graph.View())
 	}
 	// refs has no View() post-PR-B2 (storage-only). loaded=false is the
 	// observable signal that the reload reset took effect.
 	if m.refs.loaded {
 		t.Error("refs.loaded should be false after r (mid-reload)")
+	}
+
+	// The new stream's first batch replaces the old window instead of
+	// appending to it.
+	updated, _ = m.Update(commitsAppendedMsg{reqID: m.streamReqID, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "def5678", Subject: "second", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+	if m.graph.pendingSwap {
+		t.Error("first batch should consume pendingSwap")
+	}
+	view := m.graph.View()
+	if !strings.Contains(view, "second") || strings.Contains(view, "first") {
+		t.Errorf("first batch should swap the window, got %q", view)
+	}
+}
+
+func TestSpinnerTickGatedByLoading(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	if !m.spinnerArmed {
+		t.Fatal("spinner should arm while the graph is loading")
+	}
+
+	updated, cmd := m.Update(spinnerTickMsg{})
+	m = updated.(Model)
+	if m.spinnerFrame != 1 {
+		t.Errorf("tick should advance spinnerFrame, got %d", m.spinnerFrame)
+	}
+	if cmd == nil {
+		t.Error("tick should re-arm while still loading")
+	}
+
+	updated, _ = m.Update(commitsAppendedMsg{reqID: m.streamReqID, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+	updated, cmd = m.Update(spinnerTickMsg{})
+	m = updated.(Model)
+	if m.spinnerArmed {
+		t.Error("spinner should disarm once nothing is loading")
+	}
+	if cmd != nil {
+		t.Errorf("idle tick should not re-arm, got %T", cmd)
+	}
+	if m.spinnerFrame != 1 {
+		t.Errorf("idle tick should not advance the frame, got %d", m.spinnerFrame)
+	}
+}
+
+func TestBusyStatusGetsSpinnerPrefix(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	updated, _ = m.Update(commitsAppendedMsg{reqID: m.streamReqID, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	m = updated.(Model)
+	if !strings.Contains(m.renderHelpStatus(), spinnerGlyph(m.spinnerFrame)+" fetching…") {
+		t.Errorf("busy status should carry the spinner prefix, got %q", m.renderHelpStatus())
+	}
+
+	// A terminal status overwrites the text; the prefix must vanish with it.
+	updated, _ = m.Update(fetchSucceededMsg{})
+	m = updated.(Model)
+	if !strings.Contains(m.renderHelpStatus(), "fetch: done") {
+		t.Fatalf("expected fetch: done status, got %q", m.renderHelpStatus())
+	}
+	if strings.Contains(m.renderHelpStatus(), spinnerGlyph(m.spinnerFrame)+" fetch: done") {
+		t.Errorf("terminal status must not carry the spinner prefix, got %q", m.renderHelpStatus())
 	}
 }
 
@@ -691,8 +771,10 @@ func TestModelFetchSucceededReloadsBothPanes(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("fetchSucceededMsg should batch a refs+log reload cmd")
 	}
-	if m.graph.loaded {
-		t.Error("graph.loaded should reset on fetch success")
+	// Stale-while-revalidate: the graph keeps its content and swaps on
+	// the new stream's first batch instead of blanking.
+	if !m.graph.loaded || !m.graph.pendingSwap {
+		t.Error("fetch success should keep graph loaded with pendingSwap armed")
 	}
 	if m.refs.loaded {
 		t.Error("refs.loaded should reset on fetch success")

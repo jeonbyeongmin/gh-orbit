@@ -289,8 +289,7 @@ func (m Model) handleZombieCleanupConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 		return m.handleCtrlC()
 	case "y", "Y":
 		m.zombieInFlight = true
-		m.status = fmt.Sprintf("deleting %d zombie branches…", len(m.zombieCleanup.branches))
-		m.statusStyle = statusBusyS
+		m.setBusyStatus(fmt.Sprintf("deleting %d zombie branches…", len(m.zombieCleanup.branches)))
 		return m, deleteZombieBranchesCmd(m.workdir, m.zombieCleanup.branches)
 	}
 	return m, nil
@@ -344,12 +343,11 @@ func (m Model) handleCheckoutConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case p.withFF, p.withCheckoutFF:
 			m.ffInFlight = true
-			m.status = "stash & fast-forward: " + p.ref + " …"
+			m.setBusyStatus("stash & fast-forward: " + p.ref + " …")
 		default:
 			m.checkoutInFlight = true
-			m.status = "stash & " + checkoutLabel(p.ref, p.detached) + " …"
+			m.setBusyStatus("stash & " + checkoutLabel(p.ref, p.detached) + " …")
 		}
-		m.statusStyle = statusBusyS
 		return m, stashThenRetryCmd(m.workdir, p)
 	case "a", "esc":
 		m.mode = viewModeNormal
@@ -401,21 +399,21 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.fetchInFlight = true
 		m.lastFetchAt = time.Now()
 		m.refs.SetLastFetchAt(m.lastFetchAt)
-		m.status = "fetching…"
-		m.statusStyle = statusBusyS
+		m.setBusyStatus("fetching…")
 		return m, fetchCmd(m.workdir)
 	case "p":
 		if m.pullInFlight {
 			return m, nil
 		}
 		m.pullInFlight = true
-		m.status = "pulling…"
-		m.statusStyle = statusBusyS
+		m.setBusyStatus("pulling…")
 		return m, pullCmd(m.workdir, m.pullPrefStrategy)
 	case "r":
 		// Manual reload also refreshes the PR badges — unlike the internal
 		// reloadCmd callers (watcher, post-checkout), `r` is the user
-		// saying "show me current state".
+		// saying "show me current state". Deliberately status-silent:
+		// reloads finish in tens of ms, so any busy/done status just
+		// flickers; the in-place graph swap is the feedback.
 		return m, tea.Batch(m.reloadCmd(), m.dispatchPRList())
 	case ",":
 		cmd := m.enterLocalChangesMode()
@@ -449,8 +447,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.zombieInFlight = true
-		m.status = "scanning for zombie branches…"
-		m.statusStyle = statusBusyS
+		m.setBusyStatus("scanning for zombie branches…")
 		return m, detectZombieBranchesCmd(m.workdir)
 	case "enter":
 		// Graph is the only focused pane. The sidebar was retired in
@@ -472,8 +469,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		remotes := m.refs.RemoteRefs()
 		m.actionInFlight = true
-		m.status = "→ resolving…"
-		m.statusStyle = statusBusyS
+		m.setBusyStatus("→ resolving…")
 		log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d, remotes=%d)",
 			shortHash(c.Hash), len(locals), len(remotes))
 		return m, evaluateGraphActionCmd(m.workdir, c.Hash, locals, remotes)

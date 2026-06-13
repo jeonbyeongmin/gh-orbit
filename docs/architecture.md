@@ -65,6 +65,7 @@ Bottom hint, single line — just a pressable `? help` token plus the status mes
 ## Bubble Tea rules
 
 - Never block in `Update`. Every git invocation returns via `tea.Cmd` → `tea.Msg`. A 50k-commit repo with synchronous `git log` would freeze the UI — stream and paginate.
+- Reloads are stale-while-revalidate: `reloadCmd` keeps the current graph on screen and the new stream's first batch swaps it in place (`graphModel.pendingSwap`) — no blank "loading…" flash on `r` / watcher / post-checkout refreshes. Only the worktree switch hard-resets to the placeholder, because the old tree's graph would mislead. Loading placeholders and busy statuses animate via a single gated spinner tick (`spinnerTickMsg`) that stops re-arming the moment nothing is loading.
 - Stdout is the TUI while `tea.Program` runs. `fmt.Println` corrupts the screen. Use the file logger from `internal/config` (see [config.md](config.md)).
 - Vim-style movement: `hjkl`. `:` reserved for a future command line (`:checkout <branch>`, `:merge <branch>`). Bindings via `bubbles/key` so the help panel stays in sync.
 

@@ -1,10 +1,8 @@
 # gh-orbit docs
 
-Feature-level reference for contributors — human and AI agent both.
-Top-level [README.md](../README.md) explains *why* the tool exists
-(reviewing AI-coding-agent work), [CLAUDE.md](../CLAUDE.md) holds the
-behavioral contract for agents writing code in this repo, and
-everything mechanical lives here.
+Feature-level reference for contributors.
+Top-level [README.md](../README.md) explains *why* the tool exists,
+and everything mechanical lives here.
 
 Reading order for a new contributor:
 
@@ -18,4 +16,4 @@ Reading order for a new contributor:
    modals.
 
 [index.md](index.md) is the same map in one-line form, optimized for
-an AI agent skimming the repo before a change.
+skimming the repo before a change.

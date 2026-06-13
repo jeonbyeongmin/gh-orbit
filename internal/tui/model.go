@@ -892,7 +892,7 @@ func (m *Model) reloadCmd() tea.Cmd {
 // dispatchPRList fires prListCmd behind the prsInFlight gate. Returns nil
 // while a list is already loading — callers batch the result only when
 // non-nil. Deliberately not part of reloadCmd: watcher-driven reloads fire
-// on every local commit an agent makes, and local commits don't change PR
+// on every local commit, and local commits don't change PR
 // state — only Init / `r` / a successful fetch do the gh round-trip.
 func (m *Model) dispatchPRList() tea.Cmd {
 	if m.prsInFlight {

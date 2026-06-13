@@ -2,13 +2,13 @@
 
 Behavioral contract for AI coding agents working in this repo.
 
-`gh-orbit` is itself a review cockpit for AI-coding-agent work
+`gh-orbit` is itself a terminal review cockpit
 (see [README.md](./README.md)), and the repo is developed with
 Claude Code as the primary author. That means two things for any
 agent reading this file:
 
-1. The end user of this product is *another developer* reviewing an
-   agent's diff. Bias every UX decision toward "can a reviewer figure
+1. The end user of this product is *a developer reviewing diffs*.
+   Bias every UX decision toward "can a reviewer figure
    out what just happened in three seconds?" — terse status lines,
    commit-row truncation order, modal hint lines, etc.
 2. Your own diff in this repo will be reviewed in `gh-orbit` itself.

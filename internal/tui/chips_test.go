@@ -208,7 +208,7 @@ func TestBuildChipsPRBadgeOnLocalChip(t *testing.T) {
 }
 
 func TestBuildChipsPRBadgeMatchesRemoteChip(t *testing.T) {
-	// 로컬 ref 없이 원격 chip 만 있는 행 — agent 가 push 만 해둔 브랜치.
+	// 로컬 ref 없이 원격 chip 만 있는 행 — push 만 해둔 브랜치.
 	prs := map[string]prInfo{"feat-x": {Number: 7, Checks: prChecksFailing}}
 	s, _ := buildChips([]string{"origin/feat-x"}, prs, false, false)
 	plain := ansi.Strip(s)

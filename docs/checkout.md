@@ -16,7 +16,7 @@ below. Pull is a separate global action (`p`).
 This is deliberately narrower than the stash *surface* removed in
 subtract-stash (PR #42): no stash refs section, chips, drop modal, or
 auto-pop chain. Here the stash is an exit ramp for the reviewer's own
-WIP when an agent branch needs attention now — not a managed object.
+WIP when another branch needs attention now — not a managed object.
 
 The modal is reused for the same-branch FF (`withFF`) and cross-branch FF (`withCheckoutFF`) paths — the hint text reflects which chain the decision applies to. graph Enter is the only entry, so the modal lookups never need to disambiguate refs-vs-graph callsites.
 

@@ -36,6 +36,7 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | Commit graph (on launch) | `git log --all --graph --oneline --decorate` |
 | `d` patch overlay + `[` / `]` | `git show -p <commit>`, navigated file by file |
 | `,` Local Changes + `space` | `git status` + `git diff` + `git add` / `git restore --staged` |
+| `[` / `]` + `space` (diff pane) | per-hunk `git apply --cached` (`--reverse` to unstage) |
 | `enter` (checkout / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
 | `w` worktrees (switch / add / remove) | `git worktree list` / `add` / `remove` |
 | `b` → `d` (delete branch) | `git branch -d <branch>` |
@@ -65,6 +66,7 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 - `d` opens the focused commit's full patch (`git show -p`) as a full-screen overlay.
 - `[` / `]` jump file-to-file inside the patch; the footer shows `<path> [N/M]`.
 - `,` opens Local Changes — a working-tree diff (file tree + diff pane) split into Conflicts / Unstaged / Staged. `space` stages/unstages the focused file, `tab` cycles tree ↔ diff focus, `r` reloads.
+- Per-hunk staging: `tab` into the diff pane, `[` / `]` move between hunks (the selected `@@` header is highlighted), and `space` stages just that hunk (`git apply --cached`) — or unstages it when viewing a staged entry. Untracked / conflict files stage whole-file from the tree.
 
 ### PR review (`O` / `l`)
 
@@ -113,7 +115,8 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `[` / `]` | patch | jump to previous / next file |
 | `a` / `m` | PR review | approve / merge the open PR (`m` → s/m/r) |
 | `,` | global | Local Changes view |
-| `space` | local changes | stage / unstage the focused file |
+| `space` | local changes | stage / unstage the focused file (or hunk, in the diff pane) |
+| `[` / `]` | local changes diff | previous / next hunk |
 | `w` / `b` | global | worktrees / branches modal |
 | `c` / `R` / `v` / `x` | graph | cherry-pick / rebase / revert / reset |
 | `n` | graph | create a branch at the cursor + switch |
@@ -139,8 +142,7 @@ XDG-conformant paths (`internal/config` owns resolution):
 
 ## Roadmap
 
-1. Per-hunk staging in Local Changes.
-2. PR review: request-changes / comment (with a body editor).
+1. PR review: request-changes / comment (with a body editor).
 
 ## Develop
 

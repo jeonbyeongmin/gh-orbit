@@ -6,6 +6,8 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,9 +22,11 @@ const localChangesCmdTimeout = 60 * time.Second
 var (
 	statusExec        = git.Status
 	diffFileExec      = git.DiffFile
+	diffFileRawExec   = git.DiffFileRaw
 	diffUntrackedExec = git.DiffUntracked
 	addExec           = git.Add
 	restoreStagedExec = git.RestoreStaged
+	applyCachedExec   = git.ApplyCached
 )
 
 // Status load
@@ -64,6 +68,18 @@ type localChangesRestoreSucceededMsg struct {
 }
 
 type localChangesRestoreFailedMsg struct {
+	path string
+	err  error
+}
+
+// Per-hunk apply results. staged carries the side the hunk came from so the
+// success handler can re-land the cursor on the same tree row.
+type localChangesApplySucceededMsg struct {
+	path   string
+	staged bool
+}
+
+type localChangesApplyFailedMsg struct {
 	path string
 	err  error
 }
@@ -129,4 +145,71 @@ func restoreStagedCmd(dir, path string) tea.Cmd {
 		}
 		return localChangesRestoreSucceededMsg{path: path}
 	}
+}
+
+// stageHunkCmd stages (or, for a staged entry, unstages) a single hunk. It
+// fetches the uncolored diff fresh — the viewport copy is ANSI-colored and
+// `git apply` can't parse it — extracts the hunkIdx-th hunk into a minimal
+// patch, and applies it to the index. staged=true means the hunk came from
+// the staged side, so the patch is applied in reverse to remove it.
+func stageHunkCmd(dir, path string, staged bool, hunkIdx int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), localChangesCmdTimeout)
+		defer cancel()
+		raw, err := diffFileRawExec(ctx, dir, path, staged)
+		if err != nil {
+			return localChangesApplyFailedMsg{path: path, err: err}
+		}
+		patch, ok := extractHunkPatch(raw, hunkIdx)
+		if !ok {
+			return localChangesApplyFailedMsg{path: path, err: errHunkOutOfRange}
+		}
+		if err := applyCachedExec(ctx, dir, patch, staged); err != nil {
+			return localChangesApplyFailedMsg{path: path, err: err}
+		}
+		return localChangesApplySucceededMsg{path: path, staged: staged}
+	}
+}
+
+// errHunkOutOfRange surfaces when the hunk index no longer maps to a hunk in
+// the freshly-fetched diff (the working tree changed between the diff render
+// and the stage keypress). The user reloads (`r`) and retries.
+var errHunkOutOfRange = errors.New("hunk no longer present — reload (r) and retry")
+
+// extractHunkPatch builds a minimal applyable patch from an uncolored single-
+// file `git diff`: the file header (every line before the first `@@`) plus the
+// hunkIdx-th `@@` hunk. Returns false when the diff has no hunk at that index.
+func extractHunkPatch(diff string, hunkIdx int) (string, bool) {
+	lines := strings.Split(diff, "\n")
+	firstHunk := -1
+	for i, ln := range lines {
+		if strings.HasPrefix(ln, "@@") {
+			firstHunk = i
+			break
+		}
+	}
+	if firstHunk < 0 {
+		return "", false
+	}
+	// Hunk i spans [starts[i], starts[i+1]) — or to EOF for the last one.
+	var starts []int
+	for i := firstHunk; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "@@") {
+			starts = append(starts, i)
+		}
+	}
+	if hunkIdx < 0 || hunkIdx >= len(starts) {
+		return "", false
+	}
+	end := len(lines)
+	if hunkIdx+1 < len(starts) {
+		end = starts[hunkIdx+1]
+	}
+	out := append([]string{}, lines[:firstHunk]...)
+	out = append(out, lines[starts[hunkIdx]:end]...)
+	patch := strings.Join(out, "\n")
+	if !strings.HasSuffix(patch, "\n") {
+		patch += "\n"
+	}
+	return patch, true
 }

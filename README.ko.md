@@ -36,6 +36,7 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | 커밋 그래프 (실행 시) | `git log --all --graph --oneline --decorate` |
 | `d` patch 오버레이 + `[` / `]` | `git show -p <commit>` 을 파일 단위로 |
 | `,` Local Changes + `space` | `git status` + `git diff` + `git add` / `git restore --staged` |
+| `[` / `]` + `space` (diff 패널) | hunk 단위 `git apply --cached` (`--reverse` 로 unstage) |
 | `enter` (체크아웃 / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
 | `w` worktree (전환 / 추가 / 제거) | `git worktree list` / `add` / `remove` |
 | `b` → `d` (브랜치 삭제) | `git branch -d <branch>` |
@@ -65,6 +66,7 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 - `d` 는 focus 커밋의 전체 patch(`git show -p`)를 전체 화면 오버레이로 연다.
 - `[` / `]` 는 패치 안에서 파일을 오가고, 하단에 `<path> [N/M]` 이 표시된다.
 - `,` 는 Local Changes 를 연다 — 워킹 트리 diff(파일 트리 + diff 패널)를 Conflicts / Unstaged / Staged 로 나눈다. `space` 로 focus 파일 stage/unstage, `tab` 으로 트리 ↔ diff focus 순환, `r` 로 reload.
+- hunk 단위 staging: `tab` 으로 diff 패널에 들어가 `[` / `]` 로 hunk 사이를 이동하고(선택된 `@@` 헤더가 강조됨), `space` 로 그 hunk 만 stage(`git apply --cached`) — staged 항목을 보고 있으면 unstage. untracked / conflict 파일은 트리에서 파일 전체로 stage.
 
 ### PR 리뷰 (`O` / `l`)
 
@@ -113,7 +115,8 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | `[` / `]` | 패치 | 이전 / 다음 파일로 점프 |
 | `a` / `m` | PR 리뷰 | 열린 PR approve / merge (`m` → s/m/r) |
 | `,` | 전역 | Local Changes 뷰 |
-| `space` | local changes | focus 파일 stage / unstage |
+| `space` | local changes | focus 파일 stage / unstage (diff 패널에선 hunk) |
+| `[` / `]` | local changes diff | 이전 / 다음 hunk |
 | `w` / `b` | 전역 | worktree / 브랜치 모달 |
 | `c` / `R` / `v` / `x` | 그래프 | cherry-pick / rebase / revert / reset |
 | `n` | 그래프 | 커서에 브랜치 생성 + 전환 |
@@ -139,8 +142,7 @@ XDG 규격 경로(`internal/config` 가 해석 담당):
 
 ## 로드맵
 
-1. Local Changes 의 per-hunk staging.
-2. PR 리뷰: request-changes / comment(본문 에디터).
+1. PR 리뷰: request-changes / comment(본문 에디터).
 
 ## 개발
 

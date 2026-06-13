@@ -783,6 +783,24 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 
+	case localChangesApplySucceededMsg:
+		if msg.staged {
+			m.status = "unstaged hunk in " + msg.path
+		} else {
+			m.status = "staged hunk in " + msg.path
+		}
+		m.statusStyle = statusOkS
+		m.sidebarWorktreesReqID++
+		return m, tea.Batch(
+			loadStatusCmd(m.workdir),
+			loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
+		)
+
+	case localChangesApplyFailedMsg:
+		m.status = "hunk stage " + msg.path + ": " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
 	}
 	return m, nil
 }

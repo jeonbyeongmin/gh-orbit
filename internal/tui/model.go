@@ -638,7 +638,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		localChangesAddSucceededMsg,
 		localChangesAddFailedMsg,
 		localChangesRestoreSucceededMsg,
-		localChangesRestoreFailedMsg:
+		localChangesRestoreFailedMsg,
+		localChangesApplySucceededMsg,
+		localChangesApplyFailedMsg:
 		return m.updateLocalChangesMsg(msg)
 	}
 	return m, nil
@@ -782,6 +784,37 @@ func (m Model) dispatchLocalChangesStage() (tea.Model, tea.Cmd) {
 	m.localChanges.ScheduleSelectAfterReload(e.Path, true)
 	m.setBusyStatus("stage " + e.Path + "…")
 	return m, addCmd(m.workdir, e.Path)
+}
+
+// dispatchLocalChangesStageHunk stages (or, for a staged entry, unstages) just
+// the focused hunk in the diff pane via `git apply --cached`. Untracked /
+// conflict files have no index baseline to apply a hunk against, so they fall
+// back to whole-file `space` in the tree — surfaced as a hint here. The
+// pending-select hint keeps the cursor on the same path after the post-apply
+// status reload.
+func (m Model) dispatchLocalChangesStageHunk() (tea.Model, tea.Cmd) {
+	e, ok := m.localChanges.CurrentEntry()
+	if !ok {
+		return m, nil
+	}
+	if e.Untracked || e.Conflict {
+		m.status = "hunk staging: untracked/conflict stage whole-file (tree + space)"
+		m.statusStyle = statusErrS
+		return m, nil
+	}
+	hunkIdx, ok := m.localChanges.CurrentHunk()
+	if !ok {
+		m.status = "no hunk to stage"
+		m.statusStyle = statusErrS
+		return m, nil
+	}
+	m.localChanges.ScheduleSelectAfterReload(e.Path, e.Staged())
+	if e.Staged() {
+		m.setBusyStatus("unstage hunk in " + e.Path + "…")
+	} else {
+		m.setBusyStatus("stage hunk in " + e.Path + "…")
+	}
+	return m, stageHunkCmd(m.workdir, e.Path, e.Staged(), hunkIdx)
 }
 
 // copyHashFromGraph handles `y`: copies the focused commit's full hash to

@@ -233,6 +233,36 @@ func RestoreStaged(ctx context.Context, dir, path string) error {
 	return runGitWrite(ctx, dir, "git restore --staged", nil, "restore", "--staged", "--", path)
 }
 
+// DiffFileRaw is DiffFile without ANSI color (`color.ui=never`). Per-hunk
+// staging feeds the result to `git apply`, which can't parse the colored diff
+// the viewport renders — so the patch is rebuilt from this uncolored copy.
+func DiffFileRaw(ctx context.Context, dir, path string, staged bool) (string, error) {
+	return diffFile(ctx, dir, path, staged, "never")
+}
+
+// ApplyCached pipes a unified-diff patch to `git apply --cached`, staging it
+// into the index (reverse=true unstages — applies the patch backwards). The
+// patch must be a complete, valid unified diff (file header + one or more
+// hunks); the TUI builds it from a single hunk so `git add` (whole file) isn't
+// the only granularity. Untracked / conflict paths aren't supported (no index
+// baseline to apply against) — the caller gates those to whole-file staging.
+func ApplyCached(ctx context.Context, dir, patch string, reverse bool) error {
+	args := []string{"apply", "--cached"}
+	if reverse {
+		args = append(args, "--reverse")
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	cmd.Stdin = strings.NewReader(patch)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return wrapGitErr("git apply --cached", err, stderr.String())
+	}
+	return nil
+}
+
 // DiffFile returns the unified diff for one tracked path. staged=true asks
 // for the index-vs-HEAD diff (`--cached`); staged=false asks for the
 // worktree-vs-index diff. ANSI color is preserved via `-c color.ui=always`
@@ -241,7 +271,13 @@ func RestoreStaged(ctx context.Context, dir, path string) error {
 // `git diff` exits 0 even when there's no diff, so we treat any non-zero
 // exit as a real failure (unlike DiffUntracked).
 func DiffFile(ctx context.Context, dir, path string, staged bool) (string, error) {
-	args := []string{"-c", "color.ui=always", "diff"}
+	return diffFile(ctx, dir, path, staged, "always")
+}
+
+// diffFile is the shared body for DiffFile / DiffFileRaw — identical except the
+// `color.ui` mode (always for the viewport, never for the apply patch).
+func diffFile(ctx context.Context, dir, path string, staged bool, colorMode string) (string, error) {
+	args := []string{"-c", "color.ui=" + colorMode, "diff"}
 	if staged {
 		args = append(args, "--cached")
 	}

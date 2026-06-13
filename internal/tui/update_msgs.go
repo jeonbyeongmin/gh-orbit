@@ -754,6 +754,12 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Diff still has changes on that side → repaint it. Otherwise the
 			// last hunk was staged away, so drop back to the tree (auto-return).
 			if m.localChanges.HasEntry(diffPath, diffStaged) {
+				// Pin the cursor back to the file the diff pane was showing
+				// before re-dispatching: a manual `r` / watcher reload carries
+				// no pending-select hint, so ApplyStatusLoaded only clamps the
+				// cursor by index — if the entry order shifted, the cursor would
+				// drift onto a different file and we'd load the wrong diff.
+				m.localChanges.SelectByPath(diffPath, diffStaged)
 				return m.dispatchLocalChangesDiff()
 			}
 			m.localChanges.SetFocus(paneLCTree)

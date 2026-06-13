@@ -324,6 +324,36 @@ func TestLocalChangesDiffAutoReturnsWhenSideGone(t *testing.T) {
 	}
 }
 
+func TestLocalChangesDiffReloadPinsViewedFileOnDrift(t *testing.T) {
+	// A reload with no pending-select hint (e.g. `r` or a watcher refresh)
+	// must keep the diff pane on the file it was showing even when the entry
+	// order shifts — otherwise the index-only clamp drifts the cursor onto a
+	// different file and the pane loads the wrong diff.
+	m := initSized(t)
+	m, _ = pressRune(t, m, ',')
+	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{
+		{Path: "a.txt", WorktreeState: 'M'},
+		{Path: "b.txt", WorktreeState: 'M'},
+	})
+	m = enterDiff(t, m) // cursor 0 → a.txt
+	if e, _ := m.localChanges.CurrentEntry(); e.Path != "a.txt" {
+		t.Fatalf("setup: want a.txt, got %s", e.Path)
+	}
+
+	// Reload inserts z.txt before a.txt; index 0 now points at z.txt.
+	updated, _ := m.Update(localChangesStatusLoadedMsg{entries: []git.StatusEntry{
+		{Path: "z.txt", WorktreeState: 'M'},
+		{Path: "a.txt", WorktreeState: 'M'},
+	}})
+	m = updated.(Model)
+	if m.localChanges.Focused() != paneLCDiff {
+		t.Fatalf("should stay in diff pane (a.txt still present)")
+	}
+	if e, _ := m.localChanges.CurrentEntry(); e.Path != "a.txt" {
+		t.Fatalf("cursor should stay pinned to a.txt, got %s", e.Path)
+	}
+}
+
 func TestLocalChangesDiffStaysWhenSideRemains(t *testing.T) {
 	// Partial stage: the unstaged side still has changes, so the diff pane
 	// stays open across the reload.

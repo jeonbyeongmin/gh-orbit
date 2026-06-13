@@ -1016,17 +1016,18 @@ func TestModelCheckoutConfirmSwallowsOtherKeys(t *testing.T) {
 	m.mode = viewModeCheckoutConfirm
 	m.pendingCheckout = pendingCheckout{ref: "feat"}
 
-	// `s` and `Y` are explicitly listed: they belonged to the (now-cut)
-	// stash & force-checkout branches the design retired in subtract-stash.
-	// If a future refactor accidentally re-wires either key, this test
-	// fails immediately rather than silently dispatching a chain.
+	// `Y` is explicitly listed: it belonged to the (now-cut) force-checkout
+	// branch the design retired in subtract-stash. If a future refactor
+	// accidentally re-wires it, this test fails immediately rather than
+	// silently dispatching a chain. `s` left this list when stash &
+	// continue was re-added (narrower than the old stash surface) — its
+	// dispatch is covered in stash_test.go.
 	for _, k := range []tea.KeyMsg{
 		{Type: tea.KeyRunes, Runes: []rune{'j'}},
 		{Type: tea.KeyTab},
 		{Type: tea.KeyRunes, Runes: []rune{'F'}},
 		{Type: tea.KeyRunes, Runes: []rune{'p'}},
 		{Type: tea.KeyRunes, Runes: []rune{'d'}},
-		{Type: tea.KeyRunes, Runes: []rune{'s'}},
 		{Type: tea.KeyRunes, Runes: []rune{'Y'}},
 		{Type: tea.KeyRunes, Runes: []rune{'y'}},
 		{Type: tea.KeyEnter},
@@ -1046,11 +1047,12 @@ func TestModelCheckoutConfirmSwallowsOtherKeys(t *testing.T) {
 	}
 }
 
-// TestModelCheckoutConfirmMatrixAbortOnly asserts the dirty-tree matrix
-// reduces to {a, esc} after subtract-stash. The CEO plan called this an
-// explicit-assertion gate so a future re-wire of `s` (stash) or `Y`
-// (force) can't slip in silently.
-func TestModelCheckoutConfirmMatrixAbortOnly(t *testing.T) {
+// TestModelCheckoutConfirmMatrixAbort asserts the abort half of the
+// dirty-tree matrix: `a` / `esc` must exit cleanly across all three
+// variants. (Subtract-stash reduced the matrix to abort-only; stash &
+// continue later re-added `s` — its dispatch matrix lives in
+// stash_test.go. `Y` force-checkout stays retired.)
+func TestModelCheckoutConfirmMatrixAbort(t *testing.T) {
 	for _, variant := range []struct {
 		name string
 		p    pendingCheckout

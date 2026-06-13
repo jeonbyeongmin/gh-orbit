@@ -532,3 +532,49 @@ func TestBranchDeleteIntegration(t *testing.T) {
 		t.Errorf("error %q should wrap ErrBranchNotFound", err)
 	}
 }
+
+func TestStashPushIntegrationClearsDirtyAndUntracked(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	work := t.TempDir()
+	gitRun(t, work, "init", "-b", "main")
+	gitRun(t, work, "config", "user.name", "Local")
+	gitRun(t, work, "config", "user.email", "local@example.com")
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write f.txt: %v", err)
+	}
+	gitRun(t, work, "add", "f.txt")
+	gitRun(t, work, "commit", "-m", "base")
+	// Tracked modification + untracked file — both kinds of dirt the
+	// dirty-tree checkout refusal can stem from.
+	if err := os.WriteFile(filepath.Join(work, "f.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("dirty f.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "new.txt"), []byte("untracked\n"), 0o644); err != nil {
+		t.Fatalf("write new.txt: %v", err)
+	}
+
+	if err := StashPush(context.Background(), work); err != nil {
+		t.Fatalf("StashPush: %v", err)
+	}
+	if out := gitOutput(t, work, "status", "--porcelain"); out != "" {
+		t.Errorf("working tree not clean after stash: %q", out)
+	}
+	if out := gitOutput(t, work, "stash", "list"); !strings.Contains(out, "stash@{0}") {
+		t.Errorf("stash list = %q, want one entry", out)
+	}
+}
+
+func TestStashPushReturnsErrorOutsideRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	err := StashPush(context.Background(), t.TempDir())
+	if err == nil {
+		t.Fatal("expected error running git stash outside a repo")
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error %q should include git's stderr message", err)
+	}
+}

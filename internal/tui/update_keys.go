@@ -327,8 +327,36 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleCheckoutConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "s":
+		p := m.pendingCheckout
+		m.mode = viewModeNormal
+		// Record the branch the stash is taken on for the status suffix
+		// and the return-time pop hint. Detached HEAD has no name — that
+		// stash just skips the hints.
+		for _, r := range m.refs.LocalRefs() {
+			if r.IsHead {
+				m.stashNotice = r.ShortName
+				break
+			}
+		}
+		// pendingCheckout stays armed — a dirty re-entry from the retry
+		// (a write raced the stash) reopens the modal with it intact.
+		switch {
+		case p.withFF, p.withCheckoutFF:
+			m.ffInFlight = true
+			m.status = "stash & fast-forward: " + p.ref + " …"
+		default:
+			m.checkoutInFlight = true
+			m.status = "stash & " + checkoutLabel(p.ref, p.detached) + " …"
+		}
+		m.statusStyle = statusBusyS
+		return m, stashThenRetryCmd(m.workdir, p)
 	case "a", "esc":
 		m.mode = viewModeNormal
+		// Abort is where the pull-after chain dies — the needs-clean-tree
+		// handlers keep it armed so `s` can carry the remote-chip Enter's
+		// "synced with network" promise through the stash retry.
+		m.pullAfterAction = false
 		p := m.pendingCheckout
 		m.pendingCheckout = pendingCheckout{}
 		switch {

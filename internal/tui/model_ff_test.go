@@ -523,7 +523,7 @@ func TestPullAfterActionChainsPullOnFFSuccess(t *testing.T) {
 	}
 }
 
-func TestPullAfterActionClearedOnFailureAndDetour(t *testing.T) {
+func TestPullAfterActionClearedOnFailureAndAbort(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -534,11 +534,19 @@ func TestPullAfterActionClearedOnFailureAndDetour(t *testing.T) {
 		t.Error("ffFailedMsg should clear pullAfterAction")
 	}
 
+	// The needs-clean-tree detour keeps the chain armed — the modal's `s`
+	// (stash & continue) carries the remote-chip Enter's pull through the
+	// retry. Abort is what kills it.
 	m.pullAfterAction = true
 	updated, _ = m.Update(checkoutNeedsCleanTreeMsg{ref: "develop"})
 	m = updated.(Model)
+	if !m.pullAfterAction {
+		t.Error("needs-clean-tree detour should keep pullAfterAction armed for the stash branch")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = updated.(Model)
 	if m.pullAfterAction {
-		t.Error("needs-clean-tree detour should clear pullAfterAction")
+		t.Error("modal abort should clear pullAfterAction")
 	}
 }
 

@@ -1241,7 +1241,8 @@ func (m Model) renderHelpStatus() string {
 		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
 		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm,
 		viewModeBranchCreateInput, viewModeRefDeleteConfirm,
-		viewModeRebaseConfirm, viewModeCherryPickConfirm:
+		viewModeRebaseConfirm, viewModeCherryPickConfirm,
+		viewModeRevertConfirm, viewModeResetConfirm:
 		return " "
 	case viewModeHelp:
 		// Inline column reference panel, grown out of the footer over the rows

@@ -63,6 +63,18 @@ func TestRevertRejectsDetached(t *testing.T) {
 	}
 }
 
+// While a revert/reset confirm is open the status row must blank out like
+// every other modal — otherwise the `? help` hint bleeds under the box.
+func TestRevertResetConfirmsBlankStatusRow(t *testing.T) {
+	m := rebaseFixture(t)
+	for _, mode := range []viewMode{viewModeRevertConfirm, viewModeResetConfirm} {
+		m.mode = mode
+		if got := m.renderHelpStatus(); got != " " {
+			t.Errorf("mode %v: status row = %q, want blank ' ' while modal open", mode, got)
+		}
+	}
+}
+
 // --- reset (`x`) ---
 
 // resetFixtureModel seeds HEAD on main (headhash) with cursor on cursor99

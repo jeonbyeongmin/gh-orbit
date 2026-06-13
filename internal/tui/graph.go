@@ -27,14 +27,13 @@ const (
 	timeColWidth = 8
 	// authorColWidth is the visible budget for the author column. Names
 	// wider than this truncate with "…"; shorter ones right-pad so the
-	// hash/time columns to their right stay aligned across rows.
+	// time column to their right stays aligned across rows.
 	authorColWidth = 14
 
 	cursorColWidth = 2
 	maxLaneCap     = 16
 	minLaneCap     = 2
 
-	colorHash     = "214"
 	colorTime     = "245"
 	colorAuthor   = "248"
 	colorSelected = "205"
@@ -44,9 +43,9 @@ const (
 // commit pane's width. Lower bound (minLaneCap×cellWidth) keeps the graph
 // meaningful in narrow terminals; upper bound caps growth in very wide ones.
 func laneColCap(paneWidth int) int {
-	// reserve room for cursor + graph + space + hash + space + time, leave
-	// at least one column for the subject.
-	avail := paneWidth - cursorColWidth - shortHashLen - 1 - timeColWidth - 1
+	// reserve room for cursor + graph + space + time, leave at least one
+	// column for the subject.
+	avail := paneWidth - cursorColWidth - timeColWidth - 1
 	if avail < 0 {
 		avail = 0
 	}
@@ -88,7 +87,7 @@ type graphRow struct {
 // commitDelegate renders one commit as a 2-line block:
 //
 //	[connector row]   ← lane transitions arriving at this commit
-//	[commit row]      ← cursor + graph + hash + time + chips + subject
+//	[commit row]      ← cursor + graph + chips + subject + author + time
 //
 // graphWidth is the hard cap (= laneColCap of the pane width); rows
 // whose own prefix is wider get truncated with "…". For the very first
@@ -201,7 +200,6 @@ func (d commitDelegate) shouldDim(index int, hash string) bool {
 const colorCursorRowBg = "237"
 
 var (
-	hashStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color(colorHash))
 	timeStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime))
 	authorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAuthor))
 	cursorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected))
@@ -227,25 +225,24 @@ func shortHash(h string) string {
 //
 // Layout (left → right):
 //
-//	[cursor 2][graph][chips? + sp][subject][sp + author 14?][sp][hash 7][sp][rel 8]
+//	[cursor 2][graph][chips? + sp][subject][sp + author 14?][sp][rel 8]
 //
 // The "message" column carries chips (when present) and the subject; chips
 // sit just before the subject so a branch tip reads as a label attached to
-// the message. Hash and time are right-anchored — they always render even
-// at narrow widths. When the budget is tight the columns drop in this
-// priority: chips → author → subject truncates to a single cell → if
-// even that won't fit, the message segment disappears and only hash (then
-// hash + time) remain to the right of the graph.
+// the message. Time is right-anchored — it always renders even at narrow
+// widths. When the budget is tight the columns drop in this priority:
+// chips → author → subject truncates to a single cell → if even that
+// won't fit, the message segment disappears and only the time remains to
+// the right of the graph.
 func renderCommitLine(c git.Commit, prs map[string]prInfo, graphPrefix string, graphRowWidth, graphColWidth, width int, selected, dim bool) string {
-	hash := shortHash(c.Hash)
 	rel := relativeShort(c.AuthorTime)
 
 	// selected wins over dim so a navigated row above HEAD still highlights.
 	useDim := dim && !selected
 
-	hashS, timeS, authorS := hashStyle, timeStyle, authorStyle
+	timeS, authorS := timeStyle, authorStyle
 	if useDim {
-		hashS, timeS, authorS = dimFGStyle, dimFGStyle, dimFGStyle
+		timeS, authorS = dimFGStyle, dimFGStyle
 	}
 
 	cursor := "  "
@@ -253,10 +250,10 @@ func renderCommitLine(c git.Commit, prs map[string]prInfo, graphPrefix string, g
 		cursor = cursorStyle.Render("›") + " "
 	}
 	const cursorWidth = 2
-	// rightTail = hash + sep + time (always-anchored right edge).
-	const rightTail = shortHashLen + 1 + timeColWidth
+	// rightTail = time (always-anchored right edge).
+	const rightTail = timeColWidth
 
-	// Cap graph so it never eats into the right-anchored hash/time area.
+	// Cap graph so it never eats into the right-anchored time area.
 	graphBudget := width - cursorWidth - rightTail
 	if graphBudget < 0 {
 		graphBudget = 0
@@ -272,20 +269,15 @@ func renderCommitLine(c git.Commit, prs map[string]prInfo, graphPrefix string, g
 	}
 	fixedLeft := cursorWidth + graphCellW
 
-	// Need at least 1 cell for the subject + 1 separator before the hash.
+	// Need at least 1 cell for the subject + 1 separator before the time.
 	// Below that we drop the message column entirely and fall back to the
-	// right tail (hash, then hash + time, depending on what fits).
+	// right tail (time alone, when it fits).
 	if width-fixedLeft-1-rightTail < 1 {
-		switch {
-		case width-fixedLeft >= rightTail:
+		if width-fixedLeft >= rightTail {
 			return cursor + graphCell +
-				hashS.Render(hash) + " " +
 				timeS.Render(runewidth.FillLeft(rel, timeColWidth))
-		case width-fixedLeft >= shortHashLen:
-			return cursor + graphCell + hashS.Render(hash)
-		default:
-			return cursor + graphCell
 		}
+		return cursor + graphCell
 	}
 
 	// Author column — sits between the message and the right tail. Drops
@@ -327,21 +319,20 @@ func renderCommitLine(c git.Commit, prs map[string]prInfo, graphPrefix string, g
 		subject = dimFGStyle.Render(subject)
 	}
 
-	return fmt.Sprintf("%s%s%s%s%s %s %s",
+	return fmt.Sprintf("%s%s%s%s%s %s",
 		cursor,
 		graphCell,
 		chipSeg,
 		subject,
 		authorSeg,
-		hashS.Render(hash),
 		timeS.Render(runewidth.FillLeft(rel, timeColWidth)),
 	)
 }
 
 // renderConnectorLine builds one connector row: a 2-space cursor gutter,
 // the styled connector graph segment padded to graphColWidth, and trailing
-// spaces filling out to the row width. Connector lines never carry hash /
-// time / subject — those belong on the commit row that follows.
+// spaces filling out to the row width. Connector lines never carry time /
+// subject — those belong on the commit row that follows.
 // dim=true recolors the graph segment with the muted grey palette so the
 // connector keeps the visual band started by the commit row above it.
 func renderConnectorLine(connectorPrefix string, connectorRowWidth, graphColWidth, width int, dim bool) string {

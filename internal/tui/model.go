@@ -1198,7 +1198,14 @@ func (m Model) View() string {
 		if m.reviewPRNumber != 0 {
 			hint = m.renderPRReviewHint()
 		}
-		return lipgloss.JoinVertical(lipgloss.Left, m.diff.PatchView(), hint)
+		diffBase := lipgloss.JoinVertical(lipgloss.Left, m.diff.PatchView(), hint)
+		// An armed approve / merge confirm is a centered dialog composed over
+		// the diff itself (not the graph) — the diff dims behind the box so
+		// the reviewer keeps it in view while deciding.
+		if m.reviewPRNumber != 0 && m.prAction != prActionNone {
+			return composeOverlay(diffBase, renderModalBox(m.renderPRActionConfirmInner()), m.width, m.height)
+		}
+		return diffBase
 	}
 	s := m.paneSizes()
 

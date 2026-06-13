@@ -68,7 +68,7 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 ### PR 리뷰 (`O`)
 
 - 칩에 열린 PR 배지가 달린 커밋에서 `O` 는 그 PR 의 diff(`gh pr diff`)를 커밋 diff 가 쓰는 것과 같은 전체 화면 patch 오버레이로 가져온다 — `[` / `]` 파일 네비와 스크롤이 동일하게 동작한다.
-- `a` 는 approve(`gh pr review --approve`), `m` 은 merge — 전략을 인라인으로 고른다: `[s]` squash · `[m]` merge · `[r]` rebase(`gh pr merge`). 둘 다 오버레이 하단 힌트 줄에서 확인하므로 결정하는 동안 diff 가 화면에 남는다.
+- `a` 는 approve(`gh pr review --approve`), `m` 은 merge — 전략을 고른다: `[s]` squash · `[m]` merge · `[r]` rebase(`gh pr merge`). 둘 다 diff 위에 띄워지는 중앙 confirm 다이얼로그로 확인하므로, 결정하는 동안 diff 가 dim 된 채 뒤에 남는다.
 - approve 는 오버레이를 유지하고(계속 읽거나 이어서 merge), merge 는 그래프로 닫히며 PR 배지를 갱신한다. gh 에러(본인 PR approve, merge 불가, 로그아웃 상태)는 힌트 줄에 표시된다.
 
 ### worktree (`w`)

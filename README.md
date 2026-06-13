@@ -68,7 +68,7 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 ### PR review (`O`)
 
 - `O` on a commit whose chip carries an open-PR badge pulls that PR's diff (`gh pr diff`) into the same full-screen patch overlay the commit diff uses — `[` / `]` file navigation and scrolling work identically.
-- `a` approves (`gh pr review --approve`); `m` merges, picking a strategy inline — `[s]` squash · `[m]` merge · `[r]` rebase (`gh pr merge`). Both confirm on the overlay's hint line, so the diff stays on screen while you decide.
+- `a` approves (`gh pr review --approve`); `m` merges, picking a strategy — `[s]` squash · `[m]` merge · `[r]` rebase (`gh pr merge`). Both ask in a centered confirm dialog composed over the diff, so it stays in view (dimmed) while you decide.
 - Approve keeps the overlay open (read on, or merge next); merge closes back to the graph and refreshes the PR badges. gh errors (approving your own PR, not mergeable, logged-out `gh`) surface on the hint line.
 
 ### Worktrees (`w`)

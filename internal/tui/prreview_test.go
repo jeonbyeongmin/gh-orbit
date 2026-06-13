@@ -304,23 +304,35 @@ func TestRenderPRReviewHint(t *testing.T) {
 		}
 	}
 
-	m.prAction = prActionApprove
-	app := m.renderPRReviewHint()
-	if !strings.Contains(app, "approve PR #42?") || !strings.Contains(app, "[y] yes") {
-		t.Errorf("approve hint = %q", app)
-	}
-
-	m.prAction = prActionMerge
-	mrg := m.renderPRReviewHint()
-	for _, want := range []string{"squash", "merge", "rebase"} {
-		if !strings.Contains(mrg, want) {
-			t.Errorf("merge hint missing %q: %q", want, mrg)
-		}
-	}
-
-	m.prAction = prActionNone
 	m.prReviewNotice = "approved #42"
 	if notice := m.renderPRReviewHint(); !strings.Contains(notice, "approved #42") {
 		t.Errorf("notice hint = %q", notice)
+	}
+}
+
+// The armed approve / merge confirms render as a centered dialog, not in the
+// hint line.
+func TestRenderPRActionConfirmInner(t *testing.T) {
+	m := prReviewOpen(t)
+	m.prAction = prActionApprove
+	app := m.renderPRActionConfirmInner()
+	if !strings.Contains(app, "approve PR #42?") || !strings.Contains(app, "[y] yes") {
+		t.Errorf("approve dialog = %q", app)
+	}
+	m.prAction = prActionMerge
+	mrg := m.renderPRActionConfirmInner()
+	for _, want := range []string{"merge PR #42?", "squash", "rebase"} {
+		if !strings.Contains(mrg, want) {
+			t.Errorf("merge dialog missing %q: %q", want, mrg)
+		}
+	}
+}
+
+// While a confirm is armed, View() composes the dialog over the diff base.
+func TestPRReviewArmedComposesDialog(t *testing.T) {
+	m := prReviewOpen(t)
+	m.prAction = prActionApprove
+	if !strings.Contains(m.View(), "approve PR #42?") {
+		t.Error("armed approve should render a centered dialog over the diff")
 	}
 }

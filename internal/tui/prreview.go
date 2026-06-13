@@ -232,20 +232,16 @@ func (m Model) updatePRReviewMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // renderPRReviewHint is the bottom line of the overlay while it shows a PR
-// diff (reviewPRNumber != 0). It carries four states: in-flight (spinner +
-// busy text), approve-armed, merge-armed, and the default browse line. A
-// one-shot result notice (approve ok / action failed) takes over the browse
-// line until the next keypress dismisses it.
+// diff (reviewPRNumber != 0). It carries three states: in-flight (spinner +
+// busy text), a one-shot result notice (approve ok / action failed, dismissed
+// by the next keypress), and the default browse line. The armed approve /
+// merge confirms are NOT here — they render as a centered dialog over the
+// diff (renderPRActionConfirmInner); while one is armed this line shows the
+// dimmed browse hint behind the box.
 func (m Model) renderPRReviewHint() string {
 	n := m.reviewPRNumber
 	if m.prReviewInFlight {
 		return statusBusyS.Render(spinnerGlyph(m.spinnerFrame) + " " + m.status)
-	}
-	switch m.prAction {
-	case prActionApprove:
-		return fitHelpLine(fmt.Sprintf("approve PR #%d?  [y] yes · [esc] cancel", n), m.width)
-	case prActionMerge:
-		return fitHelpLine(fmt.Sprintf("merge PR #%d?  [s] squash · [m] merge · [r] rebase · [esc] cancel", n), m.width)
 	}
 	if m.prReviewNotice != "" {
 		style := statusOkS
@@ -265,4 +261,25 @@ func (m Model) renderPRReviewHint() string {
 	}
 	// The file prefix overflows — drop it so the PR actions always survive.
 	return fitHelpLine(base, m.width)
+}
+
+// renderPRActionConfirmInner is the centered confirm dialog for the armed
+// approve / merge action. View() composes it over the dimmed PR diff (not the
+// graph base) so the diff stays in view behind the box — the same
+// renderModalBox vocabulary the rebase / revert / reset confirms use. Empty
+// string for prActionNone (View() only calls it while one is armed).
+func (m Model) renderPRActionConfirmInner() string {
+	switch m.prAction {
+	case prActionApprove:
+		return strings.Join([]string{
+			confirmPromptS.Render(fmt.Sprintf("approve PR #%d?", m.reviewPRNumber)),
+			help.Render("[y] yes · [esc] cancel"),
+		}, "\n")
+	case prActionMerge:
+		return strings.Join([]string{
+			confirmPromptS.Render(fmt.Sprintf("merge PR #%d?", m.reviewPRNumber)),
+			help.Render("[s] squash · [m] merge · [r] rebase · [esc] cancel"),
+		}, "\n")
+	}
+	return ""
 }

@@ -12,15 +12,17 @@ same `[` / `]` file navigation. `reviewPRNumber != 0` is the only thing
 that distinguishes a PR overlay from a commit patch: it swaps the
 bottom hint to `renderPRReviewHint` and arms `a` / `m`.
 
-## Why the confirms aren't modals
+## Confirm dialogs over the diff
 
-The diff overlay is full-screen, so a centered `composeOverlay` confirm
-box would paint over the *graph* base (`View()` early-returns for
-`viewModeDiffWindow`, never composing the diff under a modal). Approve
-and merge instead live as a sub-state of the overlay (`prAction`) and
-only swap the bottom hint line — the `viewModeCheckoutConfirm` idiom.
-The diff stays on screen while the reviewer confirms, which is exactly
-what reading-then-merging wants.
+Approve and merge open a centered confirm dialog — the same
+`renderModalBox` vocabulary the rebase / revert / reset confirms use.
+Because the diff overlay is full-screen and `View()` early-returns for
+`viewModeDiffWindow`, the dialog is composed (`composeOverlay`) over the
+**diff view** as its base, not the graph: the diff dims behind the box
+so the reviewer keeps it in view while deciding. `prAction`
+(`approve` / `merge`) holds which confirm is armed; pressing the action
+key dispatches and closes the box, and the busy state (`approving #N…`)
+shows on the hint line behind it.
 
 ## Keymap (inside the PR overlay)
 

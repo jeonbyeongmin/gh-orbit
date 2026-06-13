@@ -1222,10 +1222,11 @@ func (m Model) renderHelpStatus() string {
 		// helpReservedRows() carved from the graph.
 		return renderHelpExpanded(m.width, m.helpReservedRows())
 	}
-	// Normal operation: a single pressable `? help` token + the status
-	// message. The full key reference lives behind the `?` inline panel.
+	// Normal operation: the status message on the left, a single pressable
+	// `? help` token pinned to the right edge. The full key reference lives
+	// behind the `?` inline panel.
 	if m.status == "" {
-		return collapsedHintRendered
+		return lipgloss.PlaceHorizontal(m.width, lipgloss.Right, collapsedHintRendered)
 	}
 	statusText := m.status
 	if m.statusIsBusy() {
@@ -1237,5 +1238,10 @@ func (m Model) renderHelpStatus() string {
 	if avail < 1 {
 		return statusRendered
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, fitHelpLine(collapsedHintText, avail), " ", statusRendered)
+	helpRendered := fitHelpLine(collapsedHintText, avail)
+	gap := m.width - lipgloss.Width(statusRendered) - lipgloss.Width(helpRendered)
+	if gap < 1 {
+		gap = 1
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, statusRendered, strings.Repeat(" ", gap), helpRendered)
 }

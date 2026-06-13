@@ -215,6 +215,25 @@ type Model struct {
 	// parallel `gh pr list` calls (and a slow older reply can't overwrite
 	// a newer one). New() arms it because Init always dispatches.
 	prsInFlight bool
+	// reviewPRNumber is the open PR whose diff currently fills the patch
+	// overlay (0 = the overlay shows a plain commit patch, not a PR). Set by
+	// `O` (beginPRReview), cleared on overlay close / merge. While non-zero
+	// the overlay's bottom line is renderPRReviewHint and `a`/`m` arm the
+	// inline approve/merge confirms — see prreview.go.
+	reviewPRNumber int
+	// prAction is the inline confirm sub-state inside the PR overlay
+	// (none / approve / merge). Non-none gates the overlay keymap to the
+	// confirm keys and swaps the hint to the confirm prompt.
+	prAction prAction
+	// prReviewInFlight gates the overlay keys (ctrl+c only) while an approve
+	// or merge gh call runs, mirroring refActionInFlight for the delete
+	// confirm. The busy status it sets drives the spinner via statusIsBusy.
+	prReviewInFlight bool
+	// prReviewNotice is the one-shot approve-ok / action-failed line shown in
+	// the overlay hint (the diff View() never renders m.status). Cleared on
+	// the next overlay keypress; prReviewNoticeErr picks its color.
+	prReviewNotice    string
+	prReviewNoticeErr bool
 	// pullInFlight gates the p key. Tracked separately from fetchInFlight so
 	// F + P can run in parallel; git's own .git/index.lock is the real
 	// serialization point.
@@ -573,6 +592,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		browseFailedMsg,
 		prBrowseOpenedMsg:
 		return m.updateCheckoutMsg(msg)
+
+	case prApproveDoneMsg,
+		prApproveFailedMsg,
+		prMergeDoneMsg,
+		prMergeFailedMsg:
+		return m.updatePRReviewMsg(msg)
 
 	case tea.FocusMsg,
 		fetchSucceededMsg,
@@ -1169,7 +1194,18 @@ func (m Model) View() string {
 		return "starting…"
 	}
 	if m.mode == viewModeDiffWindow {
-		return lipgloss.JoinVertical(lipgloss.Left, m.diff.PatchView(), m.renderDiffOverlayHint())
+		hint := m.renderDiffOverlayHint()
+		if m.reviewPRNumber != 0 {
+			hint = m.renderPRReviewHint()
+		}
+		diffBase := lipgloss.JoinVertical(lipgloss.Left, m.diff.PatchView(), hint)
+		// An armed approve / merge confirm is a centered dialog composed over
+		// the diff itself (not the graph) — the diff dims behind the box so
+		// the reviewer keeps it in view while deciding.
+		if m.reviewPRNumber != 0 && m.prAction != prActionNone {
+			return composeOverlay(diffBase, renderModalBox(m.renderPRActionConfirmInner()), m.width, m.height)
+		}
+		return diffBase
 	}
 	s := m.paneSizes()
 

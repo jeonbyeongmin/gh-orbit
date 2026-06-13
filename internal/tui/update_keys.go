@@ -80,10 +80,66 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// PR review sub-states gate the overlay's scroll keymap. Only reached
+	// when `O` opened a PR (reviewPRNumber != 0); a plain commit patch
+	// (reviewPRNumber == 0) falls straight through to scroll/close below.
+	if m.reviewPRNumber != 0 {
+		if m.prReviewInFlight {
+			// Mid approve/merge — swallow everything but quit so a second
+			// press can't fork a parallel gh call.
+			if msg.String() == "ctrl+c" {
+				return m.handleCtrlC()
+			}
+			return m, nil
+		}
+		// Any key dismisses a lingering result notice (approve ok / failed).
+		m.prReviewNotice = ""
+		switch m.prAction {
+		case prActionApprove:
+			switch msg.String() {
+			case "y":
+				return m.dispatchPRApprove()
+			case "q", "esc":
+				m.prAction = prActionNone
+				return m, nil
+			case "ctrl+c":
+				return m.handleCtrlC()
+			}
+			return m, nil
+		case prActionMerge:
+			switch msg.String() {
+			case "s":
+				return m.dispatchPRMerge("squash")
+			case "m":
+				return m.dispatchPRMerge("merge")
+			case "r":
+				return m.dispatchPRMerge("rebase")
+			case "q", "esc":
+				m.prAction = prActionNone
+				return m, nil
+			case "ctrl+c":
+				return m.handleCtrlC()
+			}
+			return m, nil
+		}
+		// Browse state: arm the inline confirms; everything else (scroll,
+		// file jump, close) falls through to the shared keymap below.
+		switch msg.String() {
+		case "a":
+			m.prAction = prActionApprove
+			return m, nil
+		case "m":
+			m.prAction = prActionMerge
+			return m, nil
+		}
+	}
 	switch msg.String() {
 	case "q", "esc":
 		m.mode = viewModeNormal
 		m.diff.ClosePatch()
+		m.reviewPRNumber = 0
+		m.prAction = prActionNone
+		m.prReviewNotice = ""
 		return m, nil
 	case "ctrl+c":
 		return m.handleCtrlC()
@@ -452,6 +508,11 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "o":
 		// Open the cursor row's open PR on GitHub (chip badge rows only).
 		return m.beginBrowsePR()
+	case "O":
+		// Pull the cursor row's open PR diff into the patch overlay to
+		// review (approve / merge) inline. `o` leaves for the browser; `O`
+		// keeps the review in the cockpit. Chip badge rows only.
+		return m.beginPRReview()
 	case "Z":
 		// Zombie-branch cleanup is a global action now that the sidebar
 		// is gone — the previous paneRefs focus gate had no meaningful

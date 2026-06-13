@@ -44,7 +44,8 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `v` / `x` | `git revert <commit>` / `git reset --soft\|--mixed\|--hard <commit>` |
 | `n` | `git checkout -b <name> <commit>` |
 | `F` / `p` / `P` | `git fetch --all` / `git pull` / `git push` |
-| `o` (open PR) | `gh pr view --web <number>` |
+| `o` (open PR on web) | `gh pr view --web <number>` |
+| `O` → `a` / `m` (review PR) | `gh pr diff <n>` · `gh pr review --approve` · `gh pr merge --squash\|--merge\|--rebase` |
 | PR badges on branch chips | `gh pr list` + `gh pr checks <number>` |
 | `y` | `git rev-parse <commit>` → clipboard |
 
@@ -63,6 +64,12 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 - `d` opens the focused commit's full patch (`git show -p`) as a full-screen overlay.
 - `[` / `]` jump file-to-file inside the patch; the footer shows `<path> [N/M]`.
 - `,` opens Local Changes — a working-tree diff (file tree + diff pane) split into Conflicts / Unstaged / Staged. `space` stages/unstages the focused file, `tab` cycles tree ↔ diff focus, `r` reloads.
+
+### PR review (`O`)
+
+- `O` on a commit whose chip carries an open-PR badge pulls that PR's diff (`gh pr diff`) into the same full-screen patch overlay the commit diff uses — `[` / `]` file navigation and scrolling work identically.
+- `a` approves (`gh pr review --approve`); `m` merges, picking a strategy — `[s]` squash · `[m]` merge · `[r]` rebase (`gh pr merge`). Both ask in a centered confirm dialog composed over the diff, so it stays in view (dimmed) while you decide.
+- Approve keeps the overlay open (read on, or merge next); merge closes back to the graph and refreshes the PR badges. gh errors (approving your own PR, not mergeable, logged-out `gh`) surface on the hint line.
 
 ### Worktrees (`w`)
 
@@ -99,7 +106,9 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `j` / `k` · `g` / `G` | graph | navigate · jump to top / bottom |
 | `enter` | graph | checkout / fast-forward / detach |
 | `d` | graph | open the full-screen patch overlay |
+| `O` | graph | open the cursor PR's diff in the review overlay |
 | `[` / `]` | patch | jump to previous / next file |
+| `a` / `m` | PR review | approve / merge the open PR (`m` → s/m/r) |
 | `,` | global | Local Changes view |
 | `space` | local changes | stage / unstage the focused file |
 | `w` / `b` | global | worktrees / branches modal |
@@ -128,7 +137,7 @@ XDG-conformant paths (`internal/config` owns resolution):
 ## Roadmap
 
 1. Per-hunk staging in Local Changes.
-2. PR review pane — pull a PR into the same layout, read its diff in the patch overlay, approve / request-changes / merge inline.
+2. PR review: request-changes / comment (with a body editor), and a PR list to reach PRs whose branch isn't checked out locally.
 
 ## Develop
 

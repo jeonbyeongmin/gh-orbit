@@ -21,6 +21,7 @@ const localChangesCmdTimeout = 60 * time.Second
 // hermetic (no real subprocess in unit tests).
 var (
 	statusExec        = git.Status
+	diffNumstatExec   = git.DiffNumstat
 	diffFileExec      = git.DiffFile
 	diffFileRawExec   = git.DiffFileRaw
 	diffUntrackedExec = git.DiffUntracked
@@ -29,9 +30,13 @@ var (
 	applyCachedExec   = git.ApplyCached
 )
 
-// Status load
+// Status load. The numstat slices carry the per-file +/- counts the tree
+// renders alongside each row; they're best-effort (a probe failure just drops
+// the column) and split by side because the counts come from two diffs.
 type localChangesStatusLoadedMsg struct {
-	entries []git.StatusEntry
+	entries      []git.StatusEntry
+	unstagedStat []git.FileStat
+	stagedStat   []git.FileStat
 }
 
 type localChangesStatusFailedMsg struct {
@@ -89,7 +94,10 @@ type localChangesApplyFailedMsg struct {
 // first status load.
 type localChangesEnterRequestedMsg struct{}
 
-// loadStatusCmd dispatches a fresh `git status --porcelain=v2` snapshot.
+// loadStatusCmd dispatches a fresh `git status --porcelain=v2` snapshot plus
+// the two `git diff --numstat` probes that feed the per-row +/- column. The
+// numstat probes are best-effort: a failure leaves the slice nil and the tree
+// renders without stats rather than failing the whole reload.
 func loadStatusCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), localChangesCmdTimeout)
@@ -98,7 +106,9 @@ func loadStatusCmd(dir string) tea.Cmd {
 		if err != nil {
 			return localChangesStatusFailedMsg{err: err}
 		}
-		return localChangesStatusLoadedMsg{entries: entries}
+		unstaged, _ := diffNumstatExec(ctx, dir, false)
+		staged, _ := diffNumstatExec(ctx, dir, true)
+		return localChangesStatusLoadedMsg{entries: entries, unstagedStat: unstaged, stagedStat: staged}
 	}
 }
 

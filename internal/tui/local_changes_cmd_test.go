@@ -14,6 +14,12 @@ func TestLoadStatusCmdEmitsLoadedMsg(t *testing.T) {
 	statusExec = func(ctx context.Context, dir string) ([]git.StatusEntry, error) {
 		return want, nil
 	}
+	diffNumstatExec = func(ctx context.Context, dir string, staged bool) ([]git.FileStat, error) {
+		if staged {
+			return []git.FileStat{{Path: "f.txt", Insertions: 3, Deletions: 1}}, nil
+		}
+		return nil, nil
+	}
 
 	msg := loadStatusCmd("/tmp/repo")()
 	loaded, ok := msg.(localChangesStatusLoadedMsg)
@@ -22,6 +28,9 @@ func TestLoadStatusCmdEmitsLoadedMsg(t *testing.T) {
 	}
 	if len(loaded.entries) != 1 || loaded.entries[0].Path != "f.txt" {
 		t.Fatalf("unexpected entries: %+v", loaded.entries)
+	}
+	if len(loaded.stagedStat) != 1 || loaded.stagedStat[0].Insertions != 3 {
+		t.Fatalf("staged numstat not carried: %+v", loaded.stagedStat)
 	}
 }
 
@@ -116,12 +125,14 @@ func TestRestoreStagedCmdSuccess(t *testing.T) {
 func restoreLocalChangesExec(t *testing.T) func() {
 	t.Helper()
 	origStatus := statusExec
+	origDiffNumstat := diffNumstatExec
 	origDiffFile := diffFileExec
 	origDiffUntracked := diffUntrackedExec
 	origAdd := addExec
 	origRestore := restoreStagedExec
 	return func() {
 		statusExec = origStatus
+		diffNumstatExec = origDiffNumstat
 		diffFileExec = origDiffFile
 		diffUntrackedExec = origDiffUntracked
 		addExec = origAdd

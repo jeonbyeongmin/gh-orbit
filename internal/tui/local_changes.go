@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -100,6 +101,13 @@ type localChangesModel struct {
 	// spinnerFrame is pushed in by Model on every spinnerTickMsg so the
 	// loading placeholders animate. Only read while !loaded / diffLoading.
 	spinnerFrame int
+
+	// unstagedStat / stagedStat hold the per-path +/- counts rendered at the
+	// right edge of each tree row, keyed by path and split by side (the counts
+	// come from two separate `git diff --numstat` probes). Nil when the probe
+	// failed or returned nothing; untracked paths never appear (no baseline).
+	unstagedStat map[string]git.FileStat
+	stagedStat   map[string]git.FileStat
 }
 
 func newLocalChangesModel() localChangesModel {
@@ -115,7 +123,13 @@ func (m *localChangesModel) SetSize(treeW, treeH, diffW, diffH int) {
 	m.diffW = diffW
 	m.diffH = diffH
 	m.diff.Width = diffW
-	m.diff.Height = diffH
+	// One row of the diff pane is the file header (diffHeader); the viewport
+	// takes the rest, so it never paints over the header line.
+	vpH := diffH - 1
+	if vpH < 1 {
+		vpH = 1
+	}
+	m.diff.Height = vpH
 	if m.diffText != "" {
 		m.diff.SetContent(m.diffText)
 	}
@@ -149,6 +163,25 @@ func (m *localChangesModel) ApplyStatusLoaded(src []git.StatusEntry) {
 func (m *localChangesModel) ScheduleSelectAfterReload(path string, preferStaged bool) {
 	m.pendingSelectPath = path
 	m.pendingSelectPreferStaged = preferStaged
+}
+
+// SetStats ingests the two numstat slices from a status reload, indexing each
+// by path for O(1) row lookup. Paired with ApplyStatusLoaded — the caller
+// applies both from the same localChangesStatusLoadedMsg.
+func (m *localChangesModel) SetStats(unstaged, staged []git.FileStat) {
+	m.unstagedStat = indexStats(unstaged)
+	m.stagedStat = indexStats(staged)
+}
+
+func indexStats(fs []git.FileStat) map[string]git.FileStat {
+	if len(fs) == 0 {
+		return nil
+	}
+	out := make(map[string]git.FileStat, len(fs))
+	for _, f := range fs {
+		out[f.Path] = f
+	}
+	return out
 }
 
 // ApplyStatusFailed records a load error so the tree can render a one-liner
@@ -486,6 +519,15 @@ var (
 	lcSelectedStyle  = lipgloss.NewStyle().Reverse(true)
 	lcUntrackedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime))
 	lcConflictStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime)).Bold(true)
+	lcStatAddStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorStatAdd))
+	lcStatDelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorStatDel))
+)
+
+// colorStatAdd / colorStatDel tint the tree's "+N -M" column — green for
+// insertions, red for deletions, matching diff convention.
+const (
+	colorStatAdd = "2"
+	colorStatDel = "1"
 )
 
 // TreeView renders the file tree column to a string. Empty / loading / error
@@ -527,12 +569,7 @@ func (m localChangesModel) renderRow(r lcRow, width int) string {
 	case lcRowEmpty:
 		return lcUntrackedStyle.Render(runewidth.Truncate("  (empty)", width, "…"))
 	case lcRowEntry:
-		e := m.entries[r.entryIdx]
-		text := renderEntryLine(e, width)
-		if r.entryIdx == m.cursor {
-			return lcSelectedStyle.Render(text)
-		}
-		return text
+		return m.renderEntryRow(m.entries[r.entryIdx], width, r.entryIdx == m.cursor)
 	}
 	return ""
 }
@@ -549,21 +586,103 @@ func headerTitle(s localChangesSection) string {
 	return ""
 }
 
-func renderEntryLine(e localChangesEntry, width int) string {
-	marker := entryMarker(e)
+// renderEntryRow renders one file row: "  <marker> <path>" left-aligned with
+// the "+N -M" stat (when known) right-aligned at the width edge. Layout is
+// computed in plain text so the visible columns line up; color is applied to
+// the already-sized segments afterward. The selected row is reverse-styled as
+// one plain span — restyling a span that already carries the stat's color ANSI
+// would break on the inner reset.
+func (m localChangesModel) renderEntryRow(e localChangesEntry, width int, selected bool) string {
 	label := e.Path
 	if e.Renamed() {
 		label = e.OrigPath + " → " + e.Path
 	}
-	body := "  " + marker + " " + label
-	body = runewidth.Truncate(body, width, "…")
-	if e.Conflict {
-		return lcConflictStyle.Render(body)
+	left, gap, stat := layoutEntryRow("  "+entryMarker(e)+" "+label, m.statText(e), width)
+
+	if selected {
+		return lcSelectedStyle.Render(left + gap + stat)
 	}
-	if e.Untracked {
-		return lcUntrackedStyle.Render(body)
+	leftOut := left
+	switch {
+	case e.Conflict:
+		leftOut = lcConflictStyle.Render(left)
+	case e.Untracked:
+		leftOut = lcUntrackedStyle.Render(left)
 	}
-	return body
+	return leftOut + gap + colorizeStat(stat)
+}
+
+// layoutEntryRow fits "<left> … <stat>" into width with the stat pinned to the
+// right edge and at least one space of gap. With no stat (or no room for one)
+// it truncates left to the full width and returns empty gap/stat. All widths
+// are measured in plain text so callers can color the segments without
+// disturbing alignment.
+func layoutEntryRow(left, stat string, width int) (string, string, string) {
+	if width < 1 {
+		width = 1
+	}
+	sw := runewidth.StringWidth(stat)
+	if stat == "" || sw+2 > width {
+		return runewidth.Truncate(left, width, "…"), "", ""
+	}
+	l := runewidth.Truncate(left, width-sw-1, "…")
+	gap := width - runewidth.StringWidth(l) - sw
+	if gap < 1 {
+		gap = 1
+	}
+	return l, strings.Repeat(" ", gap), stat
+}
+
+// statText returns the "+N -M" string for the entry's side, "bin" for binary
+// files, or "" when no stat is known (untracked, conflict absent from the
+// diff, or the numstat probe failed).
+func (m localChangesModel) statText(e localChangesEntry) string {
+	var (
+		fs git.FileStat
+		ok bool
+	)
+	if e.Staged() {
+		fs, ok = m.stagedStat[e.Path]
+	} else {
+		fs, ok = m.unstagedStat[e.Path]
+	}
+	if !ok {
+		return ""
+	}
+	if fs.Binary() {
+		return "bin"
+	}
+	// Drop the zero side so a pure add/delete reads as "+4" / "-1" instead of
+	// "+4 -0"; only mixed changes carry both tokens.
+	switch {
+	case fs.Insertions > 0 && fs.Deletions > 0:
+		return fmt.Sprintf("+%d -%d", fs.Insertions, fs.Deletions)
+	case fs.Insertions > 0:
+		return fmt.Sprintf("+%d", fs.Insertions)
+	case fs.Deletions > 0:
+		return fmt.Sprintf("-%d", fs.Deletions)
+	default:
+		return ""
+	}
+}
+
+// colorizeStat tints "+N" green and "-M" red. The stat may carry one token
+// (e.g. "+4" or "-1") when the other side is zero, or both ("+4 -2"). "bin" /
+// "" pass through uncolored.
+func colorizeStat(stat string) string {
+	if stat == "" || stat == "bin" {
+		return stat
+	}
+	parts := strings.Fields(stat)
+	for i, p := range parts {
+		switch {
+		case strings.HasPrefix(p, "+"):
+			parts[i] = lcStatAddStyle.Render(p)
+		case strings.HasPrefix(p, "-"):
+			parts[i] = lcStatDelStyle.Render(p)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func entryMarker(e localChangesEntry) string {
@@ -581,19 +700,70 @@ func entryMarker(e localChangesEntry) string {
 
 func (e localChangesEntry) Renamed() bool { return e.OrigPath != "" }
 
-// DiffView renders the diff column. Empty / loading / error are surfaced as
-// a one-liner; otherwise the viewport's rendered text is returned.
+// DiffView renders the full-screen diff pane: a one-row file header over the
+// diff body. Empty / loading / error bodies are surfaced as a one-liner so the
+// header still names what's (not) being shown.
 func (m localChangesModel) DiffView() string {
-	if m.diffErr != nil {
-		return "error: " + firstLine(m.diffErr.Error())
+	bodyH := m.diffH - 1
+	if bodyH < 1 {
+		bodyH = 1
 	}
-	if m.diffLoading {
-		return loadingPane(m.diffW, m.diffH, m.spinnerFrame)
+	var body string
+	switch {
+	case m.diffErr != nil:
+		body = "error: " + firstLine(m.diffErr.Error())
+	case m.diffLoading:
+		body = loadingPane(m.diffW, bodyH, m.spinnerFrame)
+	case strings.TrimSpace(m.diffText) == "":
+		body = "(no file)"
+	default:
+		body = m.diff.View()
 	}
-	if strings.TrimSpace(m.diffText) == "" {
-		return "(no file)"
+	return m.diffHeader() + "\n" + body
+}
+
+// diffHeader is the one-row title above the diff body. It names the file and
+// which side (unstaged / staged / conflict) the diff belongs to — context the
+// tree column used to carry before the layout went single-pane drill-down.
+func (m localChangesModel) diffHeader() string {
+	w := m.diffW
+	if w < 1 {
+		w = 1
 	}
-	return m.diff.View()
+	e, ok := m.CurrentEntry()
+	if !ok {
+		return lcHeaderStyle.Render(runewidth.Truncate("Diff", w, "…"))
+	}
+	side := "unstaged"
+	switch {
+	case e.Conflict:
+		side = "conflict"
+	case e.Staged():
+		side = "staged"
+	}
+	label := e.Path
+	if e.Renamed() {
+		label = e.OrigPath + " → " + e.Path
+	}
+	return lcHeaderStyle.Render(runewidth.Truncate(label+"  ("+side+")", w, "…"))
+}
+
+// HasEntry reports whether an entry for path exists on the requested side.
+// The full-screen diff pane uses it after a status reload to decide whether
+// the file it was showing still has changes on that side — if a per-hunk
+// stage consumed the last hunk, the side is gone and the caller drops back to
+// the tree.
+func (m localChangesModel) HasEntry(path string, staged bool) bool {
+	want := sectionUnstaged
+	if staged {
+		want = sectionStaged
+	}
+	for _, e := range m.entries {
+		if e.Path == path && e.Section == want {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyStatus is the placement rule for splitting one git.StatusEntry into
@@ -608,11 +778,11 @@ func (m localChangesModel) DiffView() string {
 //     WorktreeState != '.' → entry in sectionUnstaged
 //     A file with both will appear in both sections (one entry each).
 func classifyStatus(src []git.StatusEntry) []localChangesEntry {
-	var out []localChangesEntry
+	var conflicts, unstaged, staged []localChangesEntry
 	for _, s := range src {
 		switch {
 		case s.Conflict:
-			out = append(out, localChangesEntry{
+			conflicts = append(conflicts, localChangesEntry{
 				Path:          s.Path,
 				OrigPath:      s.OrigPath,
 				Section:       sectionConflicts,
@@ -621,7 +791,7 @@ func classifyStatus(src []git.StatusEntry) []localChangesEntry {
 				Conflict:      true,
 			})
 		case s.Untracked:
-			out = append(out, localChangesEntry{
+			unstaged = append(unstaged, localChangesEntry{
 				Path:          s.Path,
 				Section:       sectionUnstaged,
 				IndexState:    s.IndexState,
@@ -630,7 +800,7 @@ func classifyStatus(src []git.StatusEntry) []localChangesEntry {
 			})
 		default:
 			if s.IndexState != '.' && s.IndexState != 0 {
-				out = append(out, localChangesEntry{
+				staged = append(staged, localChangesEntry{
 					Path:          s.Path,
 					OrigPath:      s.OrigPath,
 					Section:       sectionStaged,
@@ -639,7 +809,7 @@ func classifyStatus(src []git.StatusEntry) []localChangesEntry {
 				})
 			}
 			if s.WorktreeState != '.' && s.WorktreeState != 0 {
-				out = append(out, localChangesEntry{
+				unstaged = append(unstaged, localChangesEntry{
 					Path:          s.Path,
 					Section:       sectionUnstaged,
 					IndexState:    s.IndexState,
@@ -648,5 +818,14 @@ func classifyStatus(src []git.StatusEntry) []localChangesEntry {
 			}
 		}
 	}
+	// Emit in render order (Conflicts → Unstaged → Staged) so the entries
+	// slice index lines up with flatRows' visual order: cursor 0 is the first
+	// visible row, and j/k step the way the eye expects. The git status stream
+	// interleaves sections arbitrarily, so without this the cursor would land
+	// off the top row and j/k would jump across sections.
+	out := make([]localChangesEntry, 0, len(conflicts)+len(unstaged)+len(staged))
+	out = append(out, conflicts...)
+	out = append(out, unstaged...)
+	out = append(out, staged...)
 	return out
 }

@@ -31,20 +31,27 @@ const (
 	prChecksFailing
 )
 
-// prInfo is one open PR, keyed in Model.prs by its head branch name.
+// prInfo is one open PR. Model.prs keys these by head branch (the chip badge
+// lookup); Model.prList keeps them in gh's newest-first order (the `l` modal).
 type prInfo struct {
-	Number int
-	Checks prCheckState
+	Number  int
+	HeadRef string
+	Title   string
+	Author  string
+	Checks  prCheckState
 }
 
-type prsLoadedMsg struct{ prs map[string]prInfo }
+type prsLoadedMsg struct {
+	prs  map[string]prInfo
+	list []prInfo
+}
 type prsLoadFailedMsg struct{ err error }
 
 // prListExec is the package-level seam over the `gh pr list` subprocess.
 var prListExec = func(ctx context.Context, dir string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--state", "open", "--limit", "100",
-		"--json", "number,headRefName,statusCheckRollup")
+		"--json", "number,headRefName,title,author,statusCheckRollup")
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -67,11 +74,15 @@ func prListCmd(dir string) tea.Cmd {
 		if err != nil {
 			return prsLoadFailedMsg{err: err}
 		}
-		prs, err := parsePRList(out)
+		list, err := parsePRList(out)
 		if err != nil {
 			return prsLoadFailedMsg{err: err}
 		}
-		return prsLoadedMsg{prs: prs}
+		prs := make(map[string]prInfo, len(list))
+		for _, pr := range list {
+			prs[pr.HeadRef] = pr
+		}
+		return prsLoadedMsg{prs: prs, list: list}
 	}
 }
 
@@ -79,8 +90,12 @@ func prListCmd(dir string) tea.Cmd {
 // needs. statusCheckRollup entries are a union of two GraphQL types:
 // CheckRun rows carry status/conclusion, StatusContext rows carry state.
 type prListItem struct {
-	Number            int    `json:"number"`
-	HeadRefName       string `json:"headRefName"`
+	Number      int    `json:"number"`
+	HeadRefName string `json:"headRefName"`
+	Title       string `json:"title"`
+	Author      struct {
+		Login string `json:"login"`
+	} `json:"author"`
 	StatusCheckRollup []struct {
 		Status     string `json:"status"`
 		Conclusion string `json:"conclusion"`
@@ -88,16 +103,17 @@ type prListItem struct {
 	} `json:"statusCheckRollup"`
 }
 
-// parsePRList turns `gh pr list --json` output into the head-branch →
-// prInfo map the chip renderer reads. Two open PRs sharing a head branch
-// can't both win; the later row does — gh orders by recency, and the
-// badge only needs "the PR you'd land on".
-func parsePRList(data []byte) (map[string]prInfo, error) {
+// parsePRList turns `gh pr list --json` output into an ordered prInfo slice
+// (gh's newest-first order, preserved for the `l` modal). prListCmd folds it
+// into the head-branch → prInfo map the chip renderer reads; when two open
+// PRs share a head branch the later row wins that map slot — gh orders by
+// recency, and the badge only needs "the PR you'd land on".
+func parsePRList(data []byte) ([]prInfo, error) {
 	var items []prListItem
 	if err := json.Unmarshal(data, &items); err != nil {
 		return nil, fmt.Errorf("gh pr list: parse: %w", err)
 	}
-	prs := make(map[string]prInfo, len(items))
+	list := make([]prInfo, 0, len(items))
 	for _, it := range items {
 		if it.HeadRefName == "" {
 			continue
@@ -106,9 +122,15 @@ func parsePRList(data []byte) (map[string]prInfo, error) {
 		for _, c := range it.StatusCheckRollup {
 			state = worseCheckState(state, classifyCheck(c.Status, c.Conclusion, c.State))
 		}
-		prs[it.HeadRefName] = prInfo{Number: it.Number, Checks: state}
+		list = append(list, prInfo{
+			Number:  it.Number,
+			HeadRef: it.HeadRefName,
+			Title:   it.Title,
+			Author:  it.Author.Login,
+			Checks:  state,
+		})
 	}
-	return prs, nil
+	return list, nil
 }
 
 // classifyCheck maps one rollup context onto the 3-way verdict. state is

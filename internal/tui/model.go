@@ -110,6 +110,12 @@ const (
 	// branches modal. enter switches, a/d reuse the existing add-input /
 	// remove-confirm sub-modals, s toggles last-commit sort.
 	viewModeWorktreesModal
+	// viewModePRsModal hosts the centered overlay listing every open PR.
+	// Entered via `l` from viewModeNormal — same pattern as the branches /
+	// worktrees modals. enter opens the cursor PR in the review overlay
+	// (beginPRReviewFor), reaching PRs whose head branch isn't checked out
+	// (which the `O` cursor path can't).
+	viewModePRsModal
 	// viewModeRebaseConfirm gates the screen on the "rebase <head>
 	// onto <cursor>?" confirm dialog (centered overlay like the
 	// branch-delete confirm). Only y/esc/ctrl+c are accepted.
@@ -211,6 +217,10 @@ type Model struct {
 	// every successful fetch — the same cadence the user already expects
 	// remote state to refresh on. Nil until the first load lands.
 	prs map[string]prInfo
+	// prList is the same open PRs in gh's newest-first order, backing the `l`
+	// PR list modal — the surface that reaches PRs whose head branch isn't
+	// checked out (which the `O` cursor path can't). Loaded alongside prs.
+	prList []prInfo
 	// prsInFlight gates PR-list dispatches so an F-spam can't stack
 	// parallel `gh pr list` calls (and a slow older reply can't overwrite
 	// a newer one). New() arms it because Init always dispatches.
@@ -321,6 +331,9 @@ type Model struct {
 	// worktreesModal backs viewModeWorktreesModal. Cursor indexes into
 	// m.modalWorktrees() at modal-open time. Reset to zero on close.
 	worktreesModal worktreesModalState
+	// prsModal backs viewModePRsModal. Cursor indexes into m.prList at
+	// modal-open time. Reset to zero on close.
+	prsModal prsModalState
 	// pendingRebase backs viewModeRebaseConfirm. Stamped on `R` with the
 	// cursor hash + display label + HEAD branch; consumed by the confirm
 	// key handler. Reset on esc / dispatch.
@@ -1236,6 +1249,8 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderZombieCleanupConfirmInner()), m.width, m.height)
 	case viewModeWorktreesModal:
 		return composeOverlay(base, renderModalBox(m.renderWorktreesModalInner()), m.width, m.height)
+	case viewModePRsModal:
+		return composeOverlay(base, renderModalBox(m.renderPRsModalInner()), m.width, m.height)
 	case viewModeBranchCreateInput:
 		return composeOverlay(base, renderModalBox(m.renderBranchCreateInputInner()), m.width, m.height)
 	case viewModeRefDeleteConfirm:
@@ -1273,7 +1288,7 @@ func boxStyle(focused bool) lipgloss.Style {
 // shortcut reference can fit the full key matrix.
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
-	case viewModeBranchPicker, viewModeBranchesModal,
+	case viewModeBranchPicker, viewModeBranchesModal, viewModePRsModal,
 		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
 		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm,
 		viewModeBranchCreateInput, viewModeRefDeleteConfirm,

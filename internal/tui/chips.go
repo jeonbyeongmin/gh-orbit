@@ -205,14 +205,19 @@ func prForChip(c git.ChipRef, prs map[string]prInfo) (prInfo, bool) {
 // glyph when the PR has no checks — `#N` alone still says "has an open
 // PR", which is the load-bearing bit.
 func prBadge(pr prInfo) string {
-	badge := fmt.Sprintf("#%d", pr.Number)
-	switch pr.Checks {
+	return fmt.Sprintf("#%d", pr.Number) + prCheckGlyph(pr.Checks)
+}
+
+// prCheckGlyph is the one-char CI rollup glyph shared by the chip badge and
+// the `l` PR list modal. Empty for prChecksNone (no checks configured).
+func prCheckGlyph(s prCheckState) string {
+	switch s {
 	case prChecksPassing:
-		badge += "✓"
+		return "✓"
 	case prChecksFailing:
-		badge += "✗"
+		return "✗"
 	case prChecksPending:
-		badge += "○"
+		return "○"
 	}
-	return badge
+	return ""
 }

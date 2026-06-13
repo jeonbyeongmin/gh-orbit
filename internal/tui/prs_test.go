@@ -3,55 +3,51 @@ package tui
 import "testing"
 
 func TestParsePRListEmpty(t *testing.T) {
-	prs, err := parsePRList([]byte(`[]`))
+	list, err := parsePRList([]byte(`[]`))
 	if err != nil {
 		t.Fatalf("parsePRList: %v", err)
 	}
-	if len(prs) != 0 {
-		t.Fatalf("want empty map, got %v", prs)
+	if len(list) != 0 {
+		t.Fatalf("want empty list, got %v", list)
 	}
 }
 
 func TestParsePRListRollup(t *testing.T) {
 	data := []byte(`[
-		{"number":1,"headRefName":"no-checks","statusCheckRollup":[]},
-		{"number":2,"headRefName":"all-green","statusCheckRollup":[
+		{"number":1,"headRefName":"no-checks","title":"First","author":{"login":"alice"},"statusCheckRollup":[]},
+		{"number":2,"headRefName":"all-green","title":"Second","author":{"login":"bob"},"statusCheckRollup":[
 			{"status":"COMPLETED","conclusion":"SUCCESS"},
 			{"state":"SUCCESS"},
 			{"status":"COMPLETED","conclusion":"SKIPPED"}
 		]},
-		{"number":3,"headRefName":"one-red","statusCheckRollup":[
+		{"number":3,"headRefName":"one-red","title":"Third","author":{"login":"carol"},"statusCheckRollup":[
 			{"status":"COMPLETED","conclusion":"SUCCESS"},
 			{"status":"COMPLETED","conclusion":"FAILURE"},
 			{"status":"IN_PROGRESS","conclusion":""}
 		]},
-		{"number":4,"headRefName":"still-running","statusCheckRollup":[
+		{"number":4,"headRefName":"still-running","title":"Fourth","author":{"login":"dave"},"statusCheckRollup":[
 			{"status":"COMPLETED","conclusion":"SUCCESS"},
 			{"status":"QUEUED","conclusion":""},
 			{"state":"PENDING"}
 		]}
 	]`)
-	prs, err := parsePRList(data)
+	list, err := parsePRList(data)
 	if err != nil {
 		t.Fatalf("parsePRList: %v", err)
 	}
-	want := map[string]prInfo{
-		"no-checks":     {Number: 1, Checks: prChecksNone},
-		"all-green":     {Number: 2, Checks: prChecksPassing},
-		"one-red":       {Number: 3, Checks: prChecksFailing}, // fail dominates pending
-		"still-running": {Number: 4, Checks: prChecksPending},
+	// Order is gh's; the modal renders in this order. fail dominates pending.
+	want := []prInfo{
+		{Number: 1, HeadRef: "no-checks", Title: "First", Author: "alice", Checks: prChecksNone},
+		{Number: 2, HeadRef: "all-green", Title: "Second", Author: "bob", Checks: prChecksPassing},
+		{Number: 3, HeadRef: "one-red", Title: "Third", Author: "carol", Checks: prChecksFailing},
+		{Number: 4, HeadRef: "still-running", Title: "Fourth", Author: "dave", Checks: prChecksPending},
 	}
-	if len(prs) != len(want) {
-		t.Fatalf("got %d entries, want %d: %v", len(prs), len(want), prs)
+	if len(list) != len(want) {
+		t.Fatalf("got %d entries, want %d: %v", len(list), len(want), list)
 	}
-	for branch, w := range want {
-		got, ok := prs[branch]
-		if !ok {
-			t.Errorf("missing branch %q", branch)
-			continue
-		}
-		if got != w {
-			t.Errorf("%s: got %+v, want %+v", branch, got, w)
+	for i, w := range want {
+		if list[i] != w {
+			t.Errorf("entry %d: got %+v, want %+v", i, list[i], w)
 		}
 	}
 }

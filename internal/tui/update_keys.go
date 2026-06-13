@@ -67,6 +67,9 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == viewModeWorktreesModal {
 		return m.handleWorktreesModalKey(msg)
 	}
+	if m.mode == viewModePRsModal {
+		return m.handlePRsModalKey(msg)
+	}
 	if m.mode == viewModeZombieCleanupConfirm {
 		return m.handleZombieCleanupConfirmKey(msg)
 	}
@@ -331,6 +334,25 @@ func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handlePRsModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		return m.prsModalMoveCursor(1), nil
+	case "k", "up":
+		return m.prsModalMoveCursor(-1), nil
+	case "enter":
+		return m.prsModalEnter()
+	case "l", "q", "esc":
+		// `l` toggles the modal closed, mirroring how it opens.
+		m.mode = viewModeNormal
+		m.prsModal = prsModalState{}
+		return m, nil
+	case "ctrl+c":
+		return m.handleCtrlC()
+	}
+	return m, nil
+}
+
 func (m Model) handleZombieCleanupConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// While the bulk-delete cmd is in flight, only ctrl+c (quit)
 	// is honored so a second y/Y can't fork a parallel sweep.
@@ -513,6 +535,11 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// review (approve / merge) inline. `o` leaves for the browser; `O`
 		// keeps the review in the cockpit. Chip badge rows only.
 		return m.beginPRReview()
+	case "l":
+		// Open the PR list modal — every open PR, including ones whose head
+		// branch isn't checked out locally (which `O` can't reach). enter
+		// opens the cursor PR in the same review overlay `O` uses.
+		return m.beginPRsModal()
 	case "Z":
 		// Zombie-branch cleanup is a global action now that the sidebar
 		// is gone — the previous paneRefs focus gate had no meaningful

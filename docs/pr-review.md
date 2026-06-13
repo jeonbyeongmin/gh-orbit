@@ -2,10 +2,28 @@
 
 `O` pulls the cursor row's open PR into the same full-screen patch
 overlay the commit diff (`d`) uses, then approve / merge run inline
-without leaving the cockpit. Entry is cursor-row, not a list: the row's
-`#N` chip badge is the affordance, resolved by the same
-`prForCursorRow` matching the badge renderer uses. Rows without a
-PR-bearing chip report `no open PR on this commit` and stay put.
+without leaving the cockpit. The row's `#N` chip badge is the
+affordance, resolved by the same `prForCursorRow` the badge renderer
+uses; rows without a PR-bearing chip report `no open PR on this commit`
+and stay put.
+
+`l` opens the PR list modal — every open PR `gh pr list` returned,
+including ones whose head branch isn't checked out (which the cursor
+path can't reach). `enter` on a row opens that PR in the very same
+overlay via the shared `beginPRReviewFor`, so approve / merge behave
+identically regardless of which entry point you used.
+
+## PR list modal (`l`)
+
+`viewModePRsModal` is a centered overlay — same vocabulary as the
+branches / worktrees modals: `j` / `k` navigate, `enter` reviews,
+`l` / `q` / `esc` close. Rows read `#N <glyph> title · author`, where
+`<glyph>` is the shared CI rollup (`prCheckGlyph`); the title then the
+author absorb truncation so `#N` and the glyph always survive. The data
+is `m.prList`, the gh-ordered slice `prListCmd` already loads for the
+chip badges — the modal only owns its own cursor. `enter` routes
+through `beginPRReviewFor`, the cursor-agnostic core split out of
+`beginPRReview`.
 
 The overlay is `viewModeDiffWindow` reused verbatim — same viewport,
 same `[` / `]` file navigation. `reviewPRNumber != 0` is the only thing
@@ -37,9 +55,9 @@ shows on the hint line behind it.
 | `esc` / `q` | browse | close overlay → graph |
 | `ctrl+c` | in-flight | only key honored while a gh call runs |
 
-`O` opens; lowercase `o` still opens the PR on the web
-(`gh pr view --web`). `--delete-branch` is deliberately never passed to
-`gh pr merge`.
+`O` opens the cursor PR; `l` opens the list. Lowercase `o` still opens
+the PR on the web (`gh pr view --web`). `--delete-branch` is
+deliberately never passed to `gh pr merge`.
 
 ## Outcome routing
 

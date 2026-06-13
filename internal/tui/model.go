@@ -122,6 +122,13 @@ const (
 	// (create branch at cursor + switch). Same modal shape as the
 	// worktree add input.
 	viewModeBranchCreateInput
+	// viewModeRevertConfirm gates the "revert <hash> on <head>?" confirm
+	// dialog (`v`). Same single-y surface as the cherry-pick confirm.
+	viewModeRevertConfirm
+	// viewModeResetConfirm gates the "reset <head> to <cursor>?" confirm
+	// dialog (`x`). Unlike the single-y confirms it offers s/m/h for the
+	// three reset modes; the hard row warns about working-tree loss.
+	viewModeResetConfirm
 )
 
 // pendingCheckout remembers what the user was trying to check out so the
@@ -306,6 +313,15 @@ type Model struct {
 	// and the `c` dispatch gate — same lifecycle as the rebase pair.
 	pendingCherryPick  pendingCherryPick
 	cherryPickInFlight bool
+	// pendingRevert / revertInFlight back viewModeRevertConfirm and the `v`
+	// dispatch gate — same lifecycle as the cherry-pick pair.
+	pendingRevert  pendingRevert
+	revertInFlight bool
+	// pendingReset / resetInFlight back viewModeResetConfirm and the `x`
+	// flow. resetInFlight latches across both the async ancestor/push
+	// evaluation (evaluateResetCmd) and the reset itself.
+	pendingReset  pendingReset
+	resetInFlight bool
 	// branchCreate backs viewModeBranchCreateInput (`n`).
 	branchCreate branchCreateState
 	// pushInFlight gates `P` while pushCmd is running.
@@ -544,6 +560,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cherryPickSucceededMsg,
 		cherryPickConflictMsg,
 		cherryPickFailedMsg,
+		revertSucceededMsg,
+		revertConflictMsg,
+		revertFailedMsg,
+		resetEvalMsg,
+		resetSucceededMsg,
+		resetFailedMsg,
 		branchCreateSucceededMsg,
 		branchCreateFailedMsg,
 		pushSucceededMsg,
@@ -591,7 +613,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) gitMutationInFlight() bool {
 	return m.actionInFlight || m.checkoutInFlight || m.ffInFlight ||
 		m.rebaseInFlight || m.cherryPickInFlight || m.branchCreate.inFlight ||
-		m.pushInFlight
+		m.pushInFlight || m.revertInFlight || m.resetInFlight
 }
 
 // quitArmHint is the status line shown after the first ctrl+c. Kept as a
@@ -1186,6 +1208,10 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderRebaseConfirmInner()), m.width, m.height)
 	case viewModeCherryPickConfirm:
 		return composeOverlay(base, renderModalBox(m.renderCherryPickConfirmInner()), m.width, m.height)
+	case viewModeRevertConfirm:
+		return composeOverlay(base, renderModalBox(m.renderRevertConfirmInner()), m.width, m.height)
+	case viewModeResetConfirm:
+		return composeOverlay(base, renderModalBox(m.renderResetConfirmInner()), m.width, m.height)
 	}
 	return base
 }
@@ -1215,7 +1241,8 @@ func (m Model) renderHelpStatus() string {
 		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
 		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm,
 		viewModeBranchCreateInput, viewModeRefDeleteConfirm,
-		viewModeRebaseConfirm, viewModeCherryPickConfirm:
+		viewModeRebaseConfirm, viewModeCherryPickConfirm,
+		viewModeRevertConfirm, viewModeResetConfirm:
 		return " "
 	case viewModeHelp:
 		// Inline column reference panel, grown out of the footer over the rows

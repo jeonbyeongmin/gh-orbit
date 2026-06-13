@@ -106,6 +106,30 @@ confirm-first dialog and conflict contract as `R`
 Rejections mirror rebase: detached HEAD, cursor on HEAD, in-flight
 actions. Wrapper: `git.CherryPick` (`ErrCherryPickConflict`).
 
+## Revert (`v`) / reset (`x`) — the scrap path
+
+`v` and `x` are the two ways to throw away an agent's commits without
+leaving the cockpit. `v` **reverts the cursor commit** — `git revert
+--no-edit <hash>` records a new commit that undoes it, preserving
+history (safe on already-pushed commits). Same single-`y` confirm and
+conflict contract as `c` (`revert <hash> on <head>? [y]/[esc]`;
+`ErrRevertConflict` → resolve in your terminal). Detached HEAD is
+rejected; reverting HEAD itself is allowed (a normal undo). Wrapper:
+`git.Revert`.
+
+`x` **resets the current branch to the cursor commit**, dropping the
+commits after it. Because reset rewrites the branch pointer (not a new
+commit) it is gated harder than the confirm-first actions: pressing `x`
+first runs an async pre-check (`git rev-list`, off the Update goroutine)
+that confirms the cursor is *behind* HEAD — a cursor ahead of HEAD has
+nothing to discard — and that the dropped range isn't already on the
+branch's upstream. A pushed-history reset would need a force-push
+(forbidden here), so it is refused and steered to `v`. Only then does
+the confirm arm, offering all three modes: `[s] soft` (keep the dropped
+changes staged), `[m] mixed` (keep the working tree, unstage), `[h]
+hard` (discard the working tree too — flagged in the error color). The
+prompt names how many commits the reset drops. Wrapper: `git.Reset`.
+
 ## New branch at cursor (`n`)
 
 `n` opens a name-input modal (same shape as the worktree add input)

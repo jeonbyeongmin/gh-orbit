@@ -459,6 +459,58 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 
+	case revertSucceededMsg:
+		p := m.pendingRevert
+		m.revertInFlight = false
+		m.pendingRevert = pendingRevert{}
+		m.status = "revert: done (" + shortHash(p.hash) + " on " + p.branch + ")"
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case revertConflictMsg:
+		m.revertInFlight = false
+		m.pendingRevert = pendingRevert{}
+		m.status = "revert: CONFLICT — resolve in your terminal"
+		m.statusStyle = statusErrS
+		return m, m.reloadCmd()
+
+	case revertFailedMsg:
+		m.revertInFlight = false
+		m.pendingRevert = pendingRevert{}
+		m.status = "revert failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
+	case resetEvalMsg:
+		m.resetInFlight = false
+		if !msg.ok {
+			m.status = msg.err
+			m.statusStyle = statusErrS
+			return m, nil
+		}
+		m.pendingReset = pendingReset{target: msg.target, label: msg.label, branch: msg.branch, discard: msg.discard}
+		m.mode = viewModeResetConfirm
+		m.status = ""
+		return m, nil
+
+	case resetSucceededMsg:
+		m.resetInFlight = false
+		suffix := ""
+		if msg.discard > 0 {
+			suffix = fmt.Sprintf(" -%d", msg.discard)
+		}
+		m.status = "reset: " + msg.branch + " → " + msg.label + " (" + msg.mode + suffix + ")"
+		m.statusStyle = statusOkS
+		m.pendingHEADHash = pendingHEADSentinel
+		return m, m.reloadCmd()
+
+	case resetFailedMsg:
+		m.resetInFlight = false
+		m.status = "reset failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
 	case branchCreateSucceededMsg:
 		if msg.reqID != m.branchCreate.reqID {
 			return m, nil

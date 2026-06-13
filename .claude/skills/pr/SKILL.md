@@ -1,7 +1,6 @@
 ---
 name: pr
 description: gh-orbit 전용 /pr 스킬. user-level /pr 이 §1 에서 자동 위임하는 본문이며, Go 1.26 + Bubble Tea 프로젝트의 검증 4단계(gofmt → golangci-lint/go vet 폴백 → go build → go test) 를 통과한 PR 만 만든다. base 는 default 브랜치(develop) 고정, --force/--no-verify 금지, 검증 실패는 우회하지 않고 사용자에게 위임. project-local 컨벤션이 user-level 의 Node 자동 감지를 대체한다.
-model: claude-opus-4-8
 ---
 
 # /pr (gh-orbit project-local)

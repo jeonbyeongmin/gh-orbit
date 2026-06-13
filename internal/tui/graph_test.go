@@ -38,14 +38,14 @@ func TestRenderCommitLineHidesSubjectWhenTooNarrow(t *testing.T) {
 		Subject:    "should-not-appear",
 		AuthorTime: time.Now(),
 	}
-	// Width less than cursor(2)+hash(7)+space(1)+time(8)+space(1) = 19.
+	// Width less than cursor(2)+time(8)+space(1)+subject(1) = 12.
 	line := renderCommitLine(c, nil, "", 0, 0, 10, false, false)
 	if strings.Contains(line, "should-not-appear") {
 		t.Errorf("subject should be hidden at narrow width, got %q", line)
 	}
-	// Hash should still be visible (truncated to short).
-	if !strings.Contains(line, "abcdef1") {
-		t.Errorf("hash should remain visible, got %q", line)
+	// Time should still be visible (right-anchored tail).
+	if !strings.Contains(line, "just now") {
+		t.Errorf("time should remain visible, got %q", line)
 	}
 }
 
@@ -65,7 +65,7 @@ func TestRenderCommitLineSelectedHasCursor(t *testing.T) {
 	}
 }
 
-func TestRenderCommitLineOrderingGraphSubjectHash(t *testing.T) {
+func TestRenderCommitLineOrderingGraphSubjectTime(t *testing.T) {
 	c := git.Commit{
 		Hash:       "abcdef1234567",
 		Subject:    "graph layout",
@@ -75,21 +75,20 @@ func TestRenderCommitLineOrderingGraphSubjectHash(t *testing.T) {
 	stripped := ansi.Strip(line)
 	starIdx := strings.Index(stripped, "*")
 	subjectIdx := strings.Index(stripped, "graph layout")
-	hashIdx := strings.Index(stripped, "abcdef1")
 	relIdx := strings.Index(stripped, "just now")
-	if starIdx < 0 || subjectIdx < 0 || hashIdx < 0 || relIdx < 0 {
-		t.Fatalf("expected star, subject, hash, and rel in %q", stripped)
+	if starIdx < 0 || subjectIdx < 0 || relIdx < 0 {
+		t.Fatalf("expected star, subject, and rel in %q", stripped)
 	}
-	// Layout: graph < message (subject) < hash < rel-time. Hash and time
-	// are right-anchored; subject sits in the message column and absorbs
-	// truncation when the row is narrow.
-	if starIdx >= subjectIdx || subjectIdx >= hashIdx || hashIdx >= relIdx {
-		t.Errorf("expected order graph < subject < hash < rel, got star=%d subject=%d hash=%d rel=%d in %q",
-			starIdx, subjectIdx, hashIdx, relIdx, stripped)
+	// Layout: graph < message (subject) < rel-time. Time is right-anchored;
+	// subject sits in the message column and absorbs truncation when the
+	// row is narrow.
+	if starIdx >= subjectIdx || subjectIdx >= relIdx {
+		t.Errorf("expected order graph < subject < rel, got star=%d subject=%d rel=%d in %q",
+			starIdx, subjectIdx, relIdx, stripped)
 	}
 }
 
-func TestRenderCommitLineHashAnchoredToRightEdge(t *testing.T) {
+func TestRenderCommitLineTimeAnchoredToRightEdge(t *testing.T) {
 	c := git.Commit{
 		Hash:       "abcdef1234567",
 		Subject:    "right edge",
@@ -101,19 +100,18 @@ func TestRenderCommitLineHashAnchoredToRightEdge(t *testing.T) {
 	if w := len(stripped); w != 80 {
 		t.Errorf("rendered width = %d, want 80 (full row)", w)
 	}
-	// Hash + time sit at the right edge: width - rightTail. With
-	// shortHashLen=7 and timeColWidth=8 separated by one space, the hash
-	// starts at width - 7 - 1 - 8 = 64.
-	hashIdx := strings.Index(stripped, "abcdef1")
-	wantHashIdx := 80 - shortHashLen - 1 - timeColWidth
-	if hashIdx != wantHashIdx {
-		t.Errorf("hash starts at %d, want %d (anchored to right edge)", hashIdx, wantHashIdx)
+	// Time sits at the right edge: width - timeColWidth. "just now" fills
+	// the whole timeColWidth=8 column, so it starts at width - 8 = 72.
+	relIdx := strings.Index(stripped, "just now")
+	wantRelIdx := 80 - timeColWidth
+	if relIdx != wantRelIdx {
+		t.Errorf("time starts at %d, want %d (anchored to right edge)", relIdx, wantRelIdx)
 	}
-	// Subject sits in the message column, between the graph and the hash.
+	// Subject sits in the message column, between the graph and the time.
 	subjectIdx := strings.Index(stripped, "right edge")
 	wantSubjectMin := 2 + 2 // cursor + graph
-	if subjectIdx < wantSubjectMin || subjectIdx >= hashIdx {
-		t.Errorf("subject not in the message column; subjectIdx=%d hashIdx=%d", subjectIdx, hashIdx)
+	if subjectIdx < wantSubjectMin || subjectIdx >= relIdx {
+		t.Errorf("subject not in the message column; subjectIdx=%d relIdx=%d", subjectIdx, relIdx)
 	}
 }
 
@@ -159,16 +157,16 @@ func TestRenderCommitLineWithLocalChip(t *testing.T) {
 	line := renderCommitLine(c, nil, "* ", 2, 2, 80, false, false)
 	stripped := ansi.Strip(line)
 	// Chip "main" attaches to the front of the subject in the message
-	// column — both sit between the graph and the hash.
+	// column — both sit between the graph and the time.
 	mainIdx := strings.Index(stripped, "main")
 	subjectIdx := strings.Index(stripped, "with chip")
-	hashIdx := strings.Index(stripped, "abcdef1")
-	if mainIdx < 0 || subjectIdx < 0 || hashIdx < 0 {
-		t.Fatalf("expected chip, subject, hash in %q", stripped)
+	relIdx := strings.Index(stripped, "just now")
+	if mainIdx < 0 || subjectIdx < 0 || relIdx < 0 {
+		t.Fatalf("expected chip, subject, time in %q", stripped)
 	}
-	if mainIdx >= subjectIdx || subjectIdx >= hashIdx {
-		t.Errorf("expected order chip < subject < hash; got chip=%d subject=%d hash=%d in %q",
-			mainIdx, subjectIdx, hashIdx, stripped)
+	if mainIdx >= subjectIdx || subjectIdx >= relIdx {
+		t.Errorf("expected order chip < subject < rel; got chip=%d subject=%d rel=%d in %q",
+			mainIdx, subjectIdx, relIdx, stripped)
 	}
 }
 
@@ -252,14 +250,14 @@ func TestRenderCommitLineChipDroppedWhenSubjectWouldStarve(t *testing.T) {
 		// even a 1-cell subject at narrow widths.
 		RefNames: []string{"this-is-a-very-long-branch-name-that-cannot-fit"},
 	}
-	// width = cursor 2 + graph 2 + hash 7 + space 1 + time 8 + space 1 + subject 2 = 23
-	line := renderCommitLine(c, nil, "* ", 2, 2, 23, false, false)
+	// width = cursor 2 + graph 2 + subject 2 + space 1 + time 8 = 15
+	line := renderCommitLine(c, nil, "* ", 2, 2, 15, false, false)
 	stripped := ansi.Strip(line)
 	if strings.Contains(stripped, "this-is-a-very-long") {
 		t.Errorf("chip should be dropped when subject can't fit alongside it, got %q", stripped)
 	}
-	if !strings.Contains(stripped, "abcdef1") {
-		t.Errorf("hash must remain visible, got %q", stripped)
+	if !strings.Contains(stripped, "just now") {
+		t.Errorf("time must remain visible, got %q", stripped)
 	}
 }
 
@@ -281,8 +279,8 @@ func TestRenderCommitLineSelectedRecolorsChipBackground(t *testing.T) {
 }
 
 // TestRenderCommitLineWithAuthorName — author sits between the message
-// column and the right-anchored hash/time. Order: graph < subject <
-// author < hash < rel-time.
+// column and the right-anchored time. Order: graph < subject <
+// author < rel-time.
 func TestRenderCommitLineWithAuthorName(t *testing.T) {
 	c := git.Commit{
 		Hash:       "abcdef1234567",
@@ -294,13 +292,13 @@ func TestRenderCommitLineWithAuthorName(t *testing.T) {
 	stripped := ansi.Strip(line)
 	subjectIdx := strings.Index(stripped, "subj")
 	authorIdx := strings.Index(stripped, "Byeongmin")
-	hashIdx := strings.Index(stripped, "abcdef1")
-	if subjectIdx < 0 || authorIdx < 0 || hashIdx < 0 {
-		t.Fatalf("expected subject, author, hash in %q", stripped)
+	relIdx := strings.Index(stripped, "just now")
+	if subjectIdx < 0 || authorIdx < 0 || relIdx < 0 {
+		t.Fatalf("expected subject, author, time in %q", stripped)
 	}
-	if subjectIdx >= authorIdx || authorIdx >= hashIdx {
-		t.Errorf("expected order subject < author < hash; got subject=%d author=%d hash=%d in %q",
-			subjectIdx, authorIdx, hashIdx, stripped)
+	if subjectIdx >= authorIdx || authorIdx >= relIdx {
+		t.Errorf("expected order subject < author < rel; got subject=%d author=%d rel=%d in %q",
+			subjectIdx, authorIdx, relIdx, stripped)
 	}
 }
 
@@ -319,21 +317,21 @@ func TestRenderCommitLineEmptyAuthorOmitsColumn(t *testing.T) {
 	if w := len(stripped); w != 80 {
 		t.Errorf("rendered width = %d, want 80", w)
 	}
-	// Subject ends right before the hash, separated by a single space.
-	hashIdx := strings.Index(stripped, "abcdef1")
-	if hashIdx <= 0 {
-		t.Fatalf("hash missing in %q", stripped)
+	// Subject ends right before the time, separated by a single space.
+	relIdx := strings.Index(stripped, "just now")
+	if relIdx <= 0 {
+		t.Fatalf("time missing in %q", stripped)
 	}
-	// One char before the hash should be a space (separator), not a digit
+	// One char before the time should be a space (separator), not a digit
 	// from the author column.
-	if got := stripped[hashIdx-1]; got != ' ' {
-		t.Errorf("expected single-space separator before hash; got %q in %q", got, stripped)
+	if got := stripped[relIdx-1]; got != ' ' {
+		t.Errorf("expected single-space separator before time; got %q in %q", got, stripped)
 	}
 }
 
 // TestRenderCommitLineDropsAuthorWhenNarrow — when the row can't fit
-// author + subject + hash + time, author drops first so the subject
-// remains visible.
+// author + subject + time, author drops first so the subject remains
+// visible.
 func TestRenderCommitLineDropsAuthorWhenNarrow(t *testing.T) {
 	c := git.Commit{
 		Hash:       "abcdef1234567",
@@ -341,8 +339,8 @@ func TestRenderCommitLineDropsAuthorWhenNarrow(t *testing.T) {
 		AuthorName: "alice",
 		AuthorTime: time.Now(),
 	}
-	// width = cursor 2 + graph 2 + subject 2 + sep 1 + hash 7 + sep 1 + rel 8 = 23
-	line := renderCommitLine(c, nil, "* ", 2, 2, 23, false, false)
+	// width = cursor 2 + graph 2 + subject 2 + sep 1 + rel 8 = 15
+	line := renderCommitLine(c, nil, "* ", 2, 2, 15, false, false)
 	stripped := ansi.Strip(line)
 	if strings.Contains(stripped, "alice") {
 		t.Errorf("author should be dropped at narrow width, got %q", stripped)
@@ -350,8 +348,8 @@ func TestRenderCommitLineDropsAuthorWhenNarrow(t *testing.T) {
 	if !strings.Contains(stripped, "Sx") {
 		t.Errorf("subject must remain visible, got %q", stripped)
 	}
-	if !strings.Contains(stripped, "abcdef1") {
-		t.Errorf("hash must remain visible, got %q", stripped)
+	if !strings.Contains(stripped, "just now") {
+		t.Errorf("time must remain visible, got %q", stripped)
 	}
 }
 
@@ -361,10 +359,10 @@ func TestRenderCommitLineGraphTruncatedAtNarrowWidth(t *testing.T) {
 		Subject:    "narrow",
 		AuthorTime: time.Now(),
 	}
-	// width 10, cursor 2 + hash 7 = 9 → at most 1 column for graph.
-	line := renderCommitLine(c, nil, "| | * ", 6, 6, 10, false, false)
-	if !strings.Contains(line, "abcdef1") {
-		t.Errorf("hash must remain visible even when graph is wider than budget, got %q", line)
+	// width 11, cursor 2 + time 8 = 10 → at most 1 column for graph.
+	line := renderCommitLine(c, nil, "| | * ", 6, 6, 11, false, false)
+	if !strings.Contains(line, "just now") {
+		t.Errorf("time must remain visible even when graph is wider than budget, got %q", line)
 	}
 }
 
@@ -455,8 +453,8 @@ func TestLaneColCapClampsAtMax(t *testing.T) {
 func TestLaneColCapClampsAtMin(t *testing.T) {
 	// Pathologically narrow — minimum 2 lanes still reserved so the graph
 	// stays meaningful even if subject is almost gone.
-	if got := laneColCap(20); got != minLaneCap*cellWidth {
-		t.Errorf("laneColCap(20) = %d, want %d", got, minLaneCap*cellWidth)
+	if got := laneColCap(12); got != minLaneCap*cellWidth {
+		t.Errorf("laneColCap(12) = %d, want %d", got, minLaneCap*cellWidth)
 	}
 }
 
@@ -718,9 +716,8 @@ func TestCommitDelegateRendersGraphPerRowTight(t *testing.T) {
 }
 
 func TestCommitDelegateRightAnchorStaysAcrossRows(t *testing.T) {
-	// Right-anchor invariant: hash + time live at width - rightTail
-	// regardless of how wide each row's graph is. Per-row tight must
-	// not break this.
+	// Right-anchor invariant: time lives at width - timeColWidth regardless
+	// of how wide each row's graph is. Per-row tight must not break this.
 	now := time.Now()
 	rowA := commitItem{
 		c:                git.Commit{Hash: "aaaa111", Subject: "row-a", AuthorTime: now},
@@ -738,13 +735,16 @@ func TestCommitDelegateRightAnchorStaysAcrossRows(t *testing.T) {
 	saStripped := renderDelegateRow(t, items, 0, width, maxLaneCap*cellWidth)
 	sbStripped := renderDelegateRow(t, items, 1, width, maxLaneCap*cellWidth)
 
-	saHash := visibleColOf(saStripped, "aaaa111")
-	sbHash := visibleColOf(sbStripped, "bbbb222")
-	// Right anchor is what matters: both rows must share the same hash
+	saRel := visibleColOf(saStripped, "just now")
+	sbRel := visibleColOf(sbStripped, "just now")
+	if saRel < 0 || sbRel < 0 {
+		t.Fatalf("time missing; A=%q B=%q", saStripped, sbStripped)
+	}
+	// Right anchor is what matters: both rows must share the same time
 	// column regardless of how wide their graph cell is. We don't pin
 	// the absolute column because list applies its own outer padding.
-	if saHash != sbHash {
-		t.Errorf("row A hash col %d != row B hash col %d (right anchor must hold across rows)", saHash, sbHash)
+	if saRel != sbRel {
+		t.Errorf("row A time col %d != row B time col %d (right anchor must hold across rows)", saRel, sbRel)
 	}
 }
 

@@ -61,9 +61,10 @@ Today the build wires up:
   so every local/remote/tag is one walk; `enter` from the refs pane
   jumps the graph cursor to a ref tip without changing the base
 - commit row reads left-to-right as `graph | message (chips + subject) |
-  author | hash | authored`; the hash and time anchor to the right edge,
-  the message column absorbs truncation, and chips/author drop (in that
-  order) before the subject shrinks below one cell
+  author | authored`; the time anchors to the right edge (the hash isn't
+  rendered — `y` copies it), the message column absorbs truncation, and
+  chips/author drop (in that order) before the subject shrinks below one
+  cell
 - ref decoration (`%D`) is parsed into typed branch/tag entries and
   rendered as chips attached to the front of the subject in the message
   column

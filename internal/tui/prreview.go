@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -33,7 +34,23 @@ const (
 	prActionNone prAction = iota
 	prActionApprove
 	prActionMerge
+	// prActionComment / prActionRequestChanges open the body editor (a
+	// textarea over the dimmed diff) instead of a y/n confirm — both `gh pr
+	// review --comment|--request-changes` require a body.
+	prActionComment
+	prActionRequestChanges
 )
+
+// reviewBodyKind maps the editor sub-state to the gh review flag / verb.
+func (a prAction) reviewBodyKind() string {
+	switch a {
+	case prActionComment:
+		return "comment"
+	case prActionRequestChanges:
+		return "request-changes"
+	}
+	return ""
+}
 
 // prDiffID is the synthetic identity token handed to diffModel in place of a
 // commit hash. The overlay's stale-drop guard (diffModel.accepts) only needs a
@@ -49,6 +66,14 @@ type prMergeDoneMsg struct {
 	strategy string
 }
 type prMergeFailedMsg struct{ err error }
+
+// prReviewBodyDoneMsg / prReviewBodyFailedMsg report a comment / request-changes
+// submission. kind is "comment" or "request-changes" (drives the notice verb).
+type prReviewBodyDoneMsg struct {
+	number int
+	kind   string
+}
+type prReviewBodyFailedMsg struct{ err error }
 
 // prDiffExec is the package-level seam over `gh pr diff`. --color always keeps
 // git's green/red palette (parseFileBoundaries strips the ANSI before matching
@@ -99,6 +124,33 @@ var prMergeExec = func(ctx context.Context, dir string, number int, strategy str
 		return fmt.Errorf("gh pr merge: %w", err)
 	}
 	return nil
+}
+
+// prReviewBodyExec is the package-level seam over `gh pr review --comment` /
+// `--request-changes` with a body. kind is "comment" or "request-changes".
+var prReviewBodyExec = func(ctx context.Context, dir string, number int, kind, body string) error {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "review", strconv.Itoa(number), "--"+kind, "--body", body)
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("gh pr review: %s", firstLine(msg))
+		}
+		return fmt.Errorf("gh pr review: %w", err)
+	}
+	return nil
+}
+
+func reviewBodyCmd(dir string, number int, kind, body string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), browseTimeout)
+		defer cancel()
+		if err := prReviewBodyExec(ctx, dir, number, kind, body); err != nil {
+			return prReviewBodyFailedMsg{err: err}
+		}
+		return prReviewBodyDoneMsg{number: number, kind: kind}
+	}
 }
 
 // loadPRDiffCmd fetches a PR's unified diff and routes it through the existing
@@ -188,6 +240,48 @@ func (m Model) dispatchPRMerge(strategy string) (tea.Model, tea.Cmd) {
 	return m, mergePRCmd(m.workdir, m.reviewPRNumber, strategy)
 }
 
+// beginPRReviewBody arms the comment / request-changes body editor — a textarea
+// composed over the dimmed diff (renderPRActionConfirmInner). action is
+// prActionComment or prActionRequestChanges.
+func (m Model) beginPRReviewBody(action prAction) (Model, tea.Cmd) {
+	ta := textarea.New()
+	ta.Placeholder = "review comment…"
+	ta.ShowLineNumbers = false
+	w := m.width - 20
+	if w > 64 {
+		w = 64
+	}
+	if w < 30 {
+		w = 30
+	}
+	ta.SetWidth(w)
+	ta.SetHeight(5)
+	ta.Focus()
+	m.prReviewBody = ta
+	m.prReviewBodyErr = ""
+	m.prAction = action
+	return m, textarea.Blink
+}
+
+// dispatchPRReviewBody submits the editor body via gh. An empty body is
+// rejected inline (gh requires one for comment / request-changes) so the
+// editor stays open. Mirrors dispatchPRApprove's in-flight + busy gating.
+func (m Model) dispatchPRReviewBody() (tea.Model, tea.Cmd) {
+	kind := m.prAction.reviewBodyKind()
+	if kind == "" {
+		return m, nil
+	}
+	body := strings.TrimSpace(m.prReviewBody.Value())
+	if body == "" {
+		m.prReviewBodyErr = "body required"
+		return m, nil
+	}
+	m.prReviewInFlight = true
+	m.prReviewBodyErr = ""
+	m.setBusyStatus(fmt.Sprintf("submitting %s on #%d…", kind, m.reviewPRNumber))
+	return m, reviewBodyCmd(m.workdir, m.reviewPRNumber, kind, body)
+}
+
 // clearBusy drops the in-flight status so statusIsBusy stops the spinner. The
 // overlay's hint line reports the outcome via prReviewNotice instead — the
 // diff View() never renders m.status, so leaving the busy text on would just
@@ -235,6 +329,26 @@ func (m Model) updatePRReviewMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prReviewNotice = firstLine(msg.err.Error())
 		m.prReviewNoticeErr = true
 		return m, nil
+	case prReviewBodyDoneMsg:
+		m.prReviewInFlight = false
+		m.prAction = prActionNone
+		m.prReviewBody = textarea.Model{}
+		m.prReviewBodyErr = ""
+		m.clearBusy()
+		verb := "commented on"
+		if msg.kind == "request-changes" {
+			verb = "requested changes on"
+		}
+		m.prReviewNotice = fmt.Sprintf("%s #%d", verb, msg.number)
+		m.prReviewNoticeErr = false
+		return m, m.dispatchPRList()
+	case prReviewBodyFailedMsg:
+		// Keep the editor open (prAction unchanged) with the error inline so
+		// the reviewer can fix the body and resubmit.
+		m.prReviewInFlight = false
+		m.prReviewBodyErr = firstLine(msg.err.Error())
+		m.clearBusy()
+		return m, nil
 	}
 	return m, nil
 }
@@ -258,7 +372,7 @@ func (m Model) renderPRReviewHint() string {
 		}
 		return style.Render(m.prReviewNotice) + help.Render(" · esc close")
 	}
-	base := fmt.Sprintf("PR #%d · a approve · m merge · esc close", n)
+	base := fmt.Sprintf("PR #%d · a approve · m merge · c comment · r changes · esc close", n)
 	path, idx, total := m.diff.CurrentFile()
 	if total == 0 || path == "" {
 		return fitHelpLine(base, m.width)
@@ -288,6 +402,26 @@ func (m Model) renderPRActionConfirmInner() string {
 			confirmPromptS.Render(fmt.Sprintf("merge PR #%d?", m.reviewPRNumber)),
 			help.Render("[s] squash · [m] merge · [r] rebase · [esc] cancel"),
 		}, "\n")
+	case prActionComment:
+		return m.renderPRBodyEditorInner("Comment")
+	case prActionRequestChanges:
+		return m.renderPRBodyEditorInner("Request changes")
 	}
 	return ""
+}
+
+// renderPRBodyEditorInner is the comment / request-changes body editor box,
+// composed over the dimmed diff (same renderModalBox path the approve / merge
+// confirms use). Constant row count so the status line never bounces.
+func (m Model) renderPRBodyEditorInner(title string) string {
+	header := confirmPromptS.Render(fmt.Sprintf("%s on PR #%d", title, m.reviewPRNumber))
+	statusLine := " "
+	switch {
+	case m.prReviewInFlight:
+		statusLine = statusBusyS.Render("submitting…")
+	case m.prReviewBodyErr != "":
+		statusLine = statusErrS.Render(m.prReviewBodyErr)
+	}
+	hint := help.Render("[ctrl+s] submit · [esc] cancel")
+	return strings.Join([]string{header, m.prReviewBody.View(), statusLine, hint}, "\n")
 }

@@ -232,11 +232,12 @@ type Model struct {
 	// the overlay's bottom line is renderPRReviewHint and `a`/`m` arm the
 	// inline approve/merge confirms — see prreview.go.
 	reviewPRNumber int
-	// reviewFromWorktrees is set when `O` opened the PR review from the
-	// worktree dashboard (not the graph), so the overlay's close / merge exit
-	// returns to viewModeWorktreesModal instead of the graph — keeping the
-	// review-and-compare loop on the dashboard.
-	reviewFromWorktrees bool
+	// reviewReturnMode is where the PR-review overlay returns when it closes
+	// (esc) or merges. Zero value (viewModeNormal) = the graph; `O` from the
+	// worktree dashboard sets viewModeWorktreesModal so the review-and-compare
+	// loop stays on the dashboard. A general "return here" slot rather than a
+	// per-origin boolean, so future launchers set their own target.
+	reviewReturnMode viewMode
 	// prAction is the inline confirm sub-state inside the PR overlay
 	// (none / approve / merge). Non-none gates the overlay keymap to the
 	// confirm keys and swaps the hint to the confirm prompt.

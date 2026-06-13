@@ -106,6 +106,11 @@ func (m Model) renderWorktreesView(width, height int) string {
 	}
 	lines = lines[:bodyEnd]
 	lines = append(lines, statusLine, hint)
+	// Degenerate tiny heights (graphH clamps to ≥1): the two trailing lines can
+	// exceed height, so cap to never overflow the box frame.
+	if len(lines) > height {
+		lines = lines[:height]
+	}
 	return strings.Join(lines, "\n")
 }
 

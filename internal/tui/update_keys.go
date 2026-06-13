@@ -160,8 +160,8 @@ func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "q", "esc":
-		m.mode = m.reviewExitMode()
-		m.reviewFromWorktrees = false
+		m.mode = m.reviewReturnMode
+		m.reviewReturnMode = viewModeNormal
 		m.diff.ClosePatch()
 		m.reviewPRNumber = 0
 		m.prAction = prActionNone

@@ -222,15 +222,6 @@ func (m Model) beginPRReviewFor(number int) (Model, tea.Cmd) {
 	return m, loadPRDiffCmd(m.workdir, number, m.diffReqID)
 }
 
-// reviewExitMode is where the PR-review overlay returns when it closes (esc) or
-// merges: the worktree dashboard if `O` opened it from there, else the graph.
-func (m Model) reviewExitMode() viewMode {
-	if m.reviewFromWorktrees {
-		return viewModeWorktreesModal
-	}
-	return viewModeNormal
-}
-
 // dispatchPRApprove / dispatchPRMerge arm prReviewInFlight (which gates the
 // overlay keymap to ctrl+c only) and a busy status. The busy status drives the
 // spinner via statusIsBusy — spinnerVisible checks it before the mode switch,
@@ -325,8 +316,8 @@ func (m Model) updatePRReviewMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prAction = prActionNone
 		m.reviewPRNumber = 0
 		m.prReviewNotice = ""
-		m.mode = m.reviewExitMode()
-		m.reviewFromWorktrees = false
+		m.mode = m.reviewReturnMode
+		m.reviewReturnMode = viewModeNormal
 		m.diff.ClosePatch()
 		m.clearBusy()
 		m.status = fmt.Sprintf("merged #%d (%s)", msg.number, msg.strategy)

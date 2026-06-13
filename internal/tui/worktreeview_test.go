@@ -212,6 +212,17 @@ func TestRenderWorktreesViewShowsStatus(t *testing.T) {
 	}
 }
 
+func TestRenderWorktreesViewTinyHeightNoOverflow(t *testing.T) {
+	// graphH clamps to ≥1; the status + hint trailing lines must not push the
+	// box past its height at degenerate small heights.
+	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/a"}}, "/wt/a")
+	for _, h := range []int{1, 2, 3, 4, 5} {
+		if n := len(strings.Split(m.renderWorktreesView(40, h), "\n")); n > h {
+			t.Errorf("height %d: produced %d lines (overflows the box)", h, n)
+		}
+	}
+}
+
 func TestRenderWorktreesViewFillsHeight(t *testing.T) {
 	m := withModel(t, []git.Worktree{
 		{Path: "/main", Branch: "develop", IsMain: true},

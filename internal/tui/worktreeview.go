@@ -72,10 +72,17 @@ func (m Model) renderWorktreesView(width, height int) string {
 	}
 	header := layoutLeftRight(modalHeaderS.Render(title), help.Render(fresh), width)
 	hint := help.Render(fitHelpLine(helpTextWorktreesModal, width))
+	// The dashboard owns the whole main area, so renderHelpStatus stays blank for
+	// this mode (model.go) — feedback like "no open PR" or a remove rejection
+	// rides this in-box status line just above the hint instead.
+	statusLine := ""
+	if m.status != "" {
+		statusLine = m.statusStyle.Render(fitHelpLine(m.status, width))
+	}
 
 	// Card area = everything between the header (+ its blank spacer) and the
-	// bottom hint line.
-	areaH := height - 3
+	// bottom status + hint lines.
+	areaH := height - 4
 	if areaH < worktreeCardLines {
 		areaH = worktreeCardLines
 	}
@@ -89,12 +96,16 @@ func (m Model) renderWorktreesView(width, height int) string {
 	lines := make([]string, 0, height)
 	lines = append(lines, header, "")
 	lines = append(lines, cardLines...)
-	// Pad / clamp the body so the hint always lands on the last line.
-	for len(lines) < height-1 {
+	// Pad / clamp the body so status + hint always land on the last two lines.
+	bodyEnd := height - 2
+	if bodyEnd < 0 {
+		bodyEnd = 0
+	}
+	for len(lines) < bodyEnd {
 		lines = append(lines, "")
 	}
-	lines = lines[:height-1]
-	lines = append(lines, hint)
+	lines = lines[:bodyEnd]
+	lines = append(lines, statusLine, hint)
 	return strings.Join(lines, "\n")
 }
 

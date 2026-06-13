@@ -160,7 +160,8 @@ func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "q", "esc":
-		m.mode = viewModeNormal
+		m.mode = m.reviewExitMode()
+		m.reviewFromWorktrees = false
 		m.diff.ClosePatch()
 		m.reviewPRNumber = 0
 		m.prAction = prActionNone
@@ -341,6 +342,8 @@ func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.worktreesModalMoveCursor(-1), nil
 	case "enter":
 		return m.worktreesModalEnter()
+	case "O":
+		return m.worktreesModalReviewPR()
 	case "a":
 		return m.beginWorktreeAdd()
 	case "d":

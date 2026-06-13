@@ -450,7 +450,7 @@ type worktreesModalState struct {
 	sortByCommit bool
 }
 
-const helpTextWorktreesModal = "[j/k] navigate · [enter] switch · [a] add · [d] remove · [s] sort · [esc] close"
+const helpTextWorktreesModal = "[j/k] navigate · [enter] switch · [O] review PR · [a] add · [d] remove · [s] sort · [esc] close"
 
 // modalWorktrees returns the worktrees in the modal's active
 // display order. With sortByCommit off it's the git natural order
@@ -569,4 +569,24 @@ func (m Model) worktreesModalRemove() (Model, tea.Cmd) {
 	target := wts[m.worktreesModal.cursor]
 	m = m.beginWorktreeRemove(target)
 	return m, nil
+}
+
+// worktreesModalReviewPR opens the cursor worktree's open PR in the review
+// overlay — the same beginPRReviewFor path graph `O` and the `l` modal use.
+// reviewFromWorktrees is armed so the overlay returns to the dashboard on
+// close / merge (the review-and-compare loop). A worktree whose branch has no
+// open PR reports on the status line instead of opening an empty overlay.
+func (m Model) worktreesModalReviewPR() (Model, tea.Cmd) {
+	wts := m.modalWorktrees()
+	if m.worktreesModal.cursor < 0 || m.worktreesModal.cursor >= len(wts) {
+		return m, nil
+	}
+	pr, ok := m.prs[wts[m.worktreesModal.cursor].Branch]
+	if !ok {
+		m.status = "no open PR for this worktree's branch"
+		m.statusStyle = statusErrS
+		return m, nil
+	}
+	m.reviewFromWorktrees = true
+	return m.beginPRReviewFor(pr.Number)
 }

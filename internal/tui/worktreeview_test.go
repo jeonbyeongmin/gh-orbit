@@ -198,6 +198,20 @@ func TestRenderWorktreesViewWindowsToCursor(t *testing.T) {
 	}
 }
 
+func TestRenderWorktreesViewShowsStatus(t *testing.T) {
+	// Feedback set while the dashboard owns the screen (e.g. `O` with no PR)
+	// must surface in-box, since renderHelpStatus is blank for this mode.
+	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/a"}}, "/wt/a")
+	m.status = "no open PR for this worktree's branch"
+	out := ansi.Strip(m.renderWorktreesView(60, 20))
+	if !strings.Contains(out, "no open PR") {
+		t.Errorf("dashboard should surface m.status in-box: %q", out)
+	}
+	if lines := strings.Split(out, "\n"); len(lines) != 20 {
+		t.Errorf("view should stay exactly 20 lines with a status, got %d", len(lines))
+	}
+}
+
 func TestRenderWorktreesViewFillsHeight(t *testing.T) {
 	m := withModel(t, []git.Worktree{
 		{Path: "/main", Branch: "develop", IsMain: true},

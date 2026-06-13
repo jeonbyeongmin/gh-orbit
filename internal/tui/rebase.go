@@ -127,8 +127,7 @@ func (m Model) handleRebaseConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		p := m.pendingRebase
 		m.mode = viewModeNormal
 		m.rebaseInFlight = true
-		m.status = "rebase: " + p.branch + " onto " + p.label + " …"
-		m.statusStyle = statusBusyS
+		m.setBusyStatus("rebase: " + p.branch + " onto " + p.label + " …")
 		return m, rebaseCmd(m.workdir, p.onto)
 	}
 	return m, nil

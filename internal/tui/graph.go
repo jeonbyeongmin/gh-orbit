@@ -400,6 +400,17 @@ type graphModel struct {
 	headRowIndex  int
 	headAncestors map[string]struct{}
 	headDimDirty  bool
+
+	// pendingSwap is the stale-while-revalidate flag: a reload is in flight
+	// but the previous graph stays on screen (no blank "loading…" flash).
+	// The next stream's first batch replaces the list instead of appending;
+	// a batch-less stream end clears the list instead. Set by
+	// MarkStaleForReload, never by the hard ResetForReload path.
+	pendingSwap bool
+
+	// spinnerFrame is pushed in by Model on every spinnerTickMsg so the
+	// loading placeholder animates. Only read while !loaded.
+	spinnerFrame int
 }
 
 func newGraphModel() graphModel {
@@ -601,10 +612,17 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 	case commitsStreamDoneMsg:
 		g.streaming = false
 		g.loaded = true
+		var cmd tea.Cmd
+		if g.pendingSwap {
+			// The reload finished without a single batch — the new window
+			// is empty, so the kept-on-screen old graph must go now.
+			g.consumeSwap()
+			cmd = g.list.SetItems(nil)
+		}
 		if m.err != nil && len(g.list.Items()) == 0 {
 			g.err = m.err
 		}
-		return g, nil
+		return g, cmd
 	case tea.KeyMsg:
 		prevHash := ""
 		if c, ok := g.Selected(); ok {
@@ -644,16 +662,25 @@ func appendCommitItems(dst []list.Item, rows []graphRow) []list.Item {
 
 // handleAppended folds one streaming batch into the list. Tail-follow on
 // subsequent batches is gated by userHasMoved (PR #14 회귀 가드).
+//
+// The first branch covers two cases that both want "replace, don't append":
+// a fresh load (nothing on screen yet) and the first batch after
+// MarkStaleForReload, where the old graph stayed visible to avoid a blank
+// flash and this batch is the moment it gets swapped out.
 func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
-	if !g.loaded {
+	if !g.loaded || g.pendingSwap {
+		g.consumeSwap()
 		items := appendCommitItems(make([]list.Item, 0, len(m.rows)), m.rows)
 		g.captureHeadRow(m.rows, 0)
 		g.applyGraphCap()
 		g.applyHeadDim()
 		setCmd := g.list.SetItems(items)
+		// Same cursor semantics as the hard reset: start at the top (a
+		// no-op on the fresh-load path, where the list was empty);
+		// tryHEADJump may still move it afterwards.
+		g.list.Select(0)
 		g.loaded = true
 		g.streaming = !m.done
-		g.err = nil
 		cmds := []tea.Cmd{setCmd}
 		if !m.done && m.next != nil {
 			cmds = append(cmds, m.next)
@@ -717,7 +744,7 @@ func hasIsHead(refs []git.DecoratedRef) bool {
 
 func (g graphModel) View() string {
 	if !g.loaded {
-		return "loading…"
+		return loadingPane(g.width, g.height, g.spinnerFrame)
 	}
 	if g.err != nil {
 		return fmt.Sprintf("(load error: %s)", g.err)
@@ -783,13 +810,49 @@ func (g *graphModel) SetHeadAncestors(ancestors map[string]struct{}) {
 	g.applyHeadDim()
 }
 
+// MarkStaleForReload arms the soft reload path: the current graph keeps
+// rendering (no blank flash) and the next stream's first batch swaps it
+// out — see pendingSwap. No-op before the first load; the fresh-load
+// branch of handleAppended covers that case on its own.
+func (g *graphModel) MarkStaleForReload() {
+	if !g.loaded {
+		return
+	}
+	g.pendingSwap = true
+	g.userHasMoved = false
+	// Mirror ResetForReload's dispatch-time ancestors clear: the stored
+	// set describes the old HEAD. Clearing here instead of at swap time
+	// lets the new stream's rev-list reply land before its first log
+	// batch without being wiped by the swap (the delegate keeps painting
+	// the old dim until then — consistent with the old rows it covers).
+	g.headAncestors = nil
+}
+
+// consumeSwap resets the per-window state shared by both swap paths — the
+// first batch of a stale-while-revalidate reload (handleAppended) and the
+// batch-less stream end (commitsStreamDoneMsg). userHasMoved is re-cleared
+// here because the stale window stays interactive: a cursor key pressed on
+// the old rows must not arm tail-follow against the new window (the PR #14
+// 회귀 가드). headAncestors is deliberately left alone — MarkStaleForReload
+// cleared it at dispatch, so whatever is stored now belongs to the new
+// stream. Safe on the fresh-load path: every field is already reset there.
+func (g *graphModel) consumeSwap() {
+	g.pendingSwap = false
+	g.userHasMoved = false
+	g.headRowIndex = -1
+	g.headDimDirty = true
+	g.err = nil
+}
+
 // ResetForReload clears state so View renders the "loading…" placeholder
-// again. Use this before dispatching a fresh loadCommitsCmd so the UI
-// reflects that the visible commits no longer match the requested ref. The
-// returned cmd is non-nil only when a list filter is active (filter rebuild) —
-// callers should batch it with the new load cmd.
+// again. This is the hard variant — reserved for reloads where showing the
+// old graph would mislead (worktree switch: different tree entirely);
+// every other reload goes through MarkStaleForReload. The returned cmd is
+// non-nil only when a list filter is active (filter rebuild) — callers
+// should batch it with the new load cmd.
 func (g *graphModel) ResetForReload() tea.Cmd {
 	g.loaded = false
+	g.pendingSwap = false
 	g.streaming = false
 	g.userHasMoved = false
 	g.err = nil

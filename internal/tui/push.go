@@ -54,7 +54,6 @@ func (m Model) beginPush() (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.pushInFlight = true
-	m.status = "pushing " + headBranch + "…"
-	m.statusStyle = statusBusyS
+	m.setBusyStatus("pushing " + headBranch + "…")
 	return m, pushCmd(m.workdir, headBranch)
 }

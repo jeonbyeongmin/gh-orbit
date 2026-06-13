@@ -87,6 +87,10 @@ type localChangesModel struct {
 	// triggered by `space`. Cleared in ApplyStatusLoaded after consumption.
 	pendingSelectPath         string
 	pendingSelectPreferStaged bool
+
+	// spinnerFrame is pushed in by Model on every spinnerTickMsg so the
+	// loading placeholders animate. Only read while !loaded / diffLoading.
+	spinnerFrame int
 }
 
 func newLocalChangesModel() localChangesModel {
@@ -381,7 +385,7 @@ var (
 // states are surfaced as a single line instead of an empty box.
 func (m localChangesModel) TreeView() string {
 	if !m.loaded {
-		return "loading…"
+		return loadingPane(m.treeW, m.treeH, m.spinnerFrame)
 	}
 	if m.loadErr != nil {
 		return "error: " + firstLine(m.loadErr.Error())
@@ -477,7 +481,7 @@ func (m localChangesModel) DiffView() string {
 		return "error: " + firstLine(m.diffErr.Error())
 	}
 	if m.diffLoading {
-		return "loading…"
+		return loadingPane(m.diffW, m.diffH, m.spinnerFrame)
 	}
 	if strings.TrimSpace(m.diffText) == "" {
 		return "(no file)"

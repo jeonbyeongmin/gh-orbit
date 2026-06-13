@@ -176,6 +176,10 @@ func (m Model) updateCommitsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.graph, cmd = m.graph.Update(msg)
+		// The jump target may have just streamed in — and on the swap
+		// batch this is the first call where the visible rows are the NEW
+		// window (tryHEADJump holds while pendingSwap keeps the old ones).
+		m = m.tryHEADJump()
 		return m, cmd
 
 	case commitsStreamDoneMsg:
@@ -324,14 +328,12 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case graphActionFF:
 			m.pullAfterAction = msg.pullAfter
 			m.ffInFlight = true
-			m.status = ffLabel(msg.branch, msg.advance) + " …"
-			m.statusStyle = statusBusyS
+			m.setBusyStatus(ffLabel(msg.branch, msg.advance) + " …")
 			return m, ffOnlyCmd(m.workdir, msg.branch, msg.hash)
 		case graphActionCheckoutAndFF:
 			m.pullAfterAction = msg.pullAfter
 			m.ffInFlight = true
-			m.status = "fast-forward: " + msg.branch + " (checkout + ff) …"
-			m.statusStyle = statusBusyS
+			m.setBusyStatus("fast-forward: " + msg.branch + " (checkout + ff) …")
 			return m, checkoutThenFFCmd(m.workdir, msg.branch, msg.hash)
 		case graphActionDetach:
 			var cmd tea.Cmd
@@ -532,8 +534,14 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		prCmd := m.dispatchPRList()
 		// While a pull is still in flight, its "pulling…" status outranks
 		// fetch's outcome and the pending pullSucceededMsg / pullConflictMsg
-		// will reload. Skip status overwrite + the redundant reload.
+		// will reload. Skip status overwrite + the redundant reload. But if
+		// F's own busy status is still painted (F pressed after p), hand
+		// the line back to the pull so the spinner doesn't keep asserting
+		// a fetch that just finished.
 		if m.pullInFlight {
+			if m.status == "fetching…" {
+				m.setBusyStatus("pulling…")
+			}
 			return m, prCmd
 		}
 		m.status = "fetch: done"
@@ -543,6 +551,10 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fetchFailedMsg:
 		m.fetchInFlight = false
 		if m.pullInFlight {
+			// Same busy-status handback as fetchSucceededMsg.
+			if m.status == "fetching…" {
+				m.setBusyStatus("pulling…")
+			}
 			return m, nil
 		}
 		m.status = "fetch failed: " + msg.err.Error()

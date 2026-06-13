@@ -64,8 +64,7 @@ func (m Model) beginBrowsePR() (Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 	}
-	m.status = fmt.Sprintf("opening PR #%d on GitHub…", pr.Number)
-	m.statusStyle = statusBusyS
+	m.setBusyStatus(fmt.Sprintf("opening PR #%d on GitHub…", pr.Number))
 	return m, browsePRCmd(m.workdir, pr.Number)
 }
 

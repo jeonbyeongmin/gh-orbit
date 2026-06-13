@@ -368,8 +368,8 @@ func TestRenderCommitLineGraphTruncatedAtNarrowWidth(t *testing.T) {
 
 func TestGraphModelInitialView(t *testing.T) {
 	g := newGraphModel()
-	if got := g.View(); got != "loading…" {
-		t.Errorf("initial view = %q, want %q", got, "loading…")
+	if got := g.View(); !strings.Contains(got, "loading…") {
+		t.Errorf("initial view = %q, want it to contain %q", got, "loading…")
 	}
 }
 
@@ -404,8 +404,8 @@ func TestGraphModelResetForReloadReturnsToLoading(t *testing.T) {
 	if g.delegate.graphWidth != 0 {
 		t.Errorf("ResetForReload should clear delegate.graphWidth, got %d", g.delegate.graphWidth)
 	}
-	if got := g.View(); got != "loading…" {
-		t.Errorf("after reset, View = %q, want %q", got, "loading…")
+	if got := g.View(); !strings.Contains(got, "loading…") {
+		t.Errorf("after reset, View = %q, want it to contain %q", got, "loading…")
 	}
 }
 
@@ -638,8 +638,8 @@ func TestGraphModelTailFollowStaysWhenCursorNotOnTail(t *testing.T) {
 func TestGraphModelStreamDoneClearsLoadingOnEmpty(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(80, 10)
-	if g.View() != "loading…" {
-		t.Fatalf("initial View = %q, want %q", g.View(), "loading…")
+	if !strings.Contains(g.View(), "loading…") {
+		t.Fatalf("initial View = %q, want it to contain %q", g.View(), "loading…")
 	}
 	g, _ = g.Update(commitsStreamDoneMsg{reqID: 1})
 	if !g.loaded {
@@ -647,6 +647,96 @@ func TestGraphModelStreamDoneClearsLoadingOnEmpty(t *testing.T) {
 	}
 	if got := g.View(); got != "(no commits)" {
 		t.Errorf("after empty done, View = %q, want %q", got, "(no commits)")
+	}
+}
+
+func TestGraphModelBatchlessSwapClearsStaleError(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	g, _ = g.Update(commitsStreamDoneMsg{reqID: 1, err: errSentinel})
+	if !strings.Contains(g.View(), "load error") {
+		t.Fatalf("expected error view, got %q", g.View())
+	}
+	// A successful but empty reload must clear the previous error instead
+	// of keeping "(load error: …)" painted forever.
+	g.MarkStaleForReload()
+	g, _ = g.Update(commitsStreamDoneMsg{reqID: 2})
+	if got := g.View(); got != "(no commits)" {
+		t.Errorf("batch-less reload after error: View = %q, want %q", got, "(no commits)")
+	}
+}
+
+func TestGraphModelSwapClearsUserHasMovedFromStaleWindow(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	now := time.Now()
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "aaa1111", Subject: "one", AuthorTime: now}},
+		{commit: git.Commit{Hash: "bbb2222", Subject: "two", AuthorTime: now}},
+	}})
+	g.MarkStaleForReload()
+	// User navigates the still-visible old rows during the reload window.
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if !g.userHasMoved {
+		t.Fatal("cursor key on the stale window should set userHasMoved")
+	}
+	// The new stream's first batch is always a single row — without the
+	// swap re-clearing userHasMoved, index 0 == prevLen-1 would tail-follow
+	// on the second batch (the PR #14 regression).
+	g, _ = g.Update(commitsAppendedMsg{reqID: 2, rows: []graphRow{
+		{commit: git.Commit{Hash: "ccc3333", Subject: "new-1", AuthorTime: now}},
+	}})
+	if g.userHasMoved {
+		t.Error("swap should re-clear userHasMoved")
+	}
+	g, _ = g.Update(commitsAppendedMsg{reqID: 2, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "ddd4444", Subject: "new-2", AuthorTime: now}},
+	}})
+	if g.list.Index() != 0 {
+		t.Errorf("second batch tail-followed to %d, want cursor pinned at 0", g.list.Index())
+	}
+}
+
+func TestGraphModelSwapKeepsFreshHeadAncestors(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	now := time.Now()
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "aaa1111", Subject: "old", AuthorTime: now}},
+	}})
+	g.MarkStaleForReload()
+	if g.headAncestors != nil {
+		t.Fatal("MarkStaleForReload should clear the old window's ancestors")
+	}
+	// The new stream's rev-list reply can land before its first log batch;
+	// the swap must not wipe it.
+	g.SetHeadAncestors(map[string]struct{}{"bbb2222": {}})
+	g, _ = g.Update(commitsAppendedMsg{reqID: 2, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "bbb2222", Subject: "new", AuthorTime: now}},
+	}})
+	if g.headAncestors == nil {
+		t.Error("swap wiped the new stream's headAncestors")
+	}
+}
+
+func TestGraphModelStaleReloadSwapsToEmptyOnBatchlessDone(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "abc1234", Subject: "first", AuthorTime: time.Now()}},
+	}})
+	g.MarkStaleForReload()
+	if !strings.Contains(g.View(), "first") {
+		t.Fatalf("stale reload should keep the old content on screen, got %q", g.View())
+	}
+	// The reload's stream ends without a single batch — the new window is
+	// empty, so the kept-on-screen old graph must clear now.
+	g, _ = g.Update(commitsStreamDoneMsg{reqID: 2})
+	if g.pendingSwap {
+		t.Error("batch-less done should consume pendingSwap")
+	}
+	if got := g.View(); got != "(no commits)" {
+		t.Errorf("batch-less done should clear the old window, got %q", got)
 	}
 }
 

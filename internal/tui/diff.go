@@ -46,6 +46,9 @@ type diffModel struct {
 	// still expects `]` / `[` to move the "current file" indicator. -1
 	// means no file is active (empty / failed / not-yet-loaded patch).
 	activeFile int
+	// spinnerFrame is pushed in by Model on every spinnerTickMsg so the
+	// loading placeholder animates. Only read while loadingPatch.
+	spinnerFrame int
 }
 
 func (d *diffModel) resetActiveFile() {
@@ -203,7 +206,7 @@ func (d diffModel) PatchView() string {
 		return "error: " + firstLine(d.err.Error())
 	}
 	if d.loadingPatch {
-		return "loading…"
+		return loadingPane(d.viewport.Width, d.viewport.Height, d.spinnerFrame)
 	}
 	if strings.TrimSpace(d.patchText) == "" {
 		return "(no changes)"

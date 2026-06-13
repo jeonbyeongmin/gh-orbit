@@ -55,7 +55,6 @@ func (m Model) chainPullAfterAction(outcome string) (Model, tea.Cmd, bool) {
 		return m, nil, false
 	}
 	m.pullInFlight = true
-	m.status = outcome + " · pulling…"
-	m.statusStyle = statusBusyS
+	m.setBusyStatus(outcome + " · pulling…")
 	return m, tea.Batch(m.reloadCmd(), pullCmd(m.workdir, m.pullPrefStrategy)), true
 }

@@ -44,7 +44,8 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | `v` / `x` | `git revert <commit>` / `git reset --soft\|--mixed\|--hard <commit>` |
 | `n` | `git checkout -b <name> <commit>` |
 | `F` / `p` / `P` | `git fetch --all` / `git pull` / `git push` |
-| `o` (PR 열기) | `gh pr view --web <number>` |
+| `o` (PR 웹에서 열기) | `gh pr view --web <number>` |
+| `O` → `a` / `m` (PR 리뷰) | `gh pr diff <n>` · `gh pr review --approve` · `gh pr merge --squash\|--merge\|--rebase` |
 | 브랜치 칩의 PR 배지 | `gh pr list` + `gh pr checks <number>` |
 | `y` | `git rev-parse <commit>` → 클립보드 |
 
@@ -63,6 +64,12 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 - `d` 는 focus 커밋의 전체 patch(`git show -p`)를 전체 화면 오버레이로 연다.
 - `[` / `]` 는 패치 안에서 파일을 오가고, 하단에 `<path> [N/M]` 이 표시된다.
 - `,` 는 Local Changes 를 연다 — 워킹 트리 diff(파일 트리 + diff 패널)를 Conflicts / Unstaged / Staged 로 나눈다. `space` 로 focus 파일 stage/unstage, `tab` 으로 트리 ↔ diff focus 순환, `r` 로 reload.
+
+### PR 리뷰 (`O`)
+
+- 칩에 열린 PR 배지가 달린 커밋에서 `O` 는 그 PR 의 diff(`gh pr diff`)를 커밋 diff 가 쓰는 것과 같은 전체 화면 patch 오버레이로 가져온다 — `[` / `]` 파일 네비와 스크롤이 동일하게 동작한다.
+- `a` 는 approve(`gh pr review --approve`), `m` 은 merge — 전략을 인라인으로 고른다: `[s]` squash · `[m]` merge · `[r]` rebase(`gh pr merge`). 둘 다 오버레이 하단 힌트 줄에서 확인하므로 결정하는 동안 diff 가 화면에 남는다.
+- approve 는 오버레이를 유지하고(계속 읽거나 이어서 merge), merge 는 그래프로 닫히며 PR 배지를 갱신한다. gh 에러(본인 PR approve, merge 불가, 로그아웃 상태)는 힌트 줄에 표시된다.
 
 ### worktree (`w`)
 
@@ -99,7 +106,9 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | `j` / `k` · `g` / `G` | 그래프 | 이동 · 맨 위 / 맨 아래로 |
 | `enter` | 그래프 | 체크아웃 / fast-forward / detach |
 | `d` | 그래프 | 전체 화면 patch 오버레이 열기 |
+| `O` | 그래프 | 커서 PR 의 diff 를 리뷰 오버레이로 열기 |
 | `[` / `]` | 패치 | 이전 / 다음 파일로 점프 |
+| `a` / `m` | PR 리뷰 | 열린 PR approve / merge (`m` → s/m/r) |
 | `,` | 전역 | Local Changes 뷰 |
 | `space` | local changes | focus 파일 stage / unstage |
 | `w` / `b` | 전역 | worktree / 브랜치 모달 |
@@ -128,7 +137,7 @@ XDG 규격 경로(`internal/config` 가 해석 담당):
 ## 로드맵
 
 1. Local Changes 의 per-hunk staging.
-2. PR 리뷰 패널 — PR 을 같은 레이아웃으로 가져와 patch 오버레이에서 diff 를 읽고 approve / request-changes / merge 를 인라인으로.
+2. PR 리뷰: request-changes / comment(본문 에디터), 그리고 로컬에 체크아웃되지 않은 PR 까지 닿는 PR 목록.
 
 ## 개발
 

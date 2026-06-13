@@ -23,6 +23,9 @@ detail.
 - [worktrees.md](worktrees.md) — the `w` worktrees modal for
   list / switch / add / remove, in-process switch + dirty fan-out.
   The "work lives in worktree A, you inspect worktree B" surface.
+- [pr-review.md](pr-review.md) — `O` pulls a PR diff into the patch
+  overlay; `a` / `m` approve / merge inline. The "review and land a PR
+  without leaving the graph" surface.
 
 When a behavior crosses files, the canonical doc is **checkout.md**
 for control flow and **git-wrappers.md** for the wrapper surface.

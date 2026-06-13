@@ -639,6 +639,7 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prsLoadedMsg:
 		m.prsInFlight = false
 		m.prs = msg.prs
+		m.prList = msg.list
 		m.graph.SetPRs(msg.prs)
 		return m, nil
 

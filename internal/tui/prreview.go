@@ -151,15 +151,23 @@ func (m Model) beginPRReview() (Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 	}
+	return m.beginPRReviewFor(pr.Number)
+}
+
+// beginPRReviewFor opens the PR diff overlay for an explicit PR number — the
+// shared core behind both `O` (cursor row, via beginPRReview) and the `l` PR
+// list modal (prsModalEnter). Bumps diffReqID, arms the synthetic patch load,
+// sizes the viewport, dispatches the diff fetch.
+func (m Model) beginPRReviewFor(number int) (Model, tea.Cmd) {
 	m.diffReqID++
-	m.diff.BeginPatchLoad(prDiffID(pr.Number), m.diffReqID)
+	m.diff.BeginPatchLoad(prDiffID(number), m.diffReqID)
 	m.mode = viewModeDiffWindow
-	m.reviewPRNumber = pr.Number
+	m.reviewPRNumber = number
 	m.prAction = prActionNone
 	m.prReviewNotice = ""
 	m.prReviewNoticeErr = false
 	m.diff.SetPatchViewportSize(m.width, m.height-1)
-	return m, loadPRDiffCmd(m.workdir, pr.Number, m.diffReqID)
+	return m, loadPRDiffCmd(m.workdir, number, m.diffReqID)
 }
 
 // dispatchPRApprove / dispatchPRMerge arm prReviewInFlight (which gates the

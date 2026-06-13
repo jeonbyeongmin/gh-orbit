@@ -35,6 +35,7 @@ var helpCategories = []helpCategory{
 			{",", "local changes"},
 			{"w", "worktrees modal"},
 			{"b", "branches modal"},
+			{"l", "PR list modal"},
 			{"Z", "zombie cleanup"},
 		},
 	},

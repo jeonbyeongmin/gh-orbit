@@ -154,9 +154,9 @@ func TestBranchesModalEscClosesModal(t *testing.T) {
 	}
 }
 
-// TestBranchesModalQInert — q no longer closes the modal (esc does) and must
-// not quit; the modal stays open and inert.
-func TestBranchesModalQInert(t *testing.T) {
+// TestBranchesModalQClosesModal — q closes the modal like esc does. Quitting
+// is still ctrl+c twice, so q must not arm quit.
+func TestBranchesModalQClosesModal(t *testing.T) {
 	m := initSized(t)
 	m = seedRefs(t, m, []git.Ref{
 		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
@@ -167,8 +167,8 @@ func TestBranchesModalQInert(t *testing.T) {
 	}
 
 	m, cmd := pressRune(t, m, 'q')
-	if m.mode != viewModeBranchesModal {
-		t.Errorf("q must not close the modal, got mode %v", m.mode)
+	if m.mode != viewModeNormal {
+		t.Errorf("q should close the modal, got mode %v", m.mode)
 	}
 	if cmd != nil {
 		t.Errorf("q in branches modal must not dispatch a cmd, got %v", cmd)

@@ -115,7 +115,7 @@ func (m Model) renderRebaseConfirmInner() string {
 
 func (m Model) handleRebaseConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc":
+	case "q", "esc":
 		m.mode = viewModeNormal
 		m.pendingRebase = pendingRebase{}
 		m.status = "rebase: cancelled"

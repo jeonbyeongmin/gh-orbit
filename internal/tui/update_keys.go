@@ -75,7 +75,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc":
+	case "q", "esc":
 		m.mode = viewModeNormal
 		m.diff.ClosePatch()
 		return m, nil
@@ -136,7 +136,7 @@ func (m Model) handleWorktreeRemoveConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 	isLocked := t.Locked
 	needsForce := isDirty || isLocked
 	switch msg.String() {
-	case "esc":
+	case "q", "esc":
 		m.mode = viewModeWorktreesModal
 		m.worktreeAction.removeTarget = git.Worktree{}
 		return m, nil
@@ -190,7 +190,7 @@ func (m Model) handleBranchPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m, cmd = m.beginCheckout(branch, false)
 		return m, cmd
-	case "esc":
+	case "q", "esc":
 		m.mode = viewModeNormal
 		m.branchPicker = branchPickerState{}
 		m.status = "branch select cancelled"
@@ -210,7 +210,7 @@ func (m Model) handleRefDeleteConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg.String() {
-	case "esc":
+	case "q", "esc":
 		m.mode = viewModeNormal
 		m.pendingRefDelete = refDeleteState{}
 		m.status = "delete: cancelled"
@@ -234,7 +234,7 @@ func (m Model) handleBranchesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.branchesModalMoveCursor(-1), nil
 	case "d":
 		return m.beginBranchesModalDelete()
-	case "esc":
+	case "q", "esc":
 		m.mode = viewModeNormal
 		m.branchesModal = branchesModalState{}
 		return m, nil
@@ -258,7 +258,7 @@ func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.worktreesModalRemove()
 	case "s":
 		return m.worktreesModalToggleSort(), nil
-	case "w", "esc":
+	case "w", "q", "esc":
 		// `w` toggles the modal closed, mirroring how it opens.
 		m.mode = viewModeNormal
 		m.worktreesModal = worktreesModalState{}
@@ -279,7 +279,7 @@ func (m Model) handleZombieCleanupConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 		return m, nil
 	}
 	switch msg.String() {
-	case "esc":
+	case "q", "esc":
 		m.mode = viewModeNormal
 		m.zombieCleanup = zombieCleanupState{}
 		m.status = "zombie cleanup: aborted"
@@ -299,7 +299,7 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m.handleCtrlC()
-	case ",", "esc":
+	case ",", "q", "esc":
 		m.exitLocalChangesMode()
 		m.status = "local changes: exit"
 		m.statusStyle = statusOkS
@@ -349,7 +349,7 @@ func (m Model) handleCheckoutConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setBusyStatus("stash & " + checkoutLabel(p.ref, p.detached) + " …")
 		}
 		return m, stashThenRetryCmd(m.workdir, p)
-	case "a", "esc":
+	case "a", "q", "esc":
 		m.mode = viewModeNormal
 		// Abort is where the pull-after chain dies — the needs-clean-tree
 		// handlers keep it armed so `s` can carry the remote-chip Enter's

@@ -877,10 +877,10 @@ func TestModelEscClosesDiffWindow(t *testing.T) {
 	}
 }
 
-func TestModelQInertInDiffWindow(t *testing.T) {
-	// q used to close the patch overlay; it no longer does. Closing is esc
-	// (see TestModelEscClosesDiffWindow), quitting is ctrl+c twice. q must be
-	// inert: the overlay stays open and nothing quits.
+func TestModelQClosesDiffWindow(t *testing.T) {
+	// q closes the patch overlay, mirroring esc (see
+	// TestModelEscClosesDiffWindow). Quitting is still ctrl+c twice, so q must
+	// not arm quit.
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -888,8 +888,8 @@ func TestModelQInertInDiffWindow(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	m = updated.(Model)
-	if m.mode != viewModeDiffWindow {
-		t.Errorf("q must not close the diff window anymore, got mode %v", m.mode)
+	if m.mode != viewModeNormal {
+		t.Errorf("q should close the diff window, got mode %v", m.mode)
 	}
 	if cmd != nil {
 		t.Errorf("q in diff window must not dispatch a cmd, got cmd=%v", cmd)

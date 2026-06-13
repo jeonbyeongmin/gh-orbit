@@ -726,43 +726,36 @@ func (m *Model) exitLocalChangesMode() {
 	m.applyPaneSizes()
 }
 
-// cycleLocalChangesFocus implements the 2-way tab cycle inside the mode:
-// tree → diff → tree. Sidebar focus retired in PR B2 so the outer focus
-// stays on paneGraph and only the localChanges sub-focus toggles.
-func (m Model) cycleLocalChangesFocus() Model {
-	if m.localChanges.Focused() == paneLCTree {
-		m.localChanges.SetFocus(paneLCDiff)
-	} else {
-		m.localChanges.SetFocus(paneLCTree)
+// enterLocalChangesDiff drills the tree into the diff for the cursor entry:
+// flips the sub-focus to the diff pane and loads its patch. The lazy
+// counterpart to the retired tab toggle — the diff isn't fetched until the
+// user asks to see it. No-op on an empty tree (nothing to drill into).
+func (m Model) enterLocalChangesDiff() (tea.Model, tea.Cmd) {
+	if _, ok := m.localChanges.CurrentEntry(); !ok {
+		return m, nil
 	}
-	return m
+	m.localChanges.SetFocus(paneLCDiff)
+	return m.dispatchLocalChangesDiff()
 }
 
-// handleLocalChangesTreeKey routes j/k/g/G/space inside the tree pane. The
-// cursor-move keys are followed by a diff dispatch for the new entry so the
-// diff viewport keeps step. space toggles the entry between Staged and
+// handleLocalChangesTreeKey routes j/k/g/G/space inside the tree pane. Cursor
+// moves don't fetch a diff — the diff pane is single-pane drill-down, loaded
+// lazily on `enter` (enterLocalChangesDiff), so moving the cursor while the
+// tree is on screen costs nothing. space toggles the entry between Staged and
 // Unstaged via Add / RestoreStaged.
 func (m Model) handleLocalChangesTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "j", "down":
-		if _, ok := m.localChanges.MoveCursor(1); ok {
-			return m.dispatchLocalChangesDiff()
-		}
+		m.localChanges.MoveCursor(1)
 		return m, nil
 	case "k", "up":
-		if _, ok := m.localChanges.MoveCursor(-1); ok {
-			return m.dispatchLocalChangesDiff()
-		}
+		m.localChanges.MoveCursor(-1)
 		return m, nil
 	case "g":
-		if _, ok := m.localChanges.JumpCursor(false); ok {
-			return m.dispatchLocalChangesDiff()
-		}
+		m.localChanges.JumpCursor(false)
 		return m, nil
 	case "G":
-		if _, ok := m.localChanges.JumpCursor(true); ok {
-			return m.dispatchLocalChangesDiff()
-		}
+		m.localChanges.JumpCursor(true)
 		return m, nil
 	case " ", "space":
 		return m.dispatchLocalChangesStage()
@@ -1059,41 +1052,17 @@ func (m Model) paneSizes() paneSizes {
 		s.graphH = 1
 	}
 
-	// Local Changes mode replaces the graph with a horizontal tree | diff
-	// split (35% to the file list). Reuses the full outer width.
+	// Local Changes mode is a single-pane drill-down: the tree OR the diff
+	// fills the full main area (same seam as the graph). Both panes share the
+	// graph's content box so flipping focus never reflows the layout.
 	if m.mode == viewModeLocalChanges {
-		treeOuterW := outerW * localChangesTreeRatio / 100
-		if treeOuterW < 12 {
-			treeOuterW = 12
-		}
-		if treeOuterW > outerW-12 {
-			treeOuterW = outerW - 12
-		}
-		diffOuterW := outerW - treeOuterW
-		s.lcTreeW = treeOuterW - 2
-		s.lcTreeH = mainH - 2
-		s.lcDiffW = diffOuterW - 2
-		s.lcDiffH = mainH - 2
-		if s.lcTreeW < 1 {
-			s.lcTreeW = 1
-		}
-		if s.lcTreeH < 1 {
-			s.lcTreeH = 1
-		}
-		if s.lcDiffW < 1 {
-			s.lcDiffW = 1
-		}
-		if s.lcDiffH < 1 {
-			s.lcDiffH = 1
-		}
+		s.lcTreeW = s.graphW
+		s.lcTreeH = s.graphH
+		s.lcDiffW = s.graphW
+		s.lcDiffH = s.graphH
 	}
 	return s
 }
-
-// localChangesTreeRatio is the percent of the full width given to the
-// tree column in viewModeLocalChanges; the diff viewport takes the
-// remainder. Tuned so paths still breathe on a typical 120-col terminal.
-const localChangesTreeRatio = 35
 
 // helpReservedRows returns how many bottom rows the inline `?` help panel
 // claims. It's the column layout's natural height (tallest category +
@@ -1273,11 +1242,13 @@ func (m Model) View() string {
 	var main string
 	switch {
 	case m.mode == viewModeLocalChanges:
-		treeFocused := m.localChanges.Focused() == paneLCTree
-		diffFocused := m.localChanges.Focused() == paneLCDiff
-		treeBox := boxStyle(treeFocused).Width(s.lcTreeW).Height(s.lcTreeH).Render(m.localChanges.TreeView())
-		diffBox := boxStyle(diffFocused).Width(s.lcDiffW).Height(s.lcDiffH).Render(m.localChanges.DiffView())
-		main = lipgloss.JoinHorizontal(lipgloss.Top, treeBox, diffBox)
+		// Drill-down: render only the focused pane, full-screen. `enter`
+		// descends tree → diff; `esc` climbs back (see handleLocalChangesKey).
+		if m.localChanges.Focused() == paneLCTree {
+			main = boxStyle(true).Width(s.lcTreeW).Height(s.lcTreeH).Render(m.localChanges.TreeView())
+		} else {
+			main = boxStyle(true).Width(s.lcDiffW).Height(s.lcDiffH).Render(m.localChanges.DiffView())
+		}
 	case m.isWorktreesSurface():
 		// Full-screen worktree dashboard replaces the graph (same seam as
 		// Local Changes). Its add / remove confirm sub-modals keep the

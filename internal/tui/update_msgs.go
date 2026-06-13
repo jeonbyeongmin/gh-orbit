@@ -737,10 +737,31 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case localChangesStatusLoadedMsg:
+		// Snapshot what the diff pane was showing before the reload
+		// reclassifies entries, so we can tell whether a per-hunk stage just
+		// consumed its last hunk on that side.
+		inDiff := m.localChanges.Focused() == paneLCDiff
+		var diffPath string
+		var diffStaged bool
+		if inDiff {
+			if e, ok := m.localChanges.CurrentEntry(); ok {
+				diffPath, diffStaged = e.Path, e.Staged()
+			}
+		}
 		m.localChanges.ApplyStatusLoaded(msg.entries)
-		// After reload, dispatch a diff for whatever the cursor now points
-		// at so the right pane doesn't lag behind the tree.
-		return m.dispatchLocalChangesDiff()
+		m.localChanges.SetStats(msg.unstagedStat, msg.stagedStat)
+		if inDiff {
+			// Diff still has changes on that side → repaint it. Otherwise the
+			// last hunk was staged away, so drop back to the tree (auto-return).
+			if m.localChanges.HasEntry(diffPath, diffStaged) {
+				return m.dispatchLocalChangesDiff()
+			}
+			m.localChanges.SetFocus(paneLCTree)
+			return m, nil
+		}
+		// Tree pane: the diff is loaded lazily on `enter`, so a reload here
+		// fetches nothing — the diff isn't on screen.
+		return m, nil
 
 	case localChangesStatusFailedMsg:
 		m.localChanges.ApplyStatusFailed(msg.err)

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
@@ -177,6 +179,66 @@ func TestLocalChangesFlatRowsShowConflictsWhenPresent(t *testing.T) {
 	}
 }
 
+func TestClassifyStatusEmitsInRenderOrder(t *testing.T) {
+	// git status can stream a staged file before an unstaged one. The entries
+	// slice must still come out ordered Conflicts → Unstaged → Staged so the
+	// cursor index lines up with flatRows' visual order — otherwise cursor 0
+	// lands off the top row and `enter` opens the wrong file's diff.
+	got := classifyStatus([]git.StatusEntry{
+		{Path: "staged.go", IndexState: 'M'},      // staged, first in the stream
+		{Path: "unstaged.go", WorktreeState: 'M'}, // unstaged, second
+		{Path: "conflict.go", IndexState: 'U', WorktreeState: 'U', Conflict: true},
+	})
+	wantSections := []localChangesSection{sectionConflicts, sectionUnstaged, sectionStaged}
+	if len(got) != len(wantSections) {
+		t.Fatalf("want %d entries, got %d: %+v", len(wantSections), len(got), got)
+	}
+	for i, want := range wantSections {
+		if got[i].Section != want {
+			t.Fatalf("entry %d: section %d, want %d (%+v)", i, got[i].Section, want, got)
+		}
+	}
+}
+
+func TestStatTextBySideAndBinary(t *testing.T) {
+	m := newLocalChangesModel()
+	m.SetStats(
+		[]git.FileStat{
+			{Path: "u.txt", Insertions: 12, Deletions: 3},  // both sides
+			{Path: "del.txt", Insertions: 0, Deletions: 7}, // delete-only → "-7"
+			{Path: "bin.dat", Insertions: -1, Deletions: -1},
+		},
+		[]git.FileStat{{Path: "s.txt", Insertions: 5, Deletions: 0}}, // add-only → "+5"
+	)
+	cases := []struct {
+		e    localChangesEntry
+		want string
+	}{
+		{localChangesEntry{Path: "u.txt", Section: sectionUnstaged}, "+12 -3"},
+		{localChangesEntry{Path: "del.txt", Section: sectionUnstaged}, "-7"},
+		{localChangesEntry{Path: "bin.dat", Section: sectionUnstaged}, "bin"},
+		{localChangesEntry{Path: "s.txt", Section: sectionStaged}, "+5"},
+		{localChangesEntry{Path: "u.txt", Section: sectionStaged}, ""}, // wrong side → no stat
+		{localChangesEntry{Path: "missing", Section: sectionUnstaged}, ""},
+	}
+	for _, c := range cases {
+		if got := m.statText(c.e); got != c.want {
+			t.Errorf("statText(%q staged=%v) = %q, want %q", c.e.Path, c.e.Staged(), got, c.want)
+		}
+	}
+}
+
+func TestStatColumnRendersInTree(t *testing.T) {
+	m := newLocalChangesModel()
+	m.SetSize(40, 10, 40, 10)
+	m.ApplyStatusLoaded([]git.StatusEntry{{Path: "f.txt", WorktreeState: 'M'}})
+	m.SetStats([]git.FileStat{{Path: "f.txt", Insertions: 12, Deletions: 3}}, nil)
+	out := m.TreeView()
+	if !strings.Contains(out, "+12") || !strings.Contains(out, "-3") {
+		t.Fatalf("stat column missing from tree row: %q", out)
+	}
+}
+
 func TestLocalChangesSelectByPathPrefersStaged(t *testing.T) {
 	m := newLocalChangesModel()
 	m.SetSize(20, 10, 20, 10)
@@ -192,19 +254,89 @@ func TestLocalChangesSelectByPathPrefersStaged(t *testing.T) {
 	}
 }
 
-func TestCycleLocalChangesFocusToggleTreeDiff(t *testing.T) {
-	// Sidebar focus retired in PR B2 → the 3-way refs/tree/diff cycle
-	// collapsed to a 2-way tree/diff toggle inside the right column.
-	m := New()
-	m.localChanges.SetFocus(paneLCTree)
-
-	m = m.cycleLocalChangesFocus()
-	if m.localChanges.Focused() != paneLCDiff {
-		t.Fatalf("after first tab want diff, got %d", m.localChanges.Focused())
-	}
-	m = m.cycleLocalChangesFocus()
+func TestLocalChangesDrillDownEnterEsc(t *testing.T) {
+	// Single-pane drill-down (tab toggle retired): enter descends tree →
+	// diff, esc climbs back to the tree without exiting the mode.
+	m := initSized(t)
+	m, _ = pressRune(t, m, ',')
+	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "f.txt", WorktreeState: 'M'}})
 	if m.localChanges.Focused() != paneLCTree {
-		t.Fatalf("after second tab want tree, got %d", m.localChanges.Focused())
+		t.Fatalf("setup: want tree focus, got %d", m.localChanges.Focused())
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.localChanges.Focused() != paneLCDiff {
+		t.Fatalf("after enter want diff, got %d", m.localChanges.Focused())
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.localChanges.Focused() != paneLCTree {
+		t.Fatalf("after esc want tree, got %d", m.localChanges.Focused())
+	}
+	if m.mode != viewModeLocalChanges {
+		t.Fatalf("esc from diff must not exit the mode, got %v", m.mode)
+	}
+}
+
+func TestLocalChangesEscFromTreeExits(t *testing.T) {
+	// esc is back-stack: from the tree (the top of the stack) it exits the
+	// mode entirely, mirroring q / `,`.
+	m := initSized(t)
+	m, _ = pressRune(t, m, ',')
+	if m.mode != viewModeLocalChanges {
+		t.Fatalf("setup: mode = %v, want viewModeLocalChanges", m.mode)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Fatalf("esc from tree should exit, got mode %v", m.mode)
+	}
+}
+
+// enterLocalChangesDiff helper: drill into the diff for the cursor entry.
+func enterDiff(t *testing.T, m Model) Model {
+	t.Helper()
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.localChanges.Focused() != paneLCDiff {
+		t.Fatalf("setup: want diff focus after enter, got %d", m.localChanges.Focused())
+	}
+	return m
+}
+
+func TestLocalChangesDiffAutoReturnsWhenSideGone(t *testing.T) {
+	// In the diff pane, staging the last hunk removes the file's unstaged
+	// side; the next status reload carries no unstaged entry for it, so focus
+	// drops back to the tree (the chosen auto-return behavior).
+	m := initSized(t)
+	m, _ = pressRune(t, m, ',')
+	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "f.txt", WorktreeState: 'M'}})
+	m = enterDiff(t, m)
+
+	// File is now fully staged → only an index side remains.
+	updated, _ := m.Update(localChangesStatusLoadedMsg{entries: []git.StatusEntry{{Path: "f.txt", IndexState: 'M'}}})
+	m = updated.(Model)
+	if m.localChanges.Focused() != paneLCTree {
+		t.Fatalf("want auto-return to tree, got diff focus %d", m.localChanges.Focused())
+	}
+}
+
+func TestLocalChangesDiffStaysWhenSideRemains(t *testing.T) {
+	// Partial stage: the unstaged side still has changes, so the diff pane
+	// stays open across the reload.
+	m := initSized(t)
+	m, _ = pressRune(t, m, ',')
+	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "f.txt", WorktreeState: 'M'}})
+	m = enterDiff(t, m)
+
+	// Both sides present → unstaged side survives.
+	updated, _ := m.Update(localChangesStatusLoadedMsg{entries: []git.StatusEntry{{Path: "f.txt", IndexState: 'M', WorktreeState: 'M'}}})
+	m = updated.(Model)
+	if m.localChanges.Focused() != paneLCDiff {
+		t.Fatalf("want diff focus retained, got %d", m.localChanges.Focused())
 	}
 }
 

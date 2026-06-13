@@ -410,7 +410,8 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m.handleCtrlC()
-	case ",", "q", "esc":
+	case ",", "q":
+		// q / , always exit the mode outright, from either pane.
 		m.exitLocalChangesMode()
 		m.status = "local changes: exit"
 		m.statusStyle = statusOkS
@@ -419,19 +420,30 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = viewModeHelp
 		m.applyPaneSizes()
 		return m, nil
-	case "tab":
-		return m.cycleLocalChangesFocus(), nil
 	case "r":
 		return m, loadStatusCmd(m.workdir)
 	}
-	// Tree sub-focus owns cursor movement + stage/unstage.
-	// Diff sub-focus owns hunk navigation (`[`/`]`), per-hunk staging
-	// (`space`), and viewport scroll (everything else).
+	// Single-pane drill-down. Tree owns cursor movement + stage/unstage;
+	// `enter` descends into the diff. Diff owns hunk navigation (`[`/`]`),
+	// per-hunk staging (`space`), and viewport scroll; `esc` climbs back to
+	// the tree. `esc` from the tree exits the mode.
 	switch m.localChanges.Focused() {
 	case paneLCTree:
+		switch msg.String() {
+		case "esc":
+			m.exitLocalChangesMode()
+			m.status = "local changes: exit"
+			m.statusStyle = statusOkS
+			return m, nil
+		case "enter":
+			return m.enterLocalChangesDiff()
+		}
 		return m.handleLocalChangesTreeKey(msg)
 	case paneLCDiff:
 		switch msg.String() {
+		case "esc":
+			m.localChanges.SetFocus(paneLCTree)
+			return m, nil
 		case "[":
 			m.localChanges.MoveHunk(-1)
 			return m, nil

@@ -294,6 +294,28 @@ func diffFile(ctx context.Context, dir, path string, staged bool, colorMode stri
 	return stdout.String(), nil
 }
 
+// DiffNumstat returns per-file insertion/deletion counts, parsed from
+// `git diff --numstat`. staged=false reports worktree-vs-index, staged=true
+// reports index-vs-HEAD (`--cached`). Untracked files have no tracked baseline
+// so they never appear here — the caller renders those without a stat. Binary
+// files come back with Insertions/Deletions == -1 (see FileStat.Binary).
+func DiffNumstat(ctx context.Context, dir string, staged bool) ([]FileStat, error) {
+	args := []string{"diff", "--numstat"}
+	if staged {
+		args = append(args, "--cached")
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, wrapGitErr("git diff --numstat", err, stderr.String())
+	}
+	return parseNumstat(stdout.String())
+}
+
 // DiffUntracked renders an untracked file as a full-addition diff via
 // `git diff --no-index /dev/null <path>`. Exit code 1 means "files differ"
 // (always the case for untracked files) and is treated as success; only

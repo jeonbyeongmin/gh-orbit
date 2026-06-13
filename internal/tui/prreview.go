@@ -316,7 +316,8 @@ func (m Model) updatePRReviewMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prAction = prActionNone
 		m.reviewPRNumber = 0
 		m.prReviewNotice = ""
-		m.mode = viewModeNormal
+		m.mode = m.reviewReturnMode
+		m.reviewReturnMode = viewModeNormal
 		m.diff.ClosePatch()
 		m.clearBusy()
 		m.status = fmt.Sprintf("merged #%d (%s)", msg.number, msg.strategy)

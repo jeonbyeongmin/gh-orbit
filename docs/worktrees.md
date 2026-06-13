@@ -28,7 +28,7 @@ Layout (N=2 example, full terminal width; the card renderer lives in
      ~/project/gh-orbit/.claude/worktrees/feat+sort-by-last-commit
      docs(worktrees): re-anchor the keep-priority list
 
-[j/k] navigate · [enter] switch · [a] add · [d] remove · [s] sort · [esc] close
+[j/k] navigate · [enter] switch · [O] review PR · [a] add · [d] remove · [s] sort · [esc] close
 ```
 
 The 2-col gutter carries two independent signals: the cursor bar `▌`
@@ -78,6 +78,7 @@ when it was a centered overlay — it's a full-screen view now.)
 | --------- | ------------------------------------------------------------------- |
 | `j` / `k` | move cursor within the list (bounded; no wrap)                      |
 | `enter`   | switch to the worktree under the cursor (returns to the graph)      |
+| `O`       | review the cursor worktree's open PR (no-op + status if none)       |
 | `a`       | open the add-worktree input sub-modal                               |
 | `d`       | open the remove-worktree confirm sub-modal (refuses main + current entry) |
 | `s`       | toggle last-commit sort (main pinned, rest newest-first)            |
@@ -113,6 +114,22 @@ Opening lands the cursor on the current worktree row if found, else
 on row 0. Empty inventory rejects entry with a status line and stays
 in `viewModeNormal`. While the dashboard is open it owns every key (the
 standard modal contract) — global shortcuts resume on close.
+
+### Review a PR from a card (`O`)
+
+`O` opens the cursor worktree's open PR in the full PR-review overlay —
+the same `beginPRReviewFor(number)` path graph `O` and the `l` PR-list
+modal use (`worktreesModalReviewPR` looks the PR up by `wt.Branch` in
+`Model.prs`). So `a` approve / `m` merge / `c` comment / `r`
+request-changes all work identically. A card whose branch has no open PR
+reports on the status line instead of opening an empty overlay.
+
+Unlike the graph or `l` paths, this one arms `reviewFromWorktrees`, so the
+overlay's **close (`esc`) and merge both return to the dashboard**, not the
+graph (`reviewExitMode` routes on the flag) — keeping the
+review-and-compare loop where you started: review tree A's PR, land it,
+land back on the dashboard to review tree B. The cursor is preserved
+across the round trip (the overlay never touches `worktreesModalState`).
 
 ## Add input sub-modal (`viewModeWorktreeAddInput`)
 

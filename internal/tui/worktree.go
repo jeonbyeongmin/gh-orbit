@@ -450,7 +450,7 @@ type worktreesModalState struct {
 	sortByCommit bool
 }
 
-const helpTextWorktreesModal = "[j/k] navigate · [enter] switch · [a] add · [d] remove · [s] sort · [esc] close"
+const helpTextWorktreesModal = "[j/k] navigate · [enter] switch · [O] review PR · [a] add · [d] remove · [s] sort · [esc] close"
 
 // modalWorktrees returns the worktrees in the modal's active
 // display order. With sortByCommit off it's the git natural order
@@ -538,16 +538,26 @@ func (m Model) worktreesModalToggleSort() Model {
 	return m
 }
 
+// cursorWorktree returns the worktree under the dashboard cursor, or ok=false
+// when the cursor is out of range (empty / mid-reload list). Shared by the
+// enter / remove / review-PR handlers so the bounds guard lives in one place.
+func (m Model) cursorWorktree() (git.Worktree, bool) {
+	wts := m.modalWorktrees()
+	if m.worktreesModal.cursor < 0 || m.worktreesModal.cursor >= len(wts) {
+		return git.Worktree{}, false
+	}
+	return wts[m.worktreesModal.cursor], true
+}
+
 // worktreesModalEnter closes the modal and dispatches a switchWorktreeMsg
 // for the cursor entry. The Model's existing switchWorktree handler does
 // the validate + retarget + reload chain; closing first means the switch
 // confirmation status renders on the normal layout, not under an overlay.
 func (m Model) worktreesModalEnter() (Model, tea.Cmd) {
-	wts := m.modalWorktrees()
-	if m.worktreesModal.cursor < 0 || m.worktreesModal.cursor >= len(wts) {
+	wt, ok := m.cursorWorktree()
+	if !ok {
 		return m, nil
 	}
-	wt := wts[m.worktreesModal.cursor]
 	m.mode = viewModeNormal
 	m.worktreesModal = worktreesModalState{}
 	if wt.Path == m.workdir {
@@ -562,11 +572,31 @@ func (m Model) worktreesModalEnter() (Model, tea.Cmd) {
 // cursor entry. beginWorktreeRemove already rejects removing the
 // current worktree with a status line.
 func (m Model) worktreesModalRemove() (Model, tea.Cmd) {
-	wts := m.modalWorktrees()
-	if m.worktreesModal.cursor < 0 || m.worktreesModal.cursor >= len(wts) {
+	target, ok := m.cursorWorktree()
+	if !ok {
 		return m, nil
 	}
-	target := wts[m.worktreesModal.cursor]
 	m = m.beginWorktreeRemove(target)
 	return m, nil
+}
+
+// worktreesModalReviewPR opens the cursor worktree's open PR in the review
+// overlay — the same beginPRReviewFor path graph `O` and the `l` modal use.
+// reviewFromWorktrees is armed so the overlay returns to the dashboard on
+// close / merge (the review-and-compare loop). A worktree whose branch has no
+// open PR reports on the status line instead of opening an empty overlay.
+func (m Model) worktreesModalReviewPR() (Model, tea.Cmd) {
+	wt, ok := m.cursorWorktree()
+	if !ok {
+		return m, nil
+	}
+	pr, hasPR := m.prs[wt.Branch]
+	if !hasPR {
+		m.status = "no open PR for this worktree's branch"
+		m.statusStyle = statusErrS
+		return m, nil
+	}
+	m.status = "" // opening the overlay — drop any stale dashboard status
+	m.reviewReturnMode = viewModeWorktreesModal
+	return m.beginPRReviewFor(pr.Number)
 }

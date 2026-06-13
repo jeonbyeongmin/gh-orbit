@@ -183,6 +183,92 @@ func TestSidebarWorktreesLoadedDropsStaleReqID(t *testing.T) {
 	}
 }
 
+func TestWorktreesModalReviewPROpensReview(t *testing.T) {
+	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/x"}}, "/wt/a")
+	m.prs = map[string]prInfo{"feat/x": {Number: 42, HeadRef: "feat/x"}}
+	m.worktreesModal.cursor = 0
+	got, cmd := m.worktreesModalReviewPR()
+	if got.mode != viewModeDiffWindow {
+		t.Errorf("O should open the review overlay, mode=%v", got.mode)
+	}
+	if got.reviewPRNumber != 42 {
+		t.Errorf("reviewPRNumber = %d, want 42", got.reviewPRNumber)
+	}
+	if got.reviewReturnMode != viewModeWorktreesModal {
+		t.Error("review should arm reviewReturnMode = dashboard so close returns there")
+	}
+	if cmd == nil {
+		t.Error("opening the review should dispatch the diff load")
+	}
+}
+
+func TestWorktreesModalReviewPRNoPRReports(t *testing.T) {
+	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/x"}}, "/wt/a")
+	m.worktreesModal.cursor = 0 // no entry in m.prs
+	got, cmd := m.worktreesModalReviewPR()
+	if got.mode == viewModeDiffWindow {
+		t.Error("a card with no open PR must not open the review overlay")
+	}
+	if cmd != nil {
+		t.Error("no-PR review should not dispatch a command")
+	}
+	if !strings.Contains(got.status, "no open PR") {
+		t.Errorf("no-PR review should report on the status line, got %q", got.status)
+	}
+}
+
+func TestWorktreesModalReviewPRClearsStaleStatus(t *testing.T) {
+	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/x"}}, "/wt/a")
+	m.prs = map[string]prInfo{"feat/x": {Number: 42, HeadRef: "feat/x"}}
+	m.worktreesModal.cursor = 0
+	m.status = "remove: cancelled (dirty …)" // stale from a prior dashboard action
+	got, _ := m.worktreesModalReviewPR()
+	if got.status != "" {
+		t.Errorf("opening the review should drop stale dashboard status, got %q", got.status)
+	}
+}
+
+func TestReviewReturnModeDefaultsToGraph(t *testing.T) {
+	// Zero value of viewMode is viewModeNormal, so a review opened from the
+	// graph (which never sets reviewReturnMode) returns to the graph.
+	if m := New(); m.reviewReturnMode != viewModeNormal {
+		t.Errorf("fresh model reviewReturnMode = %v, want viewModeNormal (graph)", m.reviewReturnMode)
+	}
+}
+
+func TestReviewEscReturnsToDashboard(t *testing.T) {
+	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/x"}}, "/wt/a")
+	m.prs = map[string]prInfo{"feat/x": {Number: 42, HeadRef: "feat/x"}}
+	m.worktreesModal.cursor = 0
+	opened, _ := m.worktreesModalReviewPR()
+	updated, _ := opened.handleDiffWindowKey(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(Model)
+	if got.mode != viewModeWorktreesModal {
+		t.Errorf("esc from a dashboard-opened review should return to the dashboard, mode=%v", got.mode)
+	}
+	if got.reviewReturnMode != viewModeNormal {
+		t.Error("reviewReturnMode should reset to graph on close")
+	}
+	if got.reviewPRNumber != 0 {
+		t.Error("reviewPRNumber should reset on close")
+	}
+}
+
+func TestReviewMergeReturnsToDashboard(t *testing.T) {
+	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/x"}}, "/wt/a")
+	m.prs = map[string]prInfo{"feat/x": {Number: 42, HeadRef: "feat/x"}}
+	m.worktreesModal.cursor = 0
+	opened, _ := m.worktreesModalReviewPR()
+	updated, _ := opened.Update(prMergeDoneMsg{number: 42, strategy: "squash"})
+	got := updated.(Model)
+	if got.mode != viewModeWorktreesModal {
+		t.Errorf("merge from a dashboard-opened review should return to the dashboard, mode=%v", got.mode)
+	}
+	if got.reviewReturnMode != viewModeNormal {
+		t.Error("reviewReturnMode should reset to graph after merge")
+	}
+}
+
 func TestSidebarDirtyFanoutAppliesAndDropsStale(t *testing.T) {
 	m := New()
 	reqID := m.sidebarWorktreesReqID

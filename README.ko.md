@@ -79,7 +79,7 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 ### worktree (`w`)
 
 - `w` 는 전체화면 대시보드를 연다 — worktree 당 3줄 카드(브랜치 + PR/CI + dirty/시각 · 경로 · 마지막 커밋) 로 모든 트리 상태를 한눈에 본다. `esc` 로 그래프로 돌아간다.
-- `enter` 는 UI 전체를 다른 worktree 로 프로세스 내부에서 전환한다.
+- `enter` 는 UI 전체를 다른 worktree 로 프로세스 내부에서 전환한다. `O` 는 그 worktree 의 열린 PR 을 리뷰 오버레이로 열어(approve / merge / comment 인라인) 닫으면 대시보드로 복귀 — 떠나지 않고 각 에이전트의 PR 을 리뷰·랜드한다.
 - `a` 로 worktree 추가(형제 경로 자동 도출), `d` 로 제거(dirty/locked 는 force 확인), `s` 로 마지막 커밋 시각순 정렬.
 - 각 카드에 열린 PR `#N` + CI 배지(있을 때), upstream 대비 `↑a↓b`(ahead/behind), `●N` dirty 마커(`N` = 변경 파일 수), worktree HEAD 의 마지막 커밋 제목·상대 시각이 표시된다.
 - `.git/HEAD` 와 `.git/index` 를 fsnotify 로 감시해 외부 커밋·rebase 가 목록을 갱신하고, `r` 은 항상 수동 폴백이다.

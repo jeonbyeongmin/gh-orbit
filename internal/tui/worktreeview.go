@@ -227,25 +227,24 @@ func buildWorktreeCard(d worktreeCardData, now time.Time, width int) []string {
 	if subject == "" {
 		subject = "—"
 	}
-	line3 := bar + " " + fitRightTrunc(worktreeCardIndent+subject, contentW)
+	line3 := bar + " " + runewidth.Truncate(worktreeCardIndent+subject, contentW, "…")
 
-	return []string{padTo(line1, width), padTo(line2, width), padTo(line3, width)}
+	return []string{padToWidth(line1, width), padToWidth(line2, width), padToWidth(line3, width)}
 }
 
 // branchStatusLine left-anchors the branch and right-anchors the status
 // cluster within width, truncating the branch (never the status) under
-// pressure. Returns exactly width display cells so the right edge is real.
+// pressure. Returns at most width display cells — the caller's padToWidth only
+// pads, so an overflow here would wrap and corrupt the card frame.
 func branchStatusLine(branch, status string, current bool, width int) string {
 	sw := runewidth.StringWidth(status)
-	bw := width - sw - 1 // at least 1 space between branch and status
-	if bw < 1 {
-		bw = 1
+	// When the (plain) status alone fills the line there's no room for a branch:
+	// show as much status as fits and drop the branch rather than overflow.
+	if sw >= width {
+		return runewidth.Truncate(status, width, "…")
 	}
-	plain := runewidth.Truncate(branch, bw, "…")
-	gap := width - runewidth.StringWidth(plain) - sw
-	if gap < 1 {
-		gap = 1
-	}
+	plain := runewidth.Truncate(branch, width-sw-1, "…")
+	gap := width - runewidth.StringWidth(plain) - sw // ≥ 1: plain width ≤ width-sw-1
 	b := plain
 	if current {
 		b = selectedStyle.Render(plain)
@@ -286,14 +285,6 @@ func truncLeftKeepTail(s string, width int) string {
 	return "…" + string(r)
 }
 
-// fitRightTrunc caps a left-aligned cell at width with a trailing … .
-func fitRightTrunc(s string, width int) string {
-	if runewidth.StringWidth(s) <= width {
-		return s
-	}
-	return runewidth.Truncate(s, width, "…")
-}
-
 // layoutLeftRight places left at the start and right flush to the width's right
 // edge, with at least one space between. Mirrors renderHelpStatus's math.
 func layoutLeftRight(left, right string, width int) string {
@@ -302,13 +293,4 @@ func layoutLeftRight(left, right string, width int) string {
 		gap = 1
 	}
 	return left + strings.Repeat(" ", gap) + right
-}
-
-// padTo right-pads a (possibly styled) line to exactly width display cells.
-func padTo(s string, width int) string {
-	w := lipgloss.Width(s)
-	if w >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-w)
 }

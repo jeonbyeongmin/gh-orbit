@@ -43,7 +43,7 @@ func TestBuildWorktreeCardBranchLeadsStatusTrails(t *testing.T) {
 	if bi < 0 || gi < 0 || ti < 0 {
 		t.Fatalf("line1 missing tokens: %q", l)
 	}
-	if !(bi < gi && gi < ti) {
+	if bi >= gi || gi >= ti {
 		t.Errorf("want branch < badge < time on line1: %q", l)
 	}
 	if !strings.HasSuffix(strings.TrimRight(l, " "), "2m") {
@@ -101,6 +101,20 @@ func TestBuildWorktreeCardLongBranchKeepsStatus(t *testing.T) {
 	}
 }
 
+func TestBuildWorktreeCardNeverOverflowsWidth(t *testing.T) {
+	// Regression: a status cluster wider than the card width must not push line 1
+	// past width — padToWidth only pads, so an overflow would wrap and corrupt
+	// the card frame. Every line must be exactly width at every narrow width.
+	d := worktreeCardData{branch: "develop", badge: "#1234✓", sync: "↑12↓34", dirty: "●99", path: "/some/long/worktree/path", subject: "a subject", when: cardNow.Add(-90 * 24 * time.Hour)}
+	for _, w := range []int{8, 12, 16, 20, 24} {
+		for i, ln := range cardLinesPlain(d, w) {
+			if got := runewidth.StringWidth(ln); got != w {
+				t.Errorf("width %d line %d: rendered %d cells, want exactly %d: %q", w, i, got, w, ln)
+			}
+		}
+	}
+}
+
 func TestBuildWorktreeCardStatusClusterOrder(t *testing.T) {
 	// badge · sync · dirty · time, left to right, right-anchored.
 	d := worktreeCardData{branch: "feat/x", badge: "#9✓", sync: "↑2↓1", dirty: "●3", path: "/r", subject: "s", when: cardNow.Add(-time.Hour)}
@@ -109,7 +123,7 @@ func TestBuildWorktreeCardStatusClusterOrder(t *testing.T) {
 	if bi < 0 || si < 0 || di < 0 || ti < 0 {
 		t.Fatalf("status cluster missing a token: %q", l)
 	}
-	if !(bi < si && si < di && di < ti) {
+	if bi >= si || si >= di || di >= ti {
 		t.Errorf("want badge<sync<dirty<time: %q", l)
 	}
 }

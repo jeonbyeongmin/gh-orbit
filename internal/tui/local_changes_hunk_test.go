@@ -180,6 +180,30 @@ func TestSelectByPathPrefersSide(t *testing.T) {
 	}
 }
 
+// TestBeginDiffLoadClearsHunks guards the stale-hunk window: when a new diff
+// load begins (tree cursor moved to another file), the previous file's hunk
+// state must be dropped so a `space` pressed before the new diff lands reports
+// "no hunk" instead of staging a stale-indexed hunk of the wrong file.
+func TestBeginDiffLoadClearsHunks(t *testing.T) {
+	var m localChangesModel
+	m.SetSize(40, 20, 40, 20)
+	m.focused = paneLCDiff
+	m.diffReqID = 1
+	m.ApplyDiffLoaded(1, twoHunkDiff)
+	m.MoveHunk(1)
+	if _, ok := m.CurrentHunk(); !ok {
+		t.Fatal("precondition: a hunk should be selected")
+	}
+
+	m.BeginDiffLoad(2) // tree cursor moved → new load in flight
+	if _, ok := m.CurrentHunk(); ok {
+		t.Error("hunk state must be cleared during the load window")
+	}
+	if m.hunkCursor != 0 || m.hunkStarts != nil {
+		t.Errorf("BeginDiffLoad left stale hunk state: cursor=%d starts=%v", m.hunkCursor, m.hunkStarts)
+	}
+}
+
 // gitOut runs git and returns trimmed stdout, failing the test on error.
 func gitOut(t *testing.T, dir string, args ...string) string {
 	t.Helper()

@@ -237,21 +237,7 @@ func RestoreStaged(ctx context.Context, dir, path string) error {
 // staging feeds the result to `git apply`, which can't parse the colored diff
 // the viewport renders — so the patch is rebuilt from this uncolored copy.
 func DiffFileRaw(ctx context.Context, dir, path string, staged bool) (string, error) {
-	args := []string{"-c", "color.ui=never", "diff"}
-	if staged {
-		args = append(args, "--cached")
-	}
-	args = append(args, "--", path)
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
-	cmd.Env = gitEnv()
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", wrapGitErr("git diff", err, stderr.String())
-	}
-	return stdout.String(), nil
+	return diffFile(ctx, dir, path, staged, "never")
 }
 
 // ApplyCached pipes a unified-diff patch to `git apply --cached`, staging it
@@ -285,7 +271,13 @@ func ApplyCached(ctx context.Context, dir, patch string, reverse bool) error {
 // `git diff` exits 0 even when there's no diff, so we treat any non-zero
 // exit as a real failure (unlike DiffUntracked).
 func DiffFile(ctx context.Context, dir, path string, staged bool) (string, error) {
-	args := []string{"-c", "color.ui=always", "diff"}
+	return diffFile(ctx, dir, path, staged, "always")
+}
+
+// diffFile is the shared body for DiffFile / DiffFileRaw — identical except the
+// `color.ui` mode (always for the viewport, never for the apply patch).
+func diffFile(ctx context.Context, dir, path string, staged bool, colorMode string) (string, error) {
+	args := []string{"-c", "color.ui=" + colorMode, "diff"}
 	if staged {
 		args = append(args, "--cached")
 	}

@@ -166,6 +166,12 @@ func (m *localChangesModel) BeginDiffLoad(reqID uint64) {
 	m.diffText = ""
 	m.diffLoading = true
 	m.diffErr = nil
+	// Drop hunk state up front: between here and ApplyDiffLoaded the diff
+	// belongs to no file, so a `space`/`[`/`]` pressed in the load window must
+	// not act on the previous file's hunks. CurrentHunk → false until the new
+	// diff lands.
+	m.hunkStarts = nil
+	m.hunkCursor = 0
 	m.diff.SetContent("")
 	m.diff.GotoTop()
 }

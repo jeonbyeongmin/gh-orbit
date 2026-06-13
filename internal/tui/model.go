@@ -219,8 +219,10 @@ type Model struct {
 	// pendingHEADHash drives the post-pull cursor jump. pullSucceededMsg
 	// arms it with the sentinel pendingHEADSentinel; the post-reload
 	// refsLoadedMsg replaces the sentinel with HEAD's actual hash;
-	// tryHEADJump (called from both refsLoadedMsg and commitsStreamDoneMsg)
-	// clears it once the row lands. Empty string means "no pending jump".
+	// tryHEADJump (called from refsLoadedMsg, commitsAppendedMsg, and
+	// commitsStreamDoneMsg) clears it once the row lands in the NEW
+	// window — it holds while graph.pendingSwap keeps the old rows on
+	// screen. Empty string means "no pending jump".
 	pendingHEADHash string
 	// status is the one-line message rendered next to the help line:
 	// "fetching…", "fetch: done", "fetch failed: …". Empty hides it.
@@ -429,10 +431,9 @@ func (m Model) Init() tea.Cmd {
 // to start the animation.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
-	nm, ok := next.(Model)
-	if !ok {
-		return next, cmd
-	}
+	// Every update path returns the concrete Model; a panic here means a
+	// handler broke that contract and should fail loudly.
+	nm := next.(Model)
 	if !nm.spinnerArmed && nm.spinnerVisible() {
 		nm.spinnerArmed = true
 		cmd = tea.Batch(cmd, spinnerTickCmd())
@@ -452,7 +453,7 @@ func (m Model) spinnerVisible() bool {
 	if m.width == 0 {
 		return false
 	}
-	if m.status != "" && m.status == m.statusBusyText {
+	if m.statusIsBusy() {
 		return true
 	}
 	switch m.mode {
@@ -768,6 +769,14 @@ func (m *Model) setBusyStatus(text string) {
 	m.statusBusyText = text
 }
 
+// statusIsBusy reports whether the status line currently shows the
+// in-flight text recorded by setBusyStatus — the single predicate behind
+// both the spinner prefix (renderHelpStatus) and the tick gate
+// (spinnerVisible).
+func (m Model) statusIsBusy() bool {
+	return m.status != "" && m.status == m.statusBusyText
+}
+
 // consumeStashNotice folds the one-shot stash-and-continue reminder into
 // the just-set status line: the suffix tells the user which branch their
 // changes were stashed on, and the branch is recorded so checking it out
@@ -780,6 +789,12 @@ func (m Model) consumeStashNotice() Model {
 		m.stashedRefs = make(map[string]bool)
 	}
 	m.stashedRefs[m.stashNotice] = true
+	if m.statusIsBusy() {
+		// The suffix can land on an in-flight status (the checkout/FF
+		// success handler chains a pull before consuming the notice) —
+		// extend the recorded busy text too so the spinner match survives.
+		m.statusBusyText += " · stashed on " + m.stashNotice
+	}
 	m.status += " · stashed on " + m.stashNotice
 	m.stashNotice = ""
 	return m
@@ -816,10 +831,19 @@ func ffLabel(branch string, advance int) string {
 // tryHEADJump attempts to point the graph cursor at HEAD using the hash
 // captured from the post-pull refsLoadedMsg. JumpToHash returns false until
 // the matching commit has actually streamed in, so the caller invokes this
-// from both refsLoadedMsg and commitsStreamDoneMsg — whichever arrives
-// second wins. Empty / sentinel pendingHEADHash → no-op.
+// from refsLoadedMsg, commitsAppendedMsg, and commitsStreamDoneMsg —
+// whichever sees the row first wins. Empty / sentinel pendingHEADHash →
+// no-op.
 func (m Model) tryHEADJump() Model {
 	if m.pendingHEADHash == "" || m.pendingHEADHash == pendingHEADSentinel {
+		return m
+	}
+	// While a stale-while-revalidate window is open the visible rows are
+	// the OLD graph — jumping would consume the hash against rows the
+	// swap is about to replace (and the swap's Select(0) would then undo
+	// it). Keep the hash armed; the post-swap commitsAppendedMsg calls
+	// back in once fresh rows exist.
+	if m.graph.pendingSwap {
 		return m
 	}
 	if m.graph.JumpToHash(m.pendingHEADHash) {
@@ -1204,7 +1228,7 @@ func (m Model) renderHelpStatus() string {
 		return collapsedHintRendered
 	}
 	statusText := m.status
-	if m.statusBusyText != "" && m.status == m.statusBusyText {
+	if m.statusIsBusy() {
 		statusText = spinnerGlyph(m.spinnerFrame) + " " + m.status
 	}
 	statusRendered := m.statusStyle.Render(statusText)

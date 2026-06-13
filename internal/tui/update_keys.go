@@ -457,6 +457,14 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.gitMutationInFlight() {
 			return m, nil
 		}
+		// During a stale-while-revalidate window the visible rows are the
+		// old graph — evaluating a checkout/FF against them could act on
+		// state the in-flight reload is about to replace. Drop Enter for
+		// the sub-second window, like the old hard-reset (unloaded graph,
+		// Selected() !ok) used to.
+		if m.graph.pendingSwap {
+			return m, nil
+		}
 		c, ok := m.graph.Selected()
 		if !ok {
 			return m, nil

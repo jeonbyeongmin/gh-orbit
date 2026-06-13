@@ -30,16 +30,12 @@ func spinnerGlyph(frame int) string {
 	return spinnerFrames[frame%len(spinnerFrames)]
 }
 
-// loadingPlaceholder is the shared pane body shown while async content is
-// in flight (graph stream, patch overlay, local-changes tree/diff).
-func loadingPlaceholder(frame int) string {
-	return spinnerGlyph(frame) + " loading…"
-}
-
-// centerPlaceholder centers a placeholder in the pane's inner content
-// area. Zero dimensions (pre-WindowSizeMsg renders, direct sub-model tests)
-// fall back to the bare text.
-func centerPlaceholder(w, h int, s string) string {
+// loadingPane renders the shared loading placeholder — a spinner glyph and
+// label centered in the pane's inner content area (graph stream, patch
+// overlay, local-changes tree/diff). Zero dimensions (pre-WindowSizeMsg
+// renders, direct sub-model tests) fall back to the bare text.
+func loadingPane(w, h, frame int) string {
+	s := spinnerGlyph(frame) + " loading…"
 	if w <= 0 || h <= 0 {
 		return s
 	}

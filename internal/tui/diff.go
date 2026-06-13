@@ -206,7 +206,7 @@ func (d diffModel) PatchView() string {
 		return "error: " + firstLine(d.err.Error())
 	}
 	if d.loadingPatch {
-		return centerPlaceholder(d.viewport.Width, d.viewport.Height, loadingPlaceholder(d.spinnerFrame))
+		return loadingPane(d.viewport.Width, d.viewport.Height, d.spinnerFrame)
 	}
 	if strings.TrimSpace(d.patchText) == "" {
 		return "(no changes)"

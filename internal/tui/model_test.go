@@ -409,6 +409,45 @@ func TestModelRKeyReloadsBothPanes(t *testing.T) {
 	}
 }
 
+func TestHEADJumpDefersUntilSwap(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	updated, _ = m.Update(commitsAppendedMsg{reqID: m.streamReqID, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "aaa1111", Subject: "old-top", AuthorTime: time.Now()}},
+		{commit: git.Commit{Hash: "bbb2222", Subject: "old-head", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+
+	// Post-checkout shape: HEAD jump armed, soft reload in flight.
+	m.pendingHEADHash = pendingHEADSentinel
+	_ = m.reloadCmd()
+
+	// refsLoadedMsg resolves the sentinel against a hash that exists in
+	// the STALE rows — the jump must hold (not consume) until the swap.
+	updated, _ = m.Update(refsLoadedMsg{refs: []git.Ref{
+		{FullName: "refs/heads/main", ShortName: "main", Kind: git.RefKindLocal,
+			ObjectName: "bbb2222", IsHead: true},
+	}})
+	m = updated.(Model)
+	if m.pendingHEADHash != "bbb2222" {
+		t.Fatalf("jump consumed against stale rows: pendingHEADHash = %q", m.pendingHEADHash)
+	}
+
+	// The new window streams in; the jump lands once its row exists.
+	updated, _ = m.Update(commitsAppendedMsg{reqID: m.streamReqID, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "ccc3333", Subject: "new-top", AuthorTime: time.Now()}},
+		{commit: git.Commit{Hash: "bbb2222", Subject: "old-head", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+	if m.pendingHEADHash != "" {
+		t.Errorf("jump should consume after the swap, pendingHEADHash = %q", m.pendingHEADHash)
+	}
+	if c, ok := m.graph.Selected(); !ok || c.Hash != "bbb2222" {
+		t.Errorf("cursor should land on HEAD row, got %+v ok=%v", c, ok)
+	}
+}
+
 func TestSpinnerTickGatedByLoading(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

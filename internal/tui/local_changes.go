@@ -385,7 +385,7 @@ var (
 // states are surfaced as a single line instead of an empty box.
 func (m localChangesModel) TreeView() string {
 	if !m.loaded {
-		return centerPlaceholder(m.treeW, m.treeH, loadingPlaceholder(m.spinnerFrame))
+		return loadingPane(m.treeW, m.treeH, m.spinnerFrame)
 	}
 	if m.loadErr != nil {
 		return "error: " + firstLine(m.loadErr.Error())
@@ -481,7 +481,7 @@ func (m localChangesModel) DiffView() string {
 		return "error: " + firstLine(m.diffErr.Error())
 	}
 	if m.diffLoading {
-		return centerPlaceholder(m.diffW, m.diffH, loadingPlaceholder(m.spinnerFrame))
+		return loadingPane(m.diffW, m.diffH, m.spinnerFrame)
 	}
 	if strings.TrimSpace(m.diffText) == "" {
 		return "(no file)"

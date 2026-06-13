@@ -130,7 +130,7 @@ func TestWorktreesModalToggleSortPreservesCursorWorktree(t *testing.T) {
 func TestWorktreesModalHeaderSortTagOnlyWhenSorting(t *testing.T) {
 	m := sortFixture(t)
 	header := func() string {
-		return strings.SplitN(ansi.Strip(m.renderWorktreesModalInner()), "\n", 2)[0]
+		return strings.SplitN(ansi.Strip(m.renderWorktreesView(60, 20)), "\n", 2)[0]
 	}
 	if strings.Contains(header(), "↓time") {
 		t.Errorf("sort tag should be absent when sort off: %q", header())

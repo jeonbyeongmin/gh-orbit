@@ -78,9 +78,10 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 
 ### Worktrees (`w`)
 
+- `w` opens a full-screen dashboard — one 3-line card per worktree (branch + PR/CI + dirty/time · path · last commit) — so every tree's state reads at once. `esc` returns to the graph.
 - `enter` switches the whole UI to another worktree in-process.
 - `a` adds a worktree (sibling path auto-derived), `d` removes it (force-confirm for dirty/locked), `s` sorts by last-commit time.
-- Each row shows a `●` dirty marker and the worktree HEAD's last-commit subject and relative time.
+- Each card carries an open-PR `#N` + CI badge (when the branch has one), the `↑a↓b` ahead/behind vs upstream, a `●N` dirty marker (`N` changed files), and the worktree HEAD's last-commit subject and relative time.
 - `.git/HEAD` and `.git/index` are watched (fsnotify), so external commits/rebases refresh the list; `r` is always a manual fallback.
 
 ### Branches & checkout
@@ -119,7 +120,7 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `,` | global | Local Changes view |
 | `space` | local changes | stage / unstage the focused file (or hunk, in the diff pane) |
 | `[` / `]` | local changes diff | previous / next hunk |
-| `w` / `b` | global | worktrees / branches modal |
+| `w` / `b` | global | worktrees dashboard / branches modal |
 | `c` / `R` / `v` / `x` | graph | cherry-pick / rebase / revert / reset |
 | `n` | graph | create a branch at the cursor + switch |
 | `F` / `p` / `P` | global | fetch / pull / push |

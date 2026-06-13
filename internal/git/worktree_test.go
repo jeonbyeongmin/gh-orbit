@@ -330,3 +330,44 @@ func TestWorktreeLastCommitUnbornHEAD(t *testing.T) {
 		t.Errorf("unborn HEAD should yield empty result, got subject=%q when=%v", subject, when)
 	}
 }
+
+func TestWorktreeAheadBehind(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+	gitRun(t, dir, "config", "commit.gpgsign", "false")
+	gitRun(t, dir, "commit", "--allow-empty", "-q", "-m", "base")
+	gitRun(t, dir, "branch", "feat")
+	// main advances by 1 → feat will be behind by 1.
+	gitRun(t, dir, "commit", "--allow-empty", "-q", "-m", "main-1")
+	// feat tracks main and advances by 2 → ahead by 2.
+	gitRun(t, dir, "checkout", "-q", "feat")
+	gitRun(t, dir, "branch", "--set-upstream-to=main", "feat")
+	gitRun(t, dir, "commit", "--allow-empty", "-q", "-m", "feat-1")
+	gitRun(t, dir, "commit", "--allow-empty", "-q", "-m", "feat-2")
+
+	ahead, behind, hasUpstream, err := WorktreeAheadBehind(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("WorktreeAheadBehind: %v", err)
+	}
+	if !hasUpstream {
+		t.Fatal("hasUpstream should be true with an upstream configured")
+	}
+	if ahead != 2 || behind != 1 {
+		t.Errorf("ahead/behind = %d/%d, want 2/1", ahead, behind)
+	}
+}
+
+func TestWorktreeAheadBehindNoUpstream(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+	gitRun(t, dir, "config", "commit.gpgsign", "false")
+	gitRun(t, dir, "commit", "--allow-empty", "-q", "-m", "base")
+
+	_, _, hasUpstream, err := WorktreeAheadBehind(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("a missing upstream is a clean (no-error) result, got: %v", err)
+	}
+	if hasUpstream {
+		t.Error("hasUpstream should be false when no upstream is configured")
+	}
+}

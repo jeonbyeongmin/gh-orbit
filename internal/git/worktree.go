@@ -217,3 +217,40 @@ func WorktreeLastCommit(ctx context.Context, dir string) (subject string, when t
 	}
 	return subj, time.Unix(sec, 0), nil
 }
+
+// WorktreeAheadBehind returns how far a worktree's HEAD is ahead of / behind
+// its upstream via `git -C <dir> rev-list --left-right --count @{upstream}...HEAD`.
+// The `--left-right` count emits "<behind>\t<ahead>": the left side counts
+// commits in the upstream but not HEAD (behind), the right side commits in HEAD
+// but not the upstream (ahead).
+//
+// A branch with no upstream, a detached HEAD, or an unborn HEAD makes `@{upstream}`
+// unresolvable and the command exit non-zero; that is reported as
+// hasUpstream=false (not an error) so the card simply omits the `↑↓` column —
+// the same non-fatal treatment WorktreeLastCommit gives a missing commit. A
+// context deadline still surfaces as an error.
+func WorktreeAheadBehind(ctx context.Context, dir string) (ahead, behind int, hasUpstream bool, err error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if runErr := cmd.Run(); runErr != nil {
+		if ctx.Err() != nil {
+			return 0, 0, false, ctx.Err()
+		}
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			// No upstream / detached / unborn HEAD: nothing to compare against.
+			return 0, 0, false, nil
+		}
+		return 0, 0, false, wrapGitErr("git rev-list", runErr, stderr.String())
+	}
+	fields := strings.Fields(stdout.String())
+	if len(fields) != 2 {
+		return 0, 0, false, nil
+	}
+	behind, _ = strconv.Atoi(fields[0])
+	ahead, _ = strconv.Atoi(fields[1])
+	return ahead, behind, true, nil
+}

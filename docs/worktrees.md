@@ -1,105 +1,83 @@
 # worktrees
 
 Multi-worktree is a first-class cockpit concept. The shape it's built
-for: work is in flight on worktree A; the user pops into gh-orbit,
-presses `w` to open the worktrees modal, picks worktree B, hits
-`enter` to switch — all in-process, no second terminal, no disturbance
-to whatever is running on the other tree.
+for: work is in flight on worktree A; the user presses `w` to open the
+full-screen worktree dashboard, picks worktree B, hits `enter` to
+switch — all in-process, no second terminal, no disturbance to whatever
+is running on the other tree.
 
-The `w` modal is the single worktree surface — the same centered
-overlay pattern as the branches modal (`b`). It lists every entry from
-`git worktree list --porcelain`, marks the current entry with `▶`, and
-paints a `●` dirty marker (`?` on timeout). The graph keeps the whole
-screen; worktrees appear only while the modal is open.
+`w` replaces the graph with the dashboard — the same graph-swapping seam
+Local Changes uses (`isWorktreesSurface()` routes `main` in `View()`),
+not a centered overlay. It renders one **3-line card** per worktree from
+`git worktree list --porcelain`, so every tree's branch, PR/CI state, and
+last activity read at once. `esc` (or `w` again) returns to the graph.
 
-## Modal rendering
+## Card layout
 
-Layout (N=4 example):
+Layout (N=2 example, full terminal width; the card renderer lives in
+`worktreeview.go`):
 
 ```
-        ┌──────────────────────────────────────────────────┐
-        │ [Worktrees]                                      │
-        │ ▶ main · develop ● · sync watcher fix · 2m       │
-        │   feat-auth · feat/auth · add login form · 1h    │
-        │   feat-qa · feat/qa · run tests green · 3d       │
-        │   refactor · feat/refactor ● · wip               │
-        │ fetched 14m ago                                  │
-        │ [j/k] navigate · [enter] switch · [a] add · …    │
-        └──────────────────────────────────────────────────┘
+[Worktrees · 2]
+
+▌▶ develop                                       ↑1  ●3  1h
+▌    ~/project/gh-orbit
+▌    Merge pull request #101 from feat/pr-review
+
+   feat/claude-code-agent-hint              #42✓  ↑2↓1  2w
+     ~/project/gh-orbit/.claude/worktrees/feat+sort-by-last-commit
+     docs(worktrees): re-anchor the keep-priority list
+
+[j/k] navigate · [enter] switch · [a] add · [d] remove · [s] sort · [esc] close
 ```
 
-- **Header line** — `[Worktrees]`, plus a `↓time` tag while the
-  last-commit sort is on.
-- **Worktree row** — `name · branch · ● · subject · time`. `name` is
-  the basename of the worktree path, capped at **24** cells (a long
-  branch-shaped name would otherwise swallow the row) and padded to the
-  widest name in the current set so the columns after it line up across
-  rows. The alignment yields to information density on a terminal too
-  narrow to spare the padding. The
-  current entry (the one `m.workdir` lives in) prefixes with `▶` + bold +
-  select color so the user knows which context the rest of the cockpit
-  describes. `subject` +
-  `time` are the worktree HEAD's last-commit summary (see **Last-commit
-  column**) — graph only ever shows the *current* tree's commits, so the
-  row carries the others' last activity without a switch.
-- **Freshness line** — `fetched Xm ago` under the rows; absent before
-  the first fetch attempt.
-- **Hint line** — the modal key reference, mirroring the branches
-  modal's hint.
+The 2-col gutter carries two independent signals: the cursor bar `▌`
+(the card under `j`/`k`, running down all three lines) and the current
+marker `▶` (the worktree `m.workdir` lives in). Because the branch no
+longer shares a row with the path, the directory name, and the subject,
+**nothing truncates under width pressure** — the failure mode the old
+single-row layout forced.
 
-Dirty marker on each row:
+- **Line 1 — branch + status.** The branch leads (git guarantees one
+  branch per attached worktree, so it's the stable identifier; detached
+  trees read `(detached)`). The status cluster right-anchors, left to right:
+  the open-PR badge `#N` + CI glyph (`✓` pass · `✗` fail · `○` running, from
+  the same `gh pr list` rollup the graph chips use — `Model.prs`, keyed
+  directly by `wt.Branch`); the upstream delta `↑a↓b` (ahead/behind, omitted
+  when the branch has no upstream or is in sync); the `●N` dirty marker
+  (`N` = changed-file count); and the relative last-commit time. Only the
+  branch truncates when the line is tight; the status never does.
+- **Line 2 — path (dim).** The worktree path with `$HOME` collapsed to
+  `~`, left-truncated (`…tail`) so the directory basename — the part that
+  tells trees apart — survives.
+- **Line 3 — subject.** The worktree HEAD's last-commit subject (`—` when
+  the tree has no commit yet). The graph only shows the *current* tree's
+  commits, so the card carries the others' last activity without a switch.
 
-- `●` — `git status` returned non-empty (dirty).
-- `?` — the per-row 3s budget was exhausted; render a placeholder so
-  the modal never silently lies about a slow / stuck worktree.
-- (none) — clean, OR not yet loaded.
+Dirty marker (`●N` / `?`), upstream delta, and the last-commit subject +
+time all come from the per-tree fan-out (see **Dirty fan-out**): `●N`
+(`N` changed files) when `git status` is non-empty, `?` when the per-row 3s
+budget was exhausted (so the card never silently lies about a slow tree),
+absent when clean or not yet loaded. The fan-out's `git status` already
+parses the changed files, so the count is free — no extra probe.
 
-### Last-commit column
+Cards stack with a blank separator and window to the available height;
+when the list overflows, `↑ N more` / `↓ N more` markers cap the visible
+run and the window follows the cursor. `refModel.SetWorktrees` populates
+the state; the fan-out fires after every `worktreesLoadedMsg` and tags
+each row's `worktreeDirty` / `worktreeTimedOut` / `worktreeLastCommit`.
 
-`subject` (truncated) + `time` (relative, e.g. `2m`, `3d` — the same
-`relativeShortAt` vocabulary as the footer, no ` ago` suffix) show the
-worktree HEAD's last commit. Both come from the dirty fan-out (one
-`git log -1` per tree, folded into the same goroutine as the dirty
-probe — see **Dirty fan-out**).
-
-Width-adaptive degradation: the row width tracks the terminal inside a
-40–76 cell band, and rows past the 16-row window scroll behind
-`↑/↓ N more` markers (shared renderScrollWindow math with the branch
-modals). Display order is `▶ name · branch · ● · subject · time`; columns are
-allocated in **keep-priority** order — each takes space only if it (plus
-its separator) still fits, but a column that doesn't fit is skipped while
-smaller lower-priority columns still claim the leftover, so a too-long
-`subject` never leaves the row half-empty. Keep-priority, highest first:
-
-1. `name` — always survives (capped + padded as above).
-2. `branch`
-3. `subject` — hidden whenever fewer than **12** columns remain for it (a
-   1–2 char fragment is useless); when shown it takes its own width up to a
-   **30**-column cap.
-4. `●` dirty marker
-5. `time`
-
-So `subject` and `branch` outlive the small `●` / `time` columns under
-width pressure (the inversion the redesign fixed: a long name used to push
-branch + subject out first). A worktree with no commits yet (unborn HEAD /
-bare) or a still-loading / timed-out row renders the `subject` + `time`
-slots **blank** — never `?`. The `?` placeholder is reserved for the
-dirty marker; a `?` in the time slot would read as a literal value.
-
-`refModel.SetWorktrees(entries, currentPath)` populates the state;
-per-tree fan-out fires after every `worktreesLoadedMsg` and tags each
-row's `worktreeDirty` / `worktreeTimedOut` / `worktreeLastCommit`
-state.
-
-## Worktrees modal (`viewModeWorktreesModal`)
+## Worktrees dashboard (`viewModeWorktreesModal`)
 
 The cursor surface for worktree actions. Opened by the global `w`
-keybind from `viewModeNormal`; `w` again or `esc` closes it.
+keybind from `viewModeNormal`; `w` again or `esc` returns to the graph.
+(The `Modal` in `viewModeWorktreesModal` is a historical artifact from
+when it was a centered overlay — it's a full-screen view now.)
 
 | Key       | Action                                                              |
 | --------- | ------------------------------------------------------------------- |
 | `j` / `k` | move cursor within the list (bounded; no wrap)                      |
-| `enter`   | switch to the worktree under the cursor (closes the modal)          |
+| `enter`   | switch to the worktree under the cursor (returns to the graph)      |
 | `a`       | open the add-worktree input sub-modal                               |
 | `d`       | open the remove-worktree confirm sub-modal (refuses main + current entry) |
 | `s`       | toggle last-commit sort (main pinned, rest newest-first)            |
@@ -107,11 +85,13 @@ keybind from `viewModeNormal`; `w` again or `esc` closes it.
 
 Visual cues:
 
-- The cursor row gets a background tint (`colorCursorRowBg`, xterm 237)
-  layered behind whatever foreground styling the row already has. On
-  the `▶` current row, the bold + accent fg survives the bg overlay so
-  both signals (current + cursor) read independently.
-- The backdrop dims (composeOverlay), same as every centered modal.
+- The cursor card carries a left bar `▌` (accent color) down all three
+  of its lines — the only per-card highlight. A background tint across a
+  multi-line card would fight the lipgloss wrap-reset on its styled
+  segments, so the gutter bar does the job instead.
+- The current worktree (the one `m.workdir` lives in) prefixes its branch
+  line with `▶`. Cursor (`▌`) and current (`▶`) are independent signals:
+  the card you're pointing at need not be the tree you're in.
 
 ### Last-commit sort (`s`)
 
@@ -131,7 +111,7 @@ natural order again (no config persistence). While the sort is on, a
 
 Opening lands the cursor on the current worktree row if found, else
 on row 0. Empty inventory rejects entry with a status line and stays
-in `viewModeNormal`. While the modal is open it owns every key (the
+in `viewModeNormal`. While the dashboard is open it owns every key (the
 standard modal contract) — global shortcuts resume on close.
 
 ## Add input sub-modal (`viewModeWorktreeAddInput`)
@@ -221,21 +201,23 @@ goroutines, one per worktree path. Each one's result lands as a
 separate `worktreeDirtyResultMsg` so rows light up incrementally
 instead of waiting for the slowest tree.
 
-Each goroutine runs **two** probes and ships them in one msg: the dirty
-`git status` and the last-commit `git log -1` (subject + committer
-time). Folding the last-commit fetch into the dirty goroutine — rather
-than a second independent fan-out — keeps a single `reqID`-tagged msg,
-halves the goroutine count, makes the `●` marker and the subject/time
-columns appear in the same frame (no jitter between them), and means
-last-commit inherits every dirty refresh trigger below for free (its
-data goes stale on exactly the same events). The dirty probe runs first
-so it owns the budget; `WorktreeLastCommit`'s error is dropped (blank
-columns) since a missing subject is non-fatal. Unlike `git status`,
-`git log` never rewrites `.git/index`, so the fold adds no
+Each goroutine runs **three** probes and ships them in one msg: the dirty
+`git status` (its parsed entries also give the `●N` changed-file count for
+free), the last-commit `git log -1` (subject + committer time), and the
+ahead/behind `git rev-list --left-right --count @{u}...HEAD`. Folding them
+into one goroutine — rather than three independent fan-outs — keeps a
+single `reqID`-tagged msg, cuts the goroutine count, makes the `●` marker,
+the subject/time columns, and the `↑↓` counts appear in the same frame (no
+jitter between them), and means all three inherit every dirty refresh
+trigger below for free (their data goes stale on exactly the same events).
+The dirty probe runs first so it owns the budget; `WorktreeLastCommit` and
+`WorktreeAheadBehind` errors are dropped (blank columns) since a missing
+subject or upstream is non-fatal. Unlike `git status`, neither `git log`
+nor `git rev-list` rewrites `.git/index`, so the fold adds no
 watcher-flicker risk (see below).
 
 **E3 budget**: each per-row goroutine has a 3-second
-`context.WithTimeout` shared by both probes. On timeout the msg carries
+`context.WithTimeout` shared by the three probes. On timeout the msg carries
 `timedOut=true`; the modal renders `?` for that row's dirty marker
 instead of trusting the (effectively unknown) dirty bit, and leaves the
 last-commit columns blank. Without the budget a stuck NFS / slow

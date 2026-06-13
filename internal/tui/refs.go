@@ -5,23 +5,19 @@
 //   - byKind ([local, remote, tag]) backs graph Enter's chip evaluator
 //     and the branches modal's source list (via LocalRefs / RemoteRefs).
 //   - worktrees + dirty/timed-out maps + currentWorktreePath back the
-//     the worktrees modal (via Worktrees /
+//     worktrees dashboard (via Worktrees /
 //     WorktreeDirty / SelectedWorktree-style consumers in worktree.go).
-//   - lastFetchAt backs the worktrees modal's fetched-Xm-ago line.
+//   - lastFetchAt backs the worktrees dashboard's fetched-Xm-ago line.
 //
-// The row render func (renderWorktreeSidebarRow) lives here because it
-// reads refModel state with the same visual vocabulary as its caller.
-// The "Sidebar" in the name is a historical artifact, not a place.
+// The dashboard's card renderer lives in worktreeview.go.
 package tui
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -35,9 +31,10 @@ type refModel struct {
 
 	worktrees           []git.Worktree
 	currentWorktreePath string
-	worktreeDirty       map[string]bool
+	worktreeDirtyCount  map[string]int
 	worktreeTimedOut    map[string]bool
 	worktreeLastCommit  map[string]worktreeCommitMeta
+	worktreeSync        map[string]worktreeSyncMeta
 
 	lastFetchAt time.Time
 }
@@ -49,6 +46,14 @@ type refModel struct {
 type worktreeCommitMeta struct {
 	subject string
 	when    time.Time
+}
+
+// worktreeSyncMeta caches one worktree's ahead/behind counts vs its upstream.
+// hasUpstream=false (no upstream configured, detached, or unborn HEAD) makes the
+// card omit the `↑↓` column rather than show a misleading 0/0.
+type worktreeSyncMeta struct {
+	ahead, behind int
+	hasUpstream   bool
 }
 
 func newRefsModel() refModel { return refModel{} }
@@ -112,8 +117,8 @@ func (r refModel) RemoteRefs() []git.Ref { return r.byKind[1] }
 func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 	r.worktrees = entries
 	r.currentWorktreePath = currentPath
-	if r.worktreeDirty == nil {
-		r.worktreeDirty = make(map[string]bool)
+	if r.worktreeDirtyCount == nil {
+		r.worktreeDirtyCount = make(map[string]int)
 	}
 	if r.worktreeTimedOut == nil {
 		r.worktreeTimedOut = make(map[string]bool)
@@ -121,13 +126,16 @@ func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 	if r.worktreeLastCommit == nil {
 		r.worktreeLastCommit = make(map[string]worktreeCommitMeta)
 	}
+	if r.worktreeSync == nil {
+		r.worktreeSync = make(map[string]worktreeSyncMeta)
+	}
 	live := make(map[string]struct{}, len(entries))
 	for _, e := range entries {
 		live[e.Path] = struct{}{}
 	}
-	for p := range r.worktreeDirty {
+	for p := range r.worktreeDirtyCount {
 		if _, ok := live[p]; !ok {
-			delete(r.worktreeDirty, p)
+			delete(r.worktreeDirtyCount, p)
 		}
 	}
 	for p := range r.worktreeTimedOut {
@@ -140,21 +148,36 @@ func (r *refModel) SetWorktrees(entries []git.Worktree, currentPath string) {
 			delete(r.worktreeLastCommit, p)
 		}
 	}
+	for p := range r.worktreeSync {
+		if _, ok := live[p]; !ok {
+			delete(r.worktreeSync, p)
+		}
+	}
 }
 
-func (r *refModel) SetWorktreeDirty(path string, dirty, timedOut bool) {
-	if r.worktreeDirty == nil {
-		r.worktreeDirty = make(map[string]bool)
+func (r *refModel) SetWorktreeDirty(path string, dirtyCount int, timedOut bool) {
+	if r.worktreeDirtyCount == nil {
+		r.worktreeDirtyCount = make(map[string]int)
 	}
 	if r.worktreeTimedOut == nil {
 		r.worktreeTimedOut = make(map[string]bool)
 	}
-	r.worktreeDirty[path] = dirty
+	r.worktreeDirtyCount[path] = dirtyCount
 	if timedOut {
 		r.worktreeTimedOut[path] = true
 	} else {
 		delete(r.worktreeTimedOut, path)
 	}
+}
+
+// SetWorktreeSync stores one path's ahead/behind-vs-upstream counts from the
+// fan-out, alongside SetWorktreeDirty / SetWorktreeLastCommit in the same
+// worktreeDirtyResultMsg handler.
+func (r *refModel) SetWorktreeSync(path string, ahead, behind int, hasUpstream bool) {
+	if r.worktreeSync == nil {
+		r.worktreeSync = make(map[string]worktreeSyncMeta)
+	}
+	r.worktreeSync[path] = worktreeSyncMeta{ahead: ahead, behind: behind, hasUpstream: hasUpstream}
 }
 
 // SetWorktreeLastCommit stores one path's last-commit subject + time from the
@@ -170,8 +193,10 @@ func (r *refModel) SetWorktreeLastCommit(path, subject string, when time.Time) {
 
 func (r refModel) Worktrees() []git.Worktree { return r.worktrees }
 func (r refModel) WorktreeDirty(path string) bool {
-	return r.worktreeDirty[path]
+	return r.worktreeDirtyCount[path] > 0
 }
+func (r refModel) WorktreeDirtyCount(path string) int        { return r.worktreeDirtyCount[path] }
+func (r refModel) WorktreeSync(path string) worktreeSyncMeta { return r.worktreeSync[path] }
 
 // WorktreeLastCommit returns the cached last-commit subject + time for a
 // worktree path. Missing / not-yet-loaded paths return the zero value, which
@@ -215,142 +240,3 @@ func partitionByKind(refs []git.Ref) [3][]git.Ref {
 }
 
 var refHeaderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTime)).Bold(true)
-
-// worktreeSubjectFloor is the minimum leftover width (after the fixed
-// columns + separator) the last-commit subject needs before it renders at
-// all. Below it the subject column is dropped whole rather than chopped to a
-// useless "f…" fragment. worktreeSubjectCap bounds it on the other end so a
-// wide terminal can't let one verbose subject swallow the row.
-const (
-	worktreeSubjectFloor = 12
-	worktreeSubjectCap   = 30
-)
-
-// worktreeNameCap bounds the worktree name column. Names are derived from the
-// worktree directory basename, which can be long (e.g. a branch-shaped
-// `feat+worktree-sort-by-last-commit`); without a cap one long name swallows
-// the row and starves the higher-value branch / subject columns.
-const worktreeNameCap = 24
-
-// worktreeDisplayName is the basename of a worktree path, capped at
-// worktreeNameCap. Shared by the row renderer and the modal caller (which
-// pre-measures it to compute the aligned name-column width) so the cap lives
-// in one place.
-func worktreeDisplayName(path string) string {
-	name := path
-	if i := strings.LastIndexByte(name, '/'); i >= 0 {
-		name = name[i+1:]
-	}
-	return runewidth.Truncate(name, worktreeNameCap, "…")
-}
-
-// renderWorktreeSidebarRow formats one worktree entry inside the worktrees-modal
-// row body. `▶` + bold for the current entry; 2-col indent for the rest. The
-// `Sidebar` in the name is a historical artifact — the modal reuses the
-// same row shape.
-//
-// Display order is `▶ name · branch · ● · subject · time`. `name` is capped
-// at worktreeNameCap and, when `nameColW` > the row's own name, padded to that
-// width so the columns after it line up across rows (the caller passes the
-// set-wide max). Padding is skipped on a terminal too narrow to spare it, so
-// alignment yields to information density.
-//
-// Columns are allocated in keep-priority order
-// `name > branch > subject > ● dirty > time`: each is added only if it
-// (plus its separator) still fits, but a column that doesn't fit is skipped
-// while smaller lower-priority columns still get a shot at the leftover — so a
-// too-long subject never leaves the row half-empty. `name` always survives;
-// subject takes up to worktreeSubjectCap and is hidden below
-// worktreeSubjectFloor. A zero `when` / empty `subject` (loading, timed-out,
-// or unborn-HEAD worktree) simply omits that column — the last-commit slots
-// render blank, never `?`.
-func renderWorktreeSidebarRow(wt git.Worktree, isCurrent, selected bool, dirtyMark, subject string, when, now time.Time, width, nameColW int) string {
-	const prefixWidth = 2
-	const sep = " · "
-	sepW := runewidth.StringWidth(sep)
-	prefix := "  "
-	if isCurrent {
-		prefix = cursorStyle.Render("▶") + " "
-	}
-	name := worktreeDisplayName(wt.Path)
-	avail := width - prefixWidth
-	if avail < 1 {
-		return prefix
-	}
-	// Align the name column to the set-wide max so the following columns share
-	// a start column across rows. Skipped when the row can't spare the padding
-	// (name col + a separator + a floor-width subject) — density wins there.
-	if nameW := runewidth.StringWidth(name); nameColW > nameW && nameColW+sepW+worktreeSubjectFloor <= avail {
-		name += strings.Repeat(" ", nameColW-nameW)
-	}
-
-	branch := ""
-	switch {
-	case wt.Detached:
-		branch = "(detached)"
-	case wt.Branch != "":
-		branch = wt.Branch
-	}
-	timeStr := ""
-	if !when.IsZero() {
-		timeStr = relativeShortAt(when, now)
-	}
-
-	// Greedy allocation in keep-priority order. cur tracks the running display
-	// width (incl. separators); fits() asks whether one more column still fits.
-	cur := runewidth.StringWidth(name)
-	fits := func(w int) bool { return cur+sepW+w <= avail }
-
-	useBranch := branch != "" && fits(runewidth.StringWidth(branch))
-	if useBranch {
-		cur += sepW + runewidth.StringWidth(branch)
-	}
-	// subject is elastic: it takes its own width up to worktreeSubjectCap, but
-	// only when at least worktreeSubjectFloor is free — otherwise it drops whole
-	// and the leftover falls through to the small dirty / time columns.
-	if subject != "" {
-		if room := avail - cur - sepW; room >= worktreeSubjectFloor {
-			budget := room
-			if budget > worktreeSubjectCap {
-				budget = worktreeSubjectCap
-			}
-			subject = runewidth.Truncate(subject, budget, "…")
-			cur += sepW + runewidth.StringWidth(subject)
-		} else {
-			subject = ""
-		}
-	}
-	useDirty := dirtyMark != "" && fits(runewidth.StringWidth(dirtyMark))
-	if useDirty {
-		cur += sepW + runewidth.StringWidth(dirtyMark)
-	}
-	useTime := timeStr != "" && fits(runewidth.StringWidth(timeStr))
-
-	parts := []string{name}
-	if useBranch {
-		parts = append(parts, branch)
-	}
-	if useDirty {
-		parts = append(parts, dirtyMark)
-	}
-	if subject != "" {
-		parts = append(parts, subject)
-	}
-	if useTime {
-		parts = append(parts, timeStr)
-	}
-	body := runewidth.Truncate(strings.Join(parts, sep), avail, "…")
-	// isCurrent paints the "you're here" body styling (bold + accent fg)
-	// independent of focus — Decision 4 keeps the ▶ row visually salient
-	// whether or not the modal has the cursor.
-	if isCurrent {
-		body = selectedStyle.Render(body)
-	}
-	// selected overlays a background tint to mark the modal cursor
-	// row. fg / bg are independent channels in lipgloss, so the bold +
-	// accent fg above survives the bg overlay.
-	if selected {
-		body = cursorRowBgStyle.Render(body)
-	}
-	return prefix + body
-}

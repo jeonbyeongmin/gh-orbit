@@ -1265,13 +1265,20 @@ func (m Model) View() string {
 	s := m.paneSizes()
 
 	var main string
-	if m.mode == viewModeLocalChanges {
+	switch {
+	case m.mode == viewModeLocalChanges:
 		treeFocused := m.localChanges.Focused() == paneLCTree
 		diffFocused := m.localChanges.Focused() == paneLCDiff
 		treeBox := boxStyle(treeFocused).Width(s.lcTreeW).Height(s.lcTreeH).Render(m.localChanges.TreeView())
 		diffBox := boxStyle(diffFocused).Width(s.lcDiffW).Height(s.lcDiffH).Render(m.localChanges.DiffView())
 		main = lipgloss.JoinHorizontal(lipgloss.Top, treeBox, diffBox)
-	} else {
+	case m.isWorktreesSurface():
+		// Full-screen worktree dashboard replaces the graph (same seam as
+		// Local Changes). Its add / remove confirm sub-modals keep the
+		// dashboard as their backdrop via isWorktreesSurface so the centered
+		// confirm box composes over it, not over the graph.
+		main = boxStyle(true).Width(s.graphW).Height(s.graphH).Render(m.renderWorktreesView(s.graphW, s.graphH))
+	default:
 		main = boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
 	}
 	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
@@ -1289,8 +1296,6 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderWorktreeRemoveConfirmInner()), m.width, m.height)
 	case viewModeZombieCleanupConfirm:
 		return composeOverlay(base, renderModalBox(m.renderZombieCleanupConfirmInner()), m.width, m.height)
-	case viewModeWorktreesModal:
-		return composeOverlay(base, renderModalBox(m.renderWorktreesModalInner()), m.width, m.height)
 	case viewModePRsModal:
 		return composeOverlay(base, renderModalBox(m.renderPRsModalInner()), m.width, m.height)
 	case viewModeBranchCreateInput:
@@ -1316,6 +1321,18 @@ func boxStyle(focused bool) lipgloss.Style {
 	return borderUnfocused
 }
 
+// isWorktreesSurface reports whether the full-screen worktree dashboard owns
+// the main area — the dashboard itself or one of its centered confirm
+// sub-modals (add / remove), which compose over the dashboard as their
+// backdrop rather than over the graph.
+func (m Model) isWorktreesSurface() bool {
+	switch m.mode {
+	case viewModeWorktreesModal, viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm:
+		return true
+	}
+	return false
+}
+
 // renderHelpStatus lays out the bottom line as "help … status". When the
 // terminal is too narrow to fit both, status wins — the user just triggered
 // an action and seeing its outcome matters more than the help reminder.
@@ -1331,7 +1348,7 @@ func boxStyle(focused bool) lipgloss.Style {
 func (m Model) renderHelpStatus() string {
 	switch m.mode {
 	case viewModeBranchPicker, viewModeBranchesModal, viewModePRsModal,
-		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
+		viewModeCheckoutConfirm, viewModeWorktreesModal, viewModeWorktreeAddInput,
 		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm,
 		viewModeBranchCreateInput, viewModeRefDeleteConfirm,
 		viewModeRebaseConfirm, viewModeCherryPickConfirm,

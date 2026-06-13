@@ -9,10 +9,16 @@ below. Pull is a separate global action (`p`).
 ## Dirty-tree confirm flow
 
 - The wrapper does **not** pre-flight `git status`. It runs the checkout, matches git's stderr, and wraps the failure with `ErrCheckoutNeedsCleanTree`. No race window between detection and the actual command.
-- On that sentinel the TUI enters `viewModeCheckoutConfirm`. Only `a` / `esc` / `ctrl+c` work; every other key is swallowed.
+- On that sentinel the TUI enters `viewModeCheckoutConfirm`. Only `s` / `a` / `esc` / `ctrl+c` work; every other key is swallowed.
+- `s` (stash & continue) runs `git stash push --include-untracked`, then replays the interrupted chain (checkout / FF / checkout+FF). The stash is left in place — nothing pops it automatically. The success status appends `stashed on <branch>`, and a later checkout back onto that branch appends a `git stash pop` reminder (in-session memory keyed by branch name, not a `git stash list` query — a repeat reminder after a manual pop is the accepted cost). A stash-step failure kills the whole chain (`stash failed: …`) and leaves the tree untouched.
 - `a` / `esc` clear `pendingCheckout` and leave the working tree alone.
 
-The modal is reused for the same-branch FF (`withFF`) and cross-branch FF (`withCheckoutFF`) paths — the hint text reflects which chain the abort applies to. graph Enter is the only entry, so the modal lookups never need to disambiguate refs-vs-graph callsites.
+This is deliberately narrower than the stash *surface* removed in
+subtract-stash (PR #42): no stash refs section, chips, drop modal, or
+auto-pop chain. Here the stash is an exit ramp for the reviewer's own
+WIP when an agent branch needs attention now — not a managed object.
+
+The modal is reused for the same-branch FF (`withFF`) and cross-branch FF (`withCheckoutFF`) paths — the hint text reflects which chain the decision applies to. graph Enter is the only entry, so the modal lookups never need to disambiguate refs-vs-graph callsites.
 
 ## graph `enter`
 
@@ -47,8 +53,11 @@ Mechanics:
 
 - The evaluator tags the dispatch (`graphActionMsg.pullAfter`); the model
   arms `pullAfterAction` only for tagged Checkout / FF / CheckoutAndFF
-  dispatches, and clears it on every failure or clean-tree detour, so an
-  aborted chain can never pull later by surprise.
+  dispatches, and clears it on every failure, so an aborted chain can
+  never pull later by surprise. The clean-tree detour keeps it armed
+  while the confirm modal decides: `s` (stash & continue) carries it
+  through the retry — the remote-chip Enter still ends synced with the
+  network — and `a` / `esc` clear it.
 - On success the status shows `<outcome> · pulling…` and reload + pull run
   in one batch; the pull respects the same strategy resolution as `p`
   (`[pull] strategy` → git config → `--ff-only`) and the `pullInFlight`

@@ -240,6 +240,13 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingCheckout = pendingCheckout{}
 		m.status = checkoutLabel(msg.ref, msg.detached)
 		m.statusStyle = statusOkS
+		m = m.consumeStashNotice()
+		// Return-time pop hint: landing on a branch stash-and-continue
+		// once left changes on. Detached refs are hashes — never in the
+		// map, so no detached guard is needed.
+		if m.stashedRefs[msg.ref] {
+			m.status += " · stashed changes here — git stash pop"
+		}
 		m.pendingHEADHash = pendingHEADSentinel
 		var pull tea.Cmd
 		var chained bool
@@ -250,10 +257,10 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.reloadCmd()
 
 	case checkoutNeedsCleanTreeMsg:
-		m.pullAfterAction = false
 		// Modal owns the next decision; release the in-flight gate.
 		// pendingCheckout stays intact so the modal hint can name the
-		// chain that was about to run.
+		// chain that was about to run. pullAfterAction also stays armed —
+		// the modal's `s` continues the chain, abort clears it.
 		m.checkoutInFlight = false
 		m.mode = viewModeCheckoutConfirm
 		m.status = "checkout: " + msg.ref + " — uncommitted changes"
@@ -265,6 +272,22 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.checkoutInFlight = false
 		m.pendingCheckout = pendingCheckout{}
 		m.status = "checkout failed: " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		// A stash that landed before the retry failed must still be
+		// named — the changes are gone from the tree either way.
+		m = m.consumeStashNotice()
+		return m, nil
+
+	case stashFailedMsg:
+		// The stash step itself failed: nothing was stashed, nothing was
+		// retried. Kill the whole chain — including the pull-after arm
+		// the modal carried through.
+		m.pullAfterAction = false
+		m.checkoutInFlight = false
+		m.ffInFlight = false
+		m.pendingCheckout = pendingCheckout{}
+		m.stashNotice = ""
+		m.status = "stash failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
 
@@ -319,8 +342,12 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ffSucceededMsg:
 		m.ffInFlight = false
+		// The stash retry path reaches here with pendingCheckout still
+		// armed (the modal's `s` keeps it for dirty re-entries) — drop it.
+		m.pendingCheckout = pendingCheckout{}
 		m.status = ffLabel(msg.branch, msg.advance)
 		m.statusStyle = statusOkS
+		m = m.consumeStashNotice()
 		m.pendingHEADHash = pendingHEADSentinel
 		var pull tea.Cmd
 		var chained bool
@@ -333,13 +360,14 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ffFailedMsg:
 		m.pullAfterAction = false
 		m.ffInFlight = false
+		m.pendingCheckout = pendingCheckout{}
 		log.Printf("graph enter: ff failed: %v", msg.err)
 		m.status = "fast-forward failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
+		m = m.consumeStashNotice()
 		return m, nil
 
 	case ffNeedsCleanTreeMsg:
-		m.pullAfterAction = false
 		m.ffInFlight = false
 		m.pendingCheckout = pendingCheckout{
 			ref:    msg.branch,
@@ -353,8 +381,13 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case checkoutThenFFSucceededMsg:
 		m.ffInFlight = false
+		m.pendingCheckout = pendingCheckout{}
 		m.status = ffLabel(msg.branch, msg.advance) + " (after checkout)"
 		m.statusStyle = statusOkS
+		m = m.consumeStashNotice()
+		if m.stashedRefs[msg.branch] {
+			m.status += " · stashed changes here — git stash pop"
+		}
 		m.pendingHEADHash = pendingHEADSentinel
 		var pull tea.Cmd
 		var chained bool
@@ -365,7 +398,6 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.reloadCmd()
 
 	case ffCheckoutNeedsCleanTreeMsg:
-		m.pullAfterAction = false
 		m.ffInFlight = false
 		m.pendingCheckout = pendingCheckout{
 			ref:            msg.branch,

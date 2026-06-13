@@ -217,6 +217,16 @@ func runCheckout(ctx context.Context, dir string, args []string) error {
 	return wrapGitErr("git checkout", runErr, msg)
 }
 
+// StashPush runs `git stash push --include-untracked`. The dirty-tree
+// confirm modal's stash-and-continue branch uses it to move the user's
+// uncommitted work out of the way before retrying the interrupted chain.
+// --include-untracked is deliberate: git refuses checkouts over untracked
+// collisions too, and a plain stash would leave those behind to refuse
+// again. The entry stays in the stash — nothing pops it automatically.
+func StashPush(ctx context.Context, dir string) error {
+	return runGitWrite(ctx, dir, "git stash push", nil, "stash", "push", "--include-untracked")
+}
+
 // MergeFFOnly runs `git merge --ff-only <hash>`. On success the current
 // branch tip advances to <hash> with no merge commit and no checkout.
 // Callers may pre-gate with CountAhead (advance > 0 implies the FF will

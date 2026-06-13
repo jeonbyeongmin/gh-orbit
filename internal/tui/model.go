@@ -240,6 +240,18 @@ type Model struct {
 	// tree confirm modal can name what the user was attempting to do and
 	// drop the slot on 'a'/esc.
 	pendingCheckout pendingCheckout
+	// stashNotice is armed by the dirty-tree confirm's `s` dispatch with
+	// the local branch the auto-stash was taken on (empty when no stash
+	// chain is in flight — and on a detached HEAD, whose stash just loses
+	// its hints). The next checkout/FF terminal msg consumes it via
+	// consumeStashNotice.
+	stashNotice string
+	// stashedRefs remembers, for this session, the branches stash-and-
+	// continue left an auto-stash on. A later successful checkout back
+	// onto one appends the `git stash pop` reminder to the status line.
+	// Entries are never removed — a repeat reminder after a manual pop is
+	// cheaper than asking `git stash list` on every checkout.
+	stashedRefs map[string]bool
 	// actionInFlight gates graph-pane Enter while evaluateGraphActionCmd
 	// is resolving the cursor's chip / ancestry state. Released by the
 	// graphActionMsg handler before any follow-up cmd is dispatched —
@@ -254,8 +266,9 @@ type Model struct {
 	// pullAfterAction arms the "enter on origin/xx" chain: set when the
 	// graphActionMsg dispatch carried pullAfter, consumed by the
 	// checkout/FF success handlers (which then fire pullCmd) and cleared
-	// on every failure / clean-tree detour so an aborted chain can't pull
-	// later by surprise.
+	// on every failure so an aborted chain can't pull later by surprise.
+	// The clean-tree detour keeps it armed while the modal decides: `s`
+	// (stash & continue) carries it through the retry, abort clears it.
 	pullAfterAction bool
 	// branchPicker backs viewModeBranchPicker. Reset to the zero value on
 	// esc / enter; the picker reads candidates+cursor while open and
@@ -451,6 +464,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case checkoutSucceededMsg,
 		checkoutNeedsCleanTreeMsg,
 		checkoutFailedMsg,
+		stashFailedMsg,
 		graphActionMsg,
 		ffSucceededMsg,
 		ffFailedMsg,
@@ -678,6 +692,23 @@ func (m Model) beginCheckout(ref string, detached bool) (Model, tea.Cmd) {
 	m.status = checkoutLabel(ref, detached) + " …"
 	m.statusStyle = statusBusyS
 	return m, checkoutCmd(m.workdir, ref, detached)
+}
+
+// consumeStashNotice folds the one-shot stash-and-continue reminder into
+// the just-set status line: the suffix tells the user which branch their
+// changes were stashed on, and the branch is recorded so checking it out
+// again surfaces the pop hint. No-op when no stash chain was in flight.
+func (m Model) consumeStashNotice() Model {
+	if m.stashNotice == "" {
+		return m
+	}
+	if m.stashedRefs == nil {
+		m.stashedRefs = make(map[string]bool)
+	}
+	m.stashedRefs[m.stashNotice] = true
+	m.status += " · stashed on " + m.stashNotice
+	m.stashNotice = ""
+	return m
 }
 
 // checkoutLabel renders the user-facing "checkout: …" prefix shared by the
@@ -920,9 +951,10 @@ func (m Model) renderRefDeleteConfirmInner() string {
 
 // renderCheckoutConfirmInner returns the 3-row content for the dirty-tree
 // confirm modal: bold "Uncommitted changes" header, a variant body line,
-// and an abort hint. The hint stays uniform across variants since the only
-// way forward through a dirty tree is to commit / drop changes outside the
-// cockpit, then retry — the modal exists to name what was attempted.
+// and the option hint. `s` stashes the changes (incl. untracked) and
+// replays the interrupted chain — the stash stays put for a later pop;
+// `a` / esc leave the working tree alone. The hint stays uniform across
+// variants — "continue" reads correctly for all three chains.
 func (m Model) renderCheckoutConfirmInner() string {
 	p := m.pendingCheckout
 
@@ -939,7 +971,7 @@ func (m Model) renderCheckoutConfirmInner() string {
 	return strings.Join([]string{
 		confirmPromptS.Render("Uncommitted changes"),
 		statusBusyS.Render(body),
-		help.Render("[a] abort · [esc] cancel"),
+		help.Render("[s] stash & continue · [a] abort · [esc] cancel"),
 	}, "\n")
 }
 

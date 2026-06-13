@@ -34,7 +34,13 @@ var (
 	checkoutDetachedExec = git.CheckoutDetached
 	mergeFFOnlyExec      = git.MergeFFOnly
 	countAheadExec       = git.CountAhead
+	stashPushExec        = git.StashPush
 )
+
+// stashFailedMsg fires when stashThenRetryCmd's `git stash push` step
+// failed. The interrupted chain is dead — nothing was stashed, nothing was
+// retried, and the working tree is exactly as the user left it.
+type stashFailedMsg struct{ err error }
 
 // ffSucceededMsg fires when ffOnlyCmd's `git merge --ff-only` completed
 // without a checkout step (Case 1: HEAD already on the branch we're
@@ -137,6 +143,30 @@ func checkoutThenFFCmd(dir, branch, hash string) tea.Cmd {
 			return ffFailedMsg{err: err}
 		}
 		return checkoutThenFFSucceededMsg{branch: branch, advance: advance}
+	}
+}
+
+// stashThenRetryCmd runs `git stash push --include-untracked`, then
+// replays the chain the dirty-tree confirm interrupted (checkout / FF /
+// checkout+FF — the same encoding of p the modal hint reads). The retry
+// reuses the original cmds so success / failure / a dirty re-entry land on
+// the existing handlers; only the stash step itself gets a dedicated msg.
+func stashThenRetryCmd(dir string, p pendingCheckout) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), checkoutTimeout)
+		err := stashPushExec(ctx, dir)
+		cancel()
+		if err != nil {
+			return stashFailedMsg{err: err}
+		}
+		switch {
+		case p.withFF:
+			return ffOnlyCmd(dir, p.ref, p.ffHash)()
+		case p.withCheckoutFF:
+			return checkoutThenFFCmd(dir, p.ref, p.ffHash)()
+		default:
+			return checkoutCmd(dir, p.ref, p.detached)()
+		}
 	}
 }
 

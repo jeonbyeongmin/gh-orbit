@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -244,6 +245,12 @@ type Model struct {
 	// the next overlay keypress; prReviewNoticeErr picks its color.
 	prReviewNotice    string
 	prReviewNoticeErr bool
+	// prReviewBody is the comment / request-changes textarea, live while
+	// prAction is prActionComment / prActionRequestChanges. prReviewBodyErr is
+	// the inline editor error (empty-body guard / gh failure) — a failed submit
+	// keeps the editor open with the cause shown instead of closing it.
+	prReviewBody    textarea.Model
+	prReviewBodyErr string
 	// pullInFlight gates the p key. Tracked separately from fetchInFlight so
 	// F + P can run in parallel; git's own .git/index.lock is the real
 	// serialization point.
@@ -609,7 +616,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prApproveDoneMsg,
 		prApproveFailedMsg,
 		prMergeDoneMsg,
-		prMergeFailedMsg:
+		prMergeFailedMsg,
+		prReviewBodyDoneMsg,
+		prReviewBodyFailedMsg:
 		return m.updatePRReviewMsg(msg)
 
 	case tea.FocusMsg,

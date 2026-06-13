@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -124,6 +125,23 @@ func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.handleCtrlC()
 			}
 			return m, nil
+		case prActionComment, prActionRequestChanges:
+			switch msg.String() {
+			case "ctrl+s":
+				return m.dispatchPRReviewBody()
+			case "esc":
+				m.prAction = prActionNone
+				m.prReviewBody = textarea.Model{}
+				m.prReviewBodyErr = ""
+				return m, nil
+			case "ctrl+c":
+				return m.handleCtrlC()
+			}
+			// Everything else is body text — forward to the editor (`a`/`m`/
+			// `c`/`r` etc. type literally, not re-arm actions).
+			var cmd tea.Cmd
+			m.prReviewBody, cmd = m.prReviewBody.Update(msg)
+			return m, cmd
 		}
 		// Browse state: arm the inline confirms; everything else (scroll,
 		// file jump, close) falls through to the shared keymap below.
@@ -134,6 +152,10 @@ func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "m":
 			m.prAction = prActionMerge
 			return m, nil
+		case "c":
+			return m.beginPRReviewBody(prActionComment)
+		case "r":
+			return m.beginPRReviewBody(prActionRequestChanges)
 		}
 	}
 	switch msg.String() {
@@ -143,6 +165,8 @@ func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.reviewPRNumber = 0
 		m.prAction = prActionNone
 		m.prReviewNotice = ""
+		m.prReviewBody = textarea.Model{}
+		m.prReviewBodyErr = ""
 		return m, nil
 	case "ctrl+c":
 		return m.handleCtrlC()

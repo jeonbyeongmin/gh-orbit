@@ -46,7 +46,7 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | `n` | `git checkout -b <name> <commit>` |
 | `F` / `p` / `P` | `git fetch --all` / `git pull` / `git push` |
 | `o` (PR 웹에서 열기) | `gh pr view --web <number>` |
-| `O` → `a` / `m` (PR 리뷰) | `gh pr diff <n>` · `gh pr review --approve` · `gh pr merge --squash\|--merge\|--rebase` |
+| `O` → `a` / `m` / `c` / `r` (PR 리뷰) | `gh pr diff <n>` · `gh pr review --approve\|--comment\|--request-changes` · `gh pr merge --squash\|--merge\|--rebase` |
 | `l` PR 목록 모달 | `gh pr list` (재사용) → 행을 `O` 오버레이로 리뷰 |
 | 브랜치 칩의 PR 배지 | `gh pr list` + `gh pr checks <number>` |
 | `y` | `git rev-parse <commit>` → 클립보드 |
@@ -73,6 +73,7 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 - 칩에 열린 PR 배지가 달린 커밋에서 `O` 는 그 PR 의 diff(`gh pr diff`)를 커밋 diff 가 쓰는 것과 같은 전체 화면 patch 오버레이로 가져온다 — `[` / `]` 파일 네비와 스크롤이 동일하게 동작한다.
 - `l` 은 PR 목록 모달을 연다 — 로컬에 체크아웃되지 않은 것(`O` 로는 닿지 못하는)까지 포함한 모든 열린 PR. 행은 `#N <CI 글리프> 제목 · 작성자` 로 읽히고, `enter` 는 커서 행을 같은 리뷰 오버레이로 열어 `a` / `m` 이 동일하게 동작한다.
 - `a` 는 approve(`gh pr review --approve`), `m` 은 merge — 전략을 고른다: `[s]` squash · `[m]` merge · `[r]` rebase(`gh pr merge`). 둘 다 diff 위에 띄워지는 중앙 confirm 다이얼로그로 확인하므로, 결정하는 동안 diff 가 dim 된 채 뒤에 남는다.
+- `c` 는 comment, `r` 은 request-changes — 둘 다 dim 된 diff 위에 multi-line 본문 에디터를 띄운다. `ctrl+s` 제출(`gh pr review --comment` / `--request-changes`), `esc` 취소. 제출 실패 시 에러를 인라인으로 보여주며 에디터를 유지한다.
 - approve 는 오버레이를 유지하고(계속 읽거나 이어서 merge), merge 는 그래프로 닫히며 PR 배지를 갱신한다. gh 에러(본인 PR approve, merge 불가, 로그아웃 상태)는 힌트 줄에 표시된다.
 
 ### worktree (`w`)
@@ -114,6 +115,7 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | `l` | 전역 | PR 목록 모달 열기 (열린 PR 아무거나 리뷰) |
 | `[` / `]` | 패치 | 이전 / 다음 파일로 점프 |
 | `a` / `m` | PR 리뷰 | 열린 PR approve / merge (`m` → s/m/r) |
+| `c` / `r` | PR 리뷰 | comment / request changes (본문 에디터 → `ctrl+s`) |
 | `,` | 전역 | Local Changes 뷰 |
 | `space` | local changes | focus 파일 stage / unstage (diff 패널에선 hunk) |
 | `[` / `]` | local changes diff | 이전 / 다음 hunk |
@@ -139,10 +141,6 @@ XDG 규격 경로(`internal/config` 가 해석 담당):
 
   pull strategy 해석 순서: 환경설정 `[pull] strategy` → git config `pull.rebase` → `pull.ff` → 폴백 `--ff-only`.
 - 로그 — `$XDG_STATE_HOME/gh-orbit/log`(TUI 가 stdout 을 소유하므로 런타임 로깅이 여기로 간다).
-
-## 로드맵
-
-1. PR 리뷰: request-changes / comment(본문 에디터).
 
 ## 개발
 

@@ -46,7 +46,7 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `n` | `git checkout -b <name> <commit>` |
 | `F` / `p` / `P` | `git fetch --all` / `git pull` / `git push` |
 | `o` (open PR on web) | `gh pr view --web <number>` |
-| `O` → `a` / `m` (review PR) | `gh pr diff <n>` · `gh pr review --approve` · `gh pr merge --squash\|--merge\|--rebase` |
+| `O` → `a` / `m` / `c` / `r` (review PR) | `gh pr diff <n>` · `gh pr review --approve\|--comment\|--request-changes` · `gh pr merge --squash\|--merge\|--rebase` |
 | `l` PR list modal | `gh pr list` (reused) → review a row via the `O` overlay |
 | PR badges on branch chips | `gh pr list` + `gh pr checks <number>` |
 | `y` | `git rev-parse <commit>` → clipboard |
@@ -73,6 +73,7 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 - `O` on a commit whose chip carries an open-PR badge pulls that PR's diff (`gh pr diff`) into the same full-screen patch overlay the commit diff uses — `[` / `]` file navigation and scrolling work identically.
 - `l` opens the PR list modal — every open PR, including ones whose head branch isn't checked out locally (which `O` can't reach). Rows read `#N <CI glyph> title · author`; `enter` opens the cursor row in the same review overlay, so `a` / `m` behave identically.
 - `a` approves (`gh pr review --approve`); `m` merges, picking a strategy — `[s]` squash · `[m]` merge · `[r]` rebase (`gh pr merge`). Both ask in a centered confirm dialog composed over the diff, so it stays in view (dimmed) while you decide.
+- `c` comments, `r` requests changes — both open a multi-line body editor over the dimmed diff; `ctrl+s` submits (`gh pr review --comment` / `--request-changes`), `esc` cancels. A failed submit keeps the editor open with the error inline.
 - Approve keeps the overlay open (read on, or merge next); merge closes back to the graph and refreshes the PR badges. gh errors (approving your own PR, not mergeable, logged-out `gh`) surface on the hint line.
 
 ### Worktrees (`w`)
@@ -114,6 +115,7 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `l` | global | open the PR list modal (review any open PR) |
 | `[` / `]` | patch | jump to previous / next file |
 | `a` / `m` | PR review | approve / merge the open PR (`m` → s/m/r) |
+| `c` / `r` | PR review | comment / request changes (body editor → `ctrl+s`) |
 | `,` | global | Local Changes view |
 | `space` | local changes | stage / unstage the focused file (or hunk, in the diff pane) |
 | `[` / `]` | local changes diff | previous / next hunk |
@@ -139,10 +141,6 @@ XDG-conformant paths (`internal/config` owns resolution):
 
   Pull strategy resolves as: prefs `[pull] strategy` → git config `pull.rebase` → `pull.ff` → fallback `--ff-only`.
 - Log — `$XDG_STATE_HOME/gh-orbit/log` (the TUI owns stdout, so runtime logging goes here).
-
-## Roadmap
-
-1. PR review: request-changes / comment (with a body editor).
 
 ## Develop
 

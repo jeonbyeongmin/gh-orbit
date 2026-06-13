@@ -48,16 +48,32 @@ shows on the hint line behind it.
 | --- | --- | --- |
 | `a` | browse | arm approve confirm |
 | `m` | browse | arm merge confirm |
+| `c` / `r` | browse | open the comment / request-changes body editor |
 | `[` / `]` · `j` / `k` · pgup/pgdn | browse | file nav + scroll (shared with commit overlay) |
 | `y` | approve armed | `gh pr review --approve` |
 | `s` / `m` / `r` | merge armed | `gh pr merge --squash` / `--merge` / `--rebase` |
-| `esc` | armed | cancel back to browse (overlay stays open) |
+| `ctrl+s` | body editor | submit `gh pr review --comment` / `--request-changes` |
+| `esc` | armed / editor | cancel back to browse (overlay stays open) |
 | `esc` / `q` | browse | close overlay → graph |
 | `ctrl+c` | in-flight | only key honored while a gh call runs |
 
 `O` opens the cursor PR; `l` opens the list. Lowercase `o` still opens
 the PR on the web (`gh pr view --web`). `--delete-branch` is
 deliberately never passed to `gh pr merge`.
+
+## Body editor (`c` / `r`)
+
+`c` / `r` arm `prActionComment` / `prActionRequestChanges` — a
+`bubbles/textarea` composed over the dimmed diff by the same
+`renderModalBox` path as the approve / merge confirms (it just renders
+an input instead of a y/n prompt). While armed, every key but `ctrl+s`
+(submit) and `esc` (cancel) is forwarded to the textarea, so `a` / `m` /
+`c` / `r` type literally rather than re-arming. `gh pr review
+--comment` / `--request-changes` both require a body, so an empty
+submit is rejected inline (`body required`) and a gh failure keeps the
+editor open with the error inline — only a clean submit closes it. The
+kind is derived from `prAction` (`reviewBodyKind`), not a parallel
+field.
 
 ## Outcome routing
 
@@ -68,6 +84,10 @@ deliberately never passed to `gh pr merge`.
   on the normal status line. Refreshes the PR list so the `#N` badge
   tracks the closed PR. No auto-fetch — the local graph reflects the
   merge only after the next `F` / `p`.
+- **comment / request-changes done** — editor closes, overlay stays
+  open; `commented on #N` / `requested changes on #N` notice on the hint
+  line. Refreshes the PR list (the CI badge is unaffected, but the
+  review state on GitHub now reflects it).
 - **failure** (approving your own PR, not mergeable, logged-out `gh`) —
   overlay stays open; `gh`'s own error (first line) on the hint line in
   the error color.

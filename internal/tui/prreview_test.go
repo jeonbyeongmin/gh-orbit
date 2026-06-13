@@ -298,7 +298,7 @@ func TestUpdatePRReviewApproveFailed(t *testing.T) {
 func TestRenderPRReviewHint(t *testing.T) {
 	m := prReviewOpen(t) // width 120, reviewPRNumber 42, prAction none
 	browse := m.renderPRReviewHint()
-	for _, want := range []string{"PR #42", "approve", "merge", "esc close"} {
+	for _, want := range []string{"PR #42", "approve", "merge", "comment", "changes", "esc close"} {
 		if !strings.Contains(browse, want) {
 			t.Errorf("browse hint missing %q: %q", want, browse)
 		}

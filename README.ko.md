@@ -2,7 +2,7 @@
 
 # gh-orbit
 
-로컬 git 을 터미널에서 리뷰하는 `gh` CLI 익스텐션 — 커밋 그래프, diff, 브랜치, worktree 를 키보드 중심의 단일 화면에서.
+로컬 git 을 터미널에서 리뷰하는 `gh` CLI 익스텐션 — 커밋 그래프와 diff 를 읽고, 각 worktree 의 PR 을 키보드 중심의 단일 대시보드에서 리뷰하고 머지한다.
 
 [![release](https://img.shields.io/github/v/release/jeonbyeongmin/gh-orbit?color=7c6f9f&label=release)](https://github.com/jeonbyeongmin/gh-orbit/releases)
 &nbsp;[![gh extension](https://img.shields.io/badge/gh-extension-24292f?logo=github)](https://github.com/jeonbyeongmin/gh-orbit)
@@ -16,7 +16,7 @@
 
 ---
 
-gh-orbit 은 저장소의 커밋 그래프, 커밋·워킹 트리 diff, 브랜치, worktree 를 하나의 터미널 UI 에서 보여준다. 모든 git 동작은 사용자의 `git` 바이너리로 shell-out 되므로 `.gitconfig`, 훅, 커밋 서명, LFS 가 그대로 동작하고, PR 데이터는 `gh` CLI 에서 가져온다.
+gh-orbit 은 저장소의 커밋 그래프, 커밋·워킹 트리 diff, 브랜치, worktree 를 하나의 터미널 UI 에서 보여준다. worktree 대시보드는 각 브랜치의 열린 PR 과 CI 상태를 한눈에 드러내므로, 작업이 여러 worktree 에 흩어져 있을 때 — 여러 코딩 에이전트든, 본인의 병렬 브랜치든 — 터미널을 떠나지 않고 각각의 PR 을 리뷰하고 머지할 수 있다. 모든 git 동작은 사용자의 `git` 바이너리로 shell-out 되므로 `.gitconfig`, 훅, 커밋 서명, LFS 가 그대로 동작하고, PR 데이터는 `gh` CLI 에서 가져온다.
 
 ## 설치
 

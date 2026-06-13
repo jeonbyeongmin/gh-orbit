@@ -2,6 +2,8 @@
 # Regenerate:  vhs docs/assets/demo.tape   (from the repo root)
 # Requires:    vhs + ttyd + ffmpeg, and a build at /tmp/orbit-demo
 #              (go build -o /tmp/orbit-demo ./cmd/orbit)
+# The "review a worktree's PR" beat needs a multi-worktree repo with at
+# least one open PR — see the demo-worktree setup that backs this tape.
 
 Output docs/assets/demo.gif
 
@@ -23,49 +25,49 @@ Show
 # Let the commit graph settle.
 Sleep 1.6s
 
-# Walk the commit graph.
-Down@420ms 2
-Sleep 1.2s
+# Jump to a real code commit — a merge commit's `git show -p` renders an empty diff.
+Type "g"
+Sleep 0.6s
+Down@360ms 4
+Sleep 1.0s
 
-# Open the focused commit's full-screen patch overlay.
+# Open the focused commit's full-screen patch overlay (10 files), walk a couple.
 Type "d"
-Sleep 1.8s
-
-# Jump file-to-file inside the patch ( [ / ] ).
+Sleep 1.6s
 Type "]"
-Sleep 1.3s
-Type "]"
-Sleep 1.3s
-Type "]"
-Sleep 1.3s
-Down@200ms 6
 Sleep 1.2s
-Type "["
-Sleep 1.3s
+Type "]"
+Sleep 1.2s
 Escape
-Sleep 1.2s
+Sleep 1.0s
 
-# Worktrees modal — switch context without a second terminal.
+# The wedge: a worktree dashboard — every branch's PR + CI + dirty at once.
 Type "w"
-Sleep 2s
-Down@450ms 2
-Sleep 1.4s
-Escape
-Sleep 1s
+Sleep 2.6s
 
-# Branches modal.
-Type "b"
-Sleep 2s
-Down@450ms 2
-Sleep 1.4s
-Escape
-Sleep 1s
+# Move the cursor to the worktree that carries an open PR.
+Down@500ms 1
+Sleep 1.6s
 
-# Inline help reference panel.
-Type "?"
+# Review that worktree's PR without leaving the dashboard.
+Type "O"
 Sleep 2.4s
-Type "?"
-Sleep 1s
+Type "]"
+Sleep 1.4s
+Type "]"
+Sleep 1.4s
+
+# Land it — pick a merge strategy (squash / merge / rebase), then back out.
+Type "m"
+Sleep 2.4s
+Escape
+Sleep 1.0s
+
+# Back to the dashboard, then the graph.
+Escape
+Sleep 1.3s
+Escape
+Sleep 1.0s
 
 # Quit (twice).
 Ctrl+C

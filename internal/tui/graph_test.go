@@ -100,7 +100,7 @@ func TestRenderCommitLineTimeAnchoredToRightEdge(t *testing.T) {
 	if w := len(stripped); w != 80 {
 		t.Errorf("rendered width = %d, want 80 (full row)", w)
 	}
-	// Time sits at the right edge: width - rightTail. "just now" fills
+	// Time sits at the right edge: width - timeColWidth. "just now" fills
 	// the whole timeColWidth=8 column, so it starts at width - 8 = 72.
 	relIdx := strings.Index(stripped, "just now")
 	wantRelIdx := 80 - timeColWidth
@@ -716,7 +716,7 @@ func TestCommitDelegateRendersGraphPerRowTight(t *testing.T) {
 }
 
 func TestCommitDelegateRightAnchorStaysAcrossRows(t *testing.T) {
-	// Right-anchor invariant: time lives at width - rightTail regardless
+	// Right-anchor invariant: time lives at width - timeColWidth regardless
 	// of how wide each row's graph is. Per-row tight must not break this.
 	now := time.Now()
 	rowA := commitItem{

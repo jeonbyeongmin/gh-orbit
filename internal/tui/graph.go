@@ -43,8 +43,9 @@ const (
 // commit pane's width. Lower bound (minLaneCap×cellWidth) keeps the graph
 // meaningful in narrow terminals; upper bound caps growth in very wide ones.
 func laneColCap(paneWidth int) int {
-	// reserve room for cursor + graph + space + time, leave at least one
-	// column for the subject.
+	// reserve room for cursor + separator + time; when a cap-width row
+	// still leaves no room for the subject, renderCommitLine drops the
+	// message column.
 	avail := paneWidth - cursorColWidth - timeColWidth - 1
 	if avail < 0 {
 		avail = 0
@@ -250,11 +251,9 @@ func renderCommitLine(c git.Commit, prs map[string]prInfo, graphPrefix string, g
 		cursor = cursorStyle.Render("›") + " "
 	}
 	const cursorWidth = 2
-	// rightTail = time (always-anchored right edge).
-	const rightTail = timeColWidth
 
-	// Cap graph so it never eats into the right-anchored time area.
-	graphBudget := width - cursorWidth - rightTail
+	// Cap graph so it never eats into the right-anchored time column.
+	graphBudget := width - cursorWidth - timeColWidth
 	if graphBudget < 0 {
 		graphBudget = 0
 	}
@@ -272,8 +271,8 @@ func renderCommitLine(c git.Commit, prs map[string]prInfo, graphPrefix string, g
 	// Need at least 1 cell for the subject + 1 separator before the time.
 	// Below that we drop the message column entirely and fall back to the
 	// right tail (time alone, when it fits).
-	if width-fixedLeft-1-rightTail < 1 {
-		if width-fixedLeft >= rightTail {
+	if width-fixedLeft-1-timeColWidth < 1 {
+		if width-fixedLeft >= timeColWidth {
 			return cursor + graphCell +
 				timeS.Render(runewidth.FillLeft(rel, timeColWidth))
 		}
@@ -287,7 +286,7 @@ func renderCommitLine(c git.Commit, prs map[string]prInfo, graphPrefix string, g
 	authorSegW := 0
 	if c.AuthorName != "" {
 		candidate := 1 + authorColWidth // leading sep + fixed column
-		if width-fixedLeft-candidate-1-rightTail >= 1 {
+		if width-fixedLeft-candidate-1-timeColWidth >= 1 {
 			truncated := runewidth.Truncate(c.AuthorName, authorColWidth, "…")
 			truncated = runewidth.FillRight(truncated, authorColWidth)
 			authorSeg = " " + authorS.Render(truncated)
@@ -303,13 +302,13 @@ func renderCommitLine(c git.Commit, prs map[string]prInfo, graphPrefix string, g
 	chipSegW := 0
 	if chipW > 0 {
 		candidate := chipW + 1 // chip + trailing sep before subject
-		if width-fixedLeft-candidate-authorSegW-1-rightTail >= 1 {
+		if width-fixedLeft-candidate-authorSegW-1-timeColWidth >= 1 {
 			chipSeg = chipText + " "
 			chipSegW = candidate
 		}
 	}
 
-	subjectWidth := width - fixedLeft - chipSegW - authorSegW - 1 - rightTail
+	subjectWidth := width - fixedLeft - chipSegW - authorSegW - 1 - timeColWidth
 	subject := runewidth.Truncate(c.Subject, subjectWidth, "…")
 	subject = runewidth.FillRight(subject, subjectWidth)
 	switch {

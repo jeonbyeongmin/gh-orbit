@@ -586,7 +586,7 @@ func TestGraphModelTailFollowAppendsCursorAfterUserMoved(t *testing.T) {
 	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyDown})
 	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if !g.userHasMoved {
-		t.Fatal("userHasMoved should be true after j keypress")
+		t.Fatal("userHasMoved should be true after ↓ keypress")
 	}
 	if g.list.Index() != 2 {
 		t.Fatalf("cursor before second batch = %d, want 2", g.list.Index())
@@ -620,7 +620,7 @@ func TestGraphModelTailFollowStaysWhenCursorNotOnTail(t *testing.T) {
 	// Move to middle row (index 1) — NOT the last row.
 	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if g.list.Index() != 1 {
-		t.Fatalf("cursor after j = %d, want 1", g.list.Index())
+		t.Fatalf("cursor after ↓ = %d, want 1", g.list.Index())
 	}
 
 	g, _ = g.Update(commitsAppendedMsg{

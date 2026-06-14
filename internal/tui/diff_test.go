@@ -300,7 +300,7 @@ func TestDiffScrollSyncsActiveFile(t *testing.T) {
 	d.SetPatchViewportSize(80, 5)
 	d.BeginPatchLoad("h", 1)
 	d.ApplyPatchLoaded(1, "h", threeFilePatch)
-	// Simulate the user mashing j past the beta header. We can't easily
+	// Simulate the user mashing ↓ past the beta header. We can't easily
 	// fake a KeyMsg without sending it via viewport.Update, so just call
 	// SetYOffset directly and then invoke the sync.
 	d.viewport.SetYOffset(10) // inside beta

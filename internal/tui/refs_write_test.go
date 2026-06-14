@@ -107,7 +107,7 @@ func TestDeleteConfirmKeystrokeSequence(t *testing.T) {
 			{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
 			{ShortName: "feat/foo", Kind: git.RefKindLocal},
 		})
-		// b → modal opens at HEAD (main, cursor=0). j → feat/foo. d → arm.
+		// b → modal opens at HEAD (main, cursor=0). ↓ → feat/foo. d → arm.
 		m, _ = pressRune(t, m, 'b')
 		m, _ = pressDown(t, m)
 		m, _ = pressRune(t, m, 'd')

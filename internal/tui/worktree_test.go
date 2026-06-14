@@ -257,7 +257,7 @@ func TestDirtyFanoutTimeoutMarksWorktreeMap(t *testing.T) {
 }
 
 // TestWorktreesModalSpaceDispatchesSwitch — tab opens the worktrees page with
-// cursor on the current worktree; j moves the cursor to the next row; space
+// cursor on the current worktree; ↓ moves the cursor to the next row; space
 // dispatches switchWorktreeMsg for the cursor entry and closes the page.
 // (`enter` opens the PR on the web; switch moved to `space`.)
 func TestWorktreesModalSpaceDispatchesSwitch(t *testing.T) {
@@ -444,7 +444,7 @@ func TestWorktreesTabCycle(t *testing.T) {
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(Model)
 	if m.worktreesModal.cursor != 1 {
-		t.Fatalf("j should move cursor to 1, cursor = %d", m.worktreesModal.cursor)
+		t.Fatalf("↓ should move cursor to 1, cursor = %d", m.worktreesModal.cursor)
 	}
 
 	m, _ = pressTab(t, m)
@@ -513,9 +513,9 @@ func TestWorktreesModalCursorStartsOnCurrent(t *testing.T) {
 	}
 }
 
-// TestWorktreesModalJKBoundedClamp — j at the bottom row stays put (no
-// wrap), k at the top row stays put. Decision 3: bounded clamp.
-func TestWorktreesModalJKBoundedClamp(t *testing.T) {
+// TestWorktreesModalArrowBoundedClamp — ↓ at the bottom row stays put (no
+// wrap), ↑ at the top row stays put. Decision 3: bounded clamp.
+func TestWorktreesModalArrowBoundedClamp(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -527,21 +527,21 @@ func TestWorktreesModalJKBoundedClamp(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
-	// j j j → still 1 (last row), no wrap.
+	// ↓ ↓ ↓ → still 1 (last row), no wrap.
 	for i := 0; i < 3; i++ {
 		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = updated.(Model)
 	}
 	if m.worktreesModal.cursor != 1 {
-		t.Errorf("j past bottom should clamp at last row, cursor = %d", m.worktreesModal.cursor)
+		t.Errorf("↓ past bottom should clamp at last row, cursor = %d", m.worktreesModal.cursor)
 	}
-	// k k k → back to 0 and stays.
+	// ↑ ↑ ↑ → back to 0 and stays.
 	for i := 0; i < 3; i++ {
 		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 		m = updated.(Model)
 	}
 	if m.worktreesModal.cursor != 0 {
-		t.Errorf("k past top should clamp at first row, cursor = %d", m.worktreesModal.cursor)
+		t.Errorf("↑ past top should clamp at first row, cursor = %d", m.worktreesModal.cursor)
 	}
 }
 

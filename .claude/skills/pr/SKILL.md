@@ -9,7 +9,7 @@ description: gh-orbit 전용 /pr 스킬. user-level /pr 이 §1 에서 자동 �
 
 위임 흐름:
 
-1. 부모(`/execute-plan`, 사용자 직접 호출 등)가 `Skill(skill="pr")` 호출
+1. 부모(사용자 직접 호출 등)가 `Skill(skill="pr")` 호출
 2. user-level §1 이 `<repo>/.claude/skills/pr/SKILL.md` 존재 확인 → 이 파일을 Read
 3. 한 줄 안내 후 이 본문의 절차를 끝까지 그대로 수행
 4. user-level §2 이하는 더 따르지 않음
@@ -204,56 +204,7 @@ EOF
 
 HEREDOC 으로 본문 전달해 따옴표·백틱 깨지지 않게 한다.
 
-## 8. Plan 아카이브 (vault 갱신)
-
-PR 생성/확인이 끝나면 vault 의 plan 한 개를 PR 에 연결하고 archive 로 옮긴다. user-level `/pr` §9 와 동일한 규약 — project-local 위임 흐름이 user-level 본문을 안 따르므로 여기 그대로 박는다.
-
-### 8.1 vault / 프로젝트 / 브랜치 slug 결정
-
-```bash
-PROJECT=$(git config --get remote.origin.url 2>/dev/null \
-  | sed -E 's|.*[:/]([^/]+?)(\.git)?$|\1|')
-[ -z "$PROJECT" ] && PROJECT=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")
-
-VAULT_ROOT="/Users/jeonbyeongmin/Library/Mobile Documents/iCloud~md~obsidian/Documents/project-manager"
-PROJECT_DIR="$VAULT_ROOT/$PROJECT"
-SLUG="${BR##*/}"   # feat/foo-bar → foo-bar
-```
-
-`$PROJECT_DIR` 가 없으면 "vault 추적 없음 — 아카이브 스킵" 한 줄 보고 후 §9 로 점프 (실패 아님).
-
-### 8.2 plan 매칭
-
-```bash
-shopt -s nullglob
-matches=( "$PROJECT_DIR/plans/"*-"$SLUG".md )
-shopt -u nullglob
-```
-
-- **단일 매칭**: §8.3
-- **0 매칭**: "PR 과 매칭되는 plan 없음 — 아카이브 스킵 (브랜치 slug: `$SLUG`)" 보고 후 §9
-- **다수 매칭** (`-bundle` 등): "다수 plan 매칭: <목록>. 모호하여 스킵" 보고 후 §9
-
-### 8.3 frontmatter 갱신 + archive 이동
-
-1. **plan frontmatter 갱신** (Edit):
-   ```yaml
-   pr: <PR URL>
-   status: shipped
-   shipped_at: <YYYY-MM-DD>
-   ```
-2. **backlog frontmatter 갱신**: plan 의 `source_backlog` 가 가리키는 `archive/backlogs/<file>.md` 에:
-   ```yaml
-   linked_pr: <PR URL>
-   ```
-   `source_backlog` 누락/파일 부재면 backlog 갱신만 스킵 (보고에 한 줄).
-3. **iCloud 충돌 사본 검사**: `<file> 2.md` 등이 `plans/` · `archive/plans/` 에 있으면 mv 중단 + plan frontmatter 에 `archive_pending: true` 추가 + §9 로 이동. 사용자가 충돌 정리 후 수동.
-4. **archive 이동**:
-   ```bash
-   mv "$PROJECT_DIR/plans/<file>.md" "$PROJECT_DIR/archive/plans/<file>.md"
-   ```
-
-## 9. 사용자에게 보고
+## 8. 사용자에게 보고
 
 다음을 한 번에:
 
@@ -266,7 +217,6 @@ shopt -u nullglob
 - push 한 브랜치 + upstream
 - 생성된 PR URL (또는 이미 OPEN 이던 PR URL)
 - base 브랜치 명시 (현재 default 는 `develop` — main 으로 바뀐 적 있으면 그것)
-- §8 plan 아카이브 결과 (이동된 plan 경로 / 매칭 실패 사유 / archive_pending 등)
 - 마지막 줄: `(project-local /pr 규약 적용)`
 
 ## 절대 하지 않을 것
@@ -285,4 +235,3 @@ shopt -u nullglob
 - 이 스킬은 `git push` 와 `gh pr create` 를 실행한다 — 외부 영향 (원격 갱신, 리뷰어 알림). pre-flight 다 통과한 뒤에야 push 하므로 사전 동의는 "PR 올려줘" 발화로 충분. dirty tree 포함 여부만 §1 에서 명시적으로 확인.
 - 첫 push 는 `-u origin <branch>` 로 upstream 등록. 작업 브랜치가 origin 에 없는 케이스 흔함.
 - PR 본문에 본인이 만든 커밋 SHA 를 나열하지 않는다 — gh 가 commits 탭에 자동으로 보여준다.
-- `/execute-plan` 부모가 이 스킬을 호출했을 때 검증 실패하면 부모가 plan 아카이브 이동을 막는다 (이 스킬은 그 사실을 의식할 필요 없음 — 종료 코드/보고만 정확하면 됨).

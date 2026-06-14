@@ -59,7 +59,7 @@ func TestBranchesModalRejectsEmptyLocals(t *testing.T) {
 	}
 }
 
-// TestBranchesModalCursorBounds — j past the end clamps to last index, k
+// TestBranchesModalCursorBounds — ↓ past the end clamps to last index, ↑
 // past 0 clamps to 0.
 func TestBranchesModalCursorBounds(t *testing.T) {
 	m := initSized(t)
@@ -70,20 +70,20 @@ func TestBranchesModalCursorBounds(t *testing.T) {
 	})
 	m, _ = pressRune(t, m, 'b') // opens at HEAD (cursor=0)
 
-	// j × 5: clamps at len-1 = 2
+	// ↓ × 5: clamps at len-1 = 2
 	for i := 0; i < 5; i++ {
-		m, _ = pressRune(t, m, 'j')
+		m, _ = pressDown(t, m)
 	}
 	if m.branchesModal.cursor != 2 {
-		t.Errorf("after j×5 cursor = %d, want 2", m.branchesModal.cursor)
+		t.Errorf("after ↓×5 cursor = %d, want 2", m.branchesModal.cursor)
 	}
 
-	// k × 10: clamps at 0
+	// ↑ × 10: clamps at 0
 	for i := 0; i < 10; i++ {
-		m, _ = pressRune(t, m, 'k')
+		m, _ = pressUp(t, m)
 	}
 	if m.branchesModal.cursor != 0 {
-		t.Errorf("after k×10 cursor = %d, want 0", m.branchesModal.cursor)
+		t.Errorf("after ↑×10 cursor = %d, want 0", m.branchesModal.cursor)
 	}
 }
 
@@ -117,7 +117,7 @@ func TestBranchesModalDeleteArmsConfirm(t *testing.T) {
 		{ShortName: "feat/foo", Kind: git.RefKindLocal},
 	})
 	m, _ = pressRune(t, m, 'b')
-	m, _ = pressRune(t, m, 'j') // cursor → feat/foo
+	m, _ = pressDown(t, m) // cursor → feat/foo
 	m, _ = pressRune(t, m, 'd')
 
 	if m.mode != viewModeRefDeleteConfirm {
@@ -138,7 +138,7 @@ func TestBranchesModalEscClosesModal(t *testing.T) {
 		{ShortName: "feat/a", Kind: git.RefKindLocal},
 	})
 	m, _ = pressRune(t, m, 'b')
-	m, _ = pressRune(t, m, 'j')
+	m, _ = pressDown(t, m)
 	if m.branchesModal.cursor != 1 {
 		t.Fatalf("setup: cursor = %d, want 1", m.branchesModal.cursor)
 	}

@@ -64,7 +64,7 @@ func laneColCap(paneWidth int) int {
 // commitItem wraps a Commit so it can be stored in bubbles/list. Both the
 // connector row drawn above this commit (transitions from the previous
 // commit) and the commit row itself are pre-rendered and cached here —
-// the delegate emits them as a 2-line block so j/k still moves one item
+// the delegate emits them as a 2-line block so ↑/↓ still moves one item
 // per press.
 type commitItem struct {
 	c                git.Commit
@@ -381,7 +381,7 @@ type graphModel struct {
 	err          error
 	loaded       bool
 	streaming    bool // a LogStream is in flight; loaded may already be true
-	userHasMoved bool // true after the user has intentionally moved the cursor (j/k/g/G/etc)
+	userHasMoved bool // true after the user has intentionally moved the cursor (↑/↓/g/G/etc)
 	graphWidth   int  // hard cap = laneColCap(width); rows render per-row tight up to this cap
 
 	// headRowIndex is the list index of the row carrying HEAD per the
@@ -423,6 +423,10 @@ func newGraphModel() graphModel {
 	// bindings also frees `d` so its handleNormalKey case can retire.
 	l.KeyMap.PrevPage = key.NewBinding(key.WithKeys("[", "pgup"))
 	l.KeyMap.NextPage = key.NewBinding(key.WithKeys("]", "pgdown"))
+	// Cursor movement is arrow-only — the j/k vim bindings were dropped, so
+	// override list's default CursorUp/CursorDown (which include k/j).
+	l.KeyMap.CursorUp = key.NewBinding(key.WithKeys("up"))
+	l.KeyMap.CursorDown = key.NewBinding(key.WithKeys("down"))
 	return graphModel{list: l, delegate: d, headRowIndex: -1}
 }
 

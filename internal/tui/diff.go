@@ -150,7 +150,7 @@ func (d *diffModel) ApplyPatchFailed(reqID uint64, hash string, err error) {
 // the viewport produced (mouse-wheel handling, etc.) so the caller can batch
 // it. After the viewport advances, activeFile re-syncs from the new YOffset
 // so the hint indicator stays consistent with what the reviewer is reading —
-// scrolling past a `diff --git` header with `j` updates the indicator the
+// scrolling past a `diff --git` header with `↓` updates the indicator the
 // same as if they had pressed `]`.
 func (d *diffModel) ScrollPatch(msg tea.KeyMsg) tea.Cmd {
 	var cmd tea.Cmd
@@ -309,7 +309,7 @@ func (d *diffModel) JumpToPrevFile() {
 
 // syncActiveFileFromYOffset finds the largest file boundary at or below
 // the current YOffset and parks activeFile there. Called after every
-// scroll so manual j/k navigation keeps the indicator in sync. When the
+// scroll so manual ↑/↓ navigation keeps the indicator in sync. When the
 // viewport is parked above the first boundary (transient — viewport
 // always starts at the first header on load), the active stays at 0.
 func (d *diffModel) syncActiveFileFromYOffset() {

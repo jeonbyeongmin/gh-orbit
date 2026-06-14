@@ -24,7 +24,7 @@ type branchesModalState struct {
 	cursor int
 }
 
-const helpTextBranchesModal = "[j/k] navigate · [d] delete · [esc] close"
+const helpTextBranchesModal = "[↑/↓] navigate · [d] delete · [esc] close"
 
 // beginBranchesModal opens viewModeBranchesModal. cursor lands on HEAD if
 // found, else 0. Empty local list surfaces an inline error and stays in
@@ -50,7 +50,7 @@ func (m Model) beginBranchesModal() (Model, tea.Cmd) {
 }
 
 // branchesModalMoveCursor bounds the cursor to [0, len-1]. Called by the
-// `j` / `k` keypress handlers.
+// `↑` / `↓` keypress handlers.
 func (m Model) branchesModalMoveCursor(delta int) Model {
 	locals := m.refs.LocalRefs()
 	if len(locals) == 0 {

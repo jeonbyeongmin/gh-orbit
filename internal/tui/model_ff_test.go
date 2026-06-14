@@ -327,7 +327,7 @@ func TestBranchPickerEscRestoresNormalMode(t *testing.T) {
 	}
 }
 
-func TestBranchPickerJKMovesCursorWithinClamp(t *testing.T) {
+func TestBranchPickerArrowMovesCursorWithinClamp(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -336,18 +336,18 @@ func TestBranchPickerJKMovesCursorWithinClamp(t *testing.T) {
 		candidates: []string{"a", "b", "c"},
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	m = updated.(Model)
 	if m.branchPicker.cursor != 0 {
-		t.Errorf("k at top: cursor = %d, want 0 (clamped)", m.branchPicker.cursor)
+		t.Errorf("↑ at top: cursor = %d, want 0 (clamped)", m.branchPicker.cursor)
 	}
 
 	for range 5 {
-		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = updated.(Model)
 	}
 	if m.branchPicker.cursor != 2 {
-		t.Errorf("after 5×j on 3 candidates: cursor = %d, want 2 (clamped)", m.branchPicker.cursor)
+		t.Errorf("after 5×↓ on 3 candidates: cursor = %d, want 2 (clamped)", m.branchPicker.cursor)
 	}
 }
 

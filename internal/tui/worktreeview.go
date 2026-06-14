@@ -2,7 +2,7 @@
 // vertical stack of 3-line cards — one per worktree — so the reviewer can
 // compare every tree's branch, PR/CI state, and last activity at once instead
 // of squeezing them into a single overlay row. Switching is still one stroke:
-// open with `w`, `j`/`k` to a card, `enter` to switch back to the graph.
+// open with `w`, `↑`/`↓` to a card, `enter` to switch back to the graph.
 //
 // Card anatomy (gutter is 2 cols: cursor bar `▌` + current marker `▶`):
 //

@@ -110,7 +110,7 @@ func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.cycleDiffPage(true)
 	case "ctrl+c":
 		return m.handleCtrlC()
-	case "j", "k", "down", "up", "pgdown", "pgup":
+	case "down", "up", "pgdown", "pgup":
 		return m, m.diff.ScrollPatch(msg)
 	case "]":
 		m.diff.MoveHunk(1)
@@ -249,13 +249,13 @@ func (m Model) handleWorktreeRemoveConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 
 func (m Model) handleBranchPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "j", "down":
+	case "down":
 		if m.branchPicker.cursor < len(m.branchPicker.candidates)-1 {
 			m.branchPicker.cursor++
 			m.branchPicker.scrollIntoView(branchPickerVisibleRows(m.height, len(m.branchPicker.candidates)))
 		}
 		return m, nil
-	case "k", "up":
+	case "up":
 		if m.branchPicker.cursor > 0 {
 			m.branchPicker.cursor--
 			m.branchPicker.scrollIntoView(branchPickerVisibleRows(m.height, len(m.branchPicker.candidates)))
@@ -317,9 +317,9 @@ func (m Model) handleRefDeleteConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleBranchesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "j", "down":
+	case "down":
 		return m.branchesModalMoveCursor(1), nil
-	case "k", "up":
+	case "up":
 		return m.branchesModalMoveCursor(-1), nil
 	case "d":
 		return m.beginBranchesModalDelete()
@@ -335,9 +335,9 @@ func (m Model) handleBranchesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "j", "down":
+	case "down":
 		return m.worktreesModalMoveCursor(1), nil
-	case "k", "up":
+	case "up":
 		return m.worktreesModalMoveCursor(-1), nil
 	case " ", "space":
 		// `space` switches to the cursor worktree — the action `enter`
@@ -372,9 +372,9 @@ func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handlePRsPageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "j", "down":
+	case "down":
 		return m.prsPageMoveCursor(1), nil
-	case "k", "up":
+	case "up":
 		return m.prsPageMoveCursor(-1), nil
 	case "enter":
 		// Open the cursor PR on GitHub in the browser.

@@ -38,7 +38,7 @@ earlier in-box hint duplicated the `?` panel once the panel went
 page-aware, so it was retired.
 
 The 2-col gutter carries two independent signals: the cursor bar `▌`
-(the card under `j`/`k`, running down all three lines) and the current
+(the card under `↑`/`↓`, running down all three lines) and the current
 marker `▶` (the worktree `m.workdir` lives in). Because the branch no
 longer shares a row with the path, the directory name, and the subject,
 **nothing truncates under width pressure** — the failure mode the old
@@ -83,7 +83,7 @@ when it was a centered overlay — it's a full-screen page now.)
 
 | Key         | Action                                                            |
 | ----------- | ----------------------------------------------------------------- |
-| `j` / `k`   | move cursor within the list (bounded; no wrap)                    |
+| `↑` / `↓`   | move cursor within the list (bounded; no wrap)                    |
 | `space`     | switch to the worktree under the cursor (returns to the graph)    |
 | `enter`     | open the cursor worktree's open PR on the web (no-op + status if none) |
 | `a`         | open the add-worktree input sub-modal                             |

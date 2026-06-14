@@ -45,7 +45,7 @@ func TestPRsPageEntersEvenWhenEmpty(t *testing.T) {
 	}
 }
 
-// j/k navigate and clamp within the list.
+// ↑/↓ navigate and clamp within the list.
 func TestPRsPageNavigateClamps(t *testing.T) {
 	m := initSized(t)
 	m.prList = samplePRs()
@@ -56,11 +56,11 @@ func TestPRsPageNavigateClamps(t *testing.T) {
 
 	m = m.prsPageMoveCursor(-1)
 	if m.prsPage.cursor != 0 {
-		t.Errorf("k at top: cursor = %d, want 0", m.prsPage.cursor)
+		t.Errorf("↑ at top: cursor = %d, want 0", m.prsPage.cursor)
 	}
 	m = m.prsPageMoveCursor(99)
 	if m.prsPage.cursor != len(m.prList)-1 {
-		t.Errorf("j past end: cursor = %d, want %d", m.prsPage.cursor, len(m.prList)-1)
+		t.Errorf("↓ past end: cursor = %d, want %d", m.prsPage.cursor, len(m.prList)-1)
 	}
 }
 

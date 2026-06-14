@@ -22,7 +22,7 @@ Graph dot vocabulary: `●` regular commit · `○` merge commit (2+ parents —
 └──────────────────────────────────────────────────────────┘
 ```
 
-The Worktree page is one step away in the cycle (`tab` from Graph) — j/k/space/enter/a/d/s route to its cursor while it owns the screen (see [worktrees.md](worktrees.md)); `tab` / `shift+tab` move on to the next / previous page rather than closing it. Local Changes is two steps forward; the Pull Requests page is last, so `shift+tab` from Graph wraps straight onto it (see [pull-requests.md](pull-requests.md)). Fetch is throttled by terminal focus events (60s) so an alt-tab burst can't saturate `git fetch`.
+The Worktree page is one step away in the cycle (`tab` from Graph) — ↑/↓/space/enter/a/d/s route to its cursor while it owns the screen (see [worktrees.md](worktrees.md)); `tab` / `shift+tab` move on to the next / previous page rather than closing it. Local Changes is two steps forward; the Pull Requests page is last, so `shift+tab` from Graph wraps straight onto it (see [pull-requests.md](pull-requests.md)). Fetch is throttled by terminal focus events (60s) so an alt-tab burst can't saturate `git fetch`.
 
 The full-screen `d` patch overlay is where commit diffs live (entire `git show -p` body), opened on top of the base layout and closed with `esc`. Inside the overlay, `[` / `]` jump to the previous / next `diff --git` header so a 20-file patch reads as 20 ordered chapters instead of one long scroll. The bottom hint surfaces `<path> [N/M]` so the reviewer always knows which file the cursor is in.
 
@@ -35,7 +35,7 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | Key            | Pane   | Action                                                                              |
 | -------------- | ------ | ----------------------------------------------------------------------------------- |
 | `tab` / `⇧tab` | global | cycle page: Graph → Worktree → Local Changes → Pull Requests (and back) — no esc/q exit |
-| `j` / `k`      | graph  | navigate the commit list                                                            |
+| `↑` / `↓`      | graph  | navigate the commit list                                                            |
 | `g` / `G`      | graph  | jump to top / bottom                                                                |
 | `b`            | global | open branches modal (delete-branch entry) — see [branches.md](branches.md)          |
 | `space`        | graph  | context-aware: checkout / FF / detach — see [checkout.md](checkout.md)              |
@@ -56,7 +56,7 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `enter`        | graph  | open the cursor row's open PR on GitHub in the browser — see [pull-requests.md](pull-requests.md) |
 | `m`            | graph  | merge the cursor row's open PR (confirm dialog) — see [pull-requests.md](pull-requests.md) |
 
-Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `[` / `]` / `esc`. `[` jumps to the previous file header, `]` to the next; both are no-ops past the first / last file (no wrap — surprise jumps make the cockpit harder to read, not easier). The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md). The merge confirm (`m`) gates to `s` / `m` / `r` (strategy) / `esc` — see [pull-requests.md](pull-requests.md).
+Patch overlay (`d`) accepts only `↑` / `↓` / `pgup` / `pgdn` / `[` / `]` / `esc`. `[` jumps to the previous file header, `]` to the next; both are no-ops past the first / last file (no wrap — surprise jumps make the cockpit harder to read, not easier). The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md). The merge confirm (`m`) gates to `s` / `m` / `r` (strategy) / `esc` — see [pull-requests.md](pull-requests.md).
 
 `?` toggles an inline help reference panel that grows out of the footer of **whichever page is showing** (it's a `helpOpen` flag orthogonal to the page mode, not a `viewMode` — `showsHelp()` gates it to the bare page modes). The panel lays the keys into side-by-side columns, scoped to the current page (`helpCategoriesFor`): the graph page shows `Global` / `Graph` / `Sync`, the worktree page `Global` / `Worktree`, the local-changes page `Global` / `Local Changes`, the pull-requests page `Global` / `Pull Requests`. Only `Global` (`?` / `^C ^C` / `tab` cycle) is cross-page; everything else is reachable only from its own page, so the panel never advertises a key that does nothing where you are. Reference, not modal — every shortcut keeps working while it is open, and a second `?` collapses it. The panel reserves `helpReservedRows()` rows (the tallest column's height for that page, clamped to ≤ half the screen and never starving the page below 3 rows), so the page shrinks by that much while it's open. Narrow terminals that can't fit the columns fall back to the stacked one-row-per-category layout.
 
@@ -69,7 +69,7 @@ Bottom hint, single line — just a pressable `? help` token plus the status mes
 - Never block in `Update`. Every git invocation returns via `tea.Cmd` → `tea.Msg`. A 50k-commit repo with synchronous `git log` would freeze the UI — stream and paginate.
 - Reloads are stale-while-revalidate: `reloadCmd` keeps the current graph on screen and the new stream's first batch swaps it in place (`graphModel.pendingSwap`) — no blank "loading…" flash on `r` / watcher / post-checkout refreshes. Only the worktree switch hard-resets to the placeholder, because the old tree's graph would mislead. Loading placeholders and busy statuses animate via a single gated spinner tick (`spinnerTickMsg`) that stops re-arming the moment nothing is loading.
 - Stdout is the TUI while `tea.Program` runs. `fmt.Println` corrupts the screen. Use the file logger from `internal/config` (see [config.md](config.md)).
-- Vim-style movement: `hjkl`. `:` reserved for a future command line (`:checkout <branch>`, `:merge <branch>`). Bindings via `bubbles/key` so the help panel stays in sync.
+- Cursor movement is arrow-only (`↑` / `↓`) — the vim `hjkl` bindings were retired. `:` reserved for a future command line (`:checkout <branch>`, `:merge <branch>`). Bindings via `bubbles/key` so the help panel stays in sync.
 
 ## Commit row
 

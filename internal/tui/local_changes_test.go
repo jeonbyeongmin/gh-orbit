@@ -16,7 +16,7 @@ import (
 // still ctrl+c twice).
 func TestLocalChangesQIsNoOp(t *testing.T) {
 	m := initSized(t)
-	m, _ = pressShiftTab(t, m)
+	m = enterLocalChanges(t, m)
 	if m.mode != viewModeLocalChanges {
 		t.Fatalf("setup: mode = %v, want viewModeLocalChanges", m.mode)
 	}
@@ -259,7 +259,7 @@ func TestLocalChangesDrillDownArrows(t *testing.T) {
 	// Single-pane drill-down (tab toggle retired): → descends tree →
 	// diff, ← climbs back to the tree without exiting the mode.
 	m := initSized(t)
-	m, _ = pressShiftTab(t, m)
+	m = enterLocalChanges(t, m)
 	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "f.txt", WorktreeState: 'M'}})
 	if m.localChanges.Focused() != paneLCTree {
 		t.Fatalf("setup: want tree focus, got %d", m.localChanges.Focused())
@@ -286,7 +286,7 @@ func TestLocalChangesEscIsNoOp(t *testing.T) {
 	// `←`, and there is no esc/q page exit. The tab cycle owns leaving the
 	// page, so esc anywhere is inert.
 	m := initSized(t)
-	m, _ = pressShiftTab(t, m)
+	m = enterLocalChanges(t, m)
 	if m.mode != viewModeLocalChanges {
 		t.Fatalf("setup: mode = %v, want viewModeLocalChanges", m.mode)
 	}
@@ -314,7 +314,7 @@ func TestLocalChangesDiffAutoReturnsWhenSideGone(t *testing.T) {
 	// side; the next status reload carries no unstaged entry for it, so focus
 	// drops back to the tree (the chosen auto-return behavior).
 	m := initSized(t)
-	m, _ = pressShiftTab(t, m)
+	m = enterLocalChanges(t, m)
 	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "f.txt", WorktreeState: 'M'}})
 	m = enterDiff(t, m)
 
@@ -332,7 +332,7 @@ func TestLocalChangesDiffReloadPinsViewedFileOnDrift(t *testing.T) {
 	// order shifts — otherwise the index-only clamp drifts the cursor onto a
 	// different file and the pane loads the wrong diff.
 	m := initSized(t)
-	m, _ = pressShiftTab(t, m)
+	m = enterLocalChanges(t, m)
 	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{
 		{Path: "a.txt", WorktreeState: 'M'},
 		{Path: "b.txt", WorktreeState: 'M'},
@@ -360,7 +360,7 @@ func TestLocalChangesDiffStaysWhenSideRemains(t *testing.T) {
 	// Partial stage: the unstaged side still has changes, so the diff pane
 	// stays open across the reload.
 	m := initSized(t)
-	m, _ = pressShiftTab(t, m)
+	m = enterLocalChanges(t, m)
 	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "f.txt", WorktreeState: 'M'}})
 	m = enterDiff(t, m)
 

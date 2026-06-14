@@ -2,7 +2,7 @@
 
 Single entry point: graph `space`. The refs-pane Enter handler was retired
 together with the refs LIST in the subtract-sidebar sequence, and `space`
-took the slot from `enter` (now PR review) — every checkout scenario (local
+took the slot from `enter` (now opens the cursor PR on the web) — every checkout scenario (local
 branch, remote-ahead-of-local, detached commit, multi-chip ambiguous row)
 is covered by the graph `space` decision tree below. Pull is a separate
 global action (`p`).

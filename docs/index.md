@@ -23,9 +23,9 @@ detail.
 - [worktrees.md](worktrees.md) — the `tab`-cycle Worktree page for
   list / switch / add / remove, in-process switch + dirty fan-out.
   The "work lives in worktree A, you inspect worktree B" surface.
-- [pr-review.md](pr-review.md) — `enter` pulls a PR diff into the patch
-  overlay; `a` / `m` approve / merge inline. The "review and land a PR
-  without leaving the graph" surface.
+- [pull-requests.md](pull-requests.md) — `enter` opens a PR on the web,
+  `m` merges it (confirm dialog), and the Pull Requests tab lists every
+  open PR. The "jump to a PR and land it from the terminal" surface.
 
 When a behavior crosses files, the canonical doc is **checkout.md**
 for control flow and **git-wrappers.md** for the wrapper surface.

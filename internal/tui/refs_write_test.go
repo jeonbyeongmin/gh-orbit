@@ -29,7 +29,8 @@ func pressRune(t *testing.T, m Model, r rune) (Model, tea.Cmd) {
 }
 
 // pressTab / pressShiftTab dispatch the page-cycle keys. From the graph,
-// tab advances to the Worktree page and shift+tab to Local Changes.
+// tab advances to the Worktree page and shift+tab wraps to Pull Requests
+// (the last of the four pages).
 func pressTab(t *testing.T, m Model) (Model, tea.Cmd) {
 	t.Helper()
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
@@ -40,6 +41,16 @@ func pressShiftTab(t *testing.T, m Model) (Model, tea.Cmd) {
 	t.Helper()
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	return updated.(Model), cmd
+}
+
+// enterLocalChanges drives the page cycle from the graph to the Local Changes
+// page (graph → worktree → local changes), the deterministic setup the
+// local-changes behavior tests share now that shift+tab wraps to Pull Requests.
+func enterLocalChanges(t *testing.T, m Model) Model {
+	t.Helper()
+	m, _ = pressTab(t, m) // → worktree
+	m, _ = pressTab(t, m) // → local changes
+	return m
 }
 
 // TestRightOnGraphFocusOpensPatchOverlay locks in the graph-focus `→`:

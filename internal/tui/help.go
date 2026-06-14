@@ -42,7 +42,8 @@ var (
 			{"j/k", "nav"},
 			{"g/G", "top/bot"},
 			{"space", "checkout / ff / detach"},
-			{"enter", "review PR"},
+			{"enter", "open PR (web)"},
+			{"m", "merge PR"},
 			{"R", "rebase onto cursor"},
 			{"c", "cherry-pick cursor"},
 			{"v", "revert cursor"},
@@ -64,7 +65,6 @@ var (
 			{"P", "push"},
 			{"r", "reload"},
 			{"b", "branches modal"},
-			{"l", "PR list modal"},
 			{"Z", "zombie cleanup"},
 		},
 	}
@@ -75,7 +75,7 @@ var (
 		entries: []helpEntry{
 			{"j/k", "nav"},
 			{"space", "switch"},
-			{"enter", "review PR"},
+			{"enter", "open PR (web)"},
 			{"a", "add"},
 			{"d", "remove"},
 			{"s", "sort"},
@@ -112,26 +112,27 @@ var (
 			{"←", "close"},
 		},
 	}
-	// helpPRReview — extra actions while the diff page shows a PR (opened with enter).
-	helpPRReview = helpCategory{
-		title: "PR Review",
+	// helpPRs — Pull Requests page cursor actions (the 4th tab).
+	helpPRs = helpCategory{
+		title: "Pull Requests",
 		entries: []helpEntry{
-			{"a", "approve"},
-			{"m", "merge"},
-			{"c", "comment"},
-			{"r", "request changes"},
+			{"j/k", "nav"},
+			{"enter", "open PR (web)"},
+			{"m", "merge PR"},
 		},
 	}
 )
 
 // helpCategoriesFor returns the panel categories for a page index (0 graph, 1
-// worktree, 2 local changes) — always led by Global.
+// worktree, 2 local changes, 3 pull requests) — always led by Global.
 func helpCategoriesFor(page int) []helpCategory {
 	switch page {
 	case 1:
 		return []helpCategory{helpGlobal, helpWorktree}
 	case 2:
 		return []helpCategory{helpGlobal, helpLCTree, helpLCDiff}
+	case 3:
+		return []helpCategory{helpGlobal, helpPRs}
 	default:
 		return []helpCategory{helpGlobal, helpGraph, helpSync}
 	}
@@ -140,7 +141,7 @@ func helpCategoriesFor(page int) []helpCategory {
 // helpData returns every category, for the coverage test that guards against
 // silently dropping a binding.
 func helpData() []helpCategory {
-	return []helpCategory{helpGlobal, helpGraph, helpSync, helpWorktree, helpLCTree, helpLCDiff, helpDiff, helpPRReview}
+	return []helpCategory{helpGlobal, helpGraph, helpSync, helpWorktree, helpLCTree, helpLCDiff, helpDiff, helpPRs}
 }
 
 // collapsedHintText is the entire bottom line in normal operation: a single

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -106,12 +105,12 @@ const (
 	// branches modal. enter switches, a/d reuse the existing add-input /
 	// remove-confirm sub-modals, s toggles last-commit sort.
 	viewModeWorktreesModal
-	// viewModePRsModal hosts the centered overlay listing every open PR.
-	// Entered via `l` from viewModeNormal — same pattern as the branches /
-	// worktrees modals. enter opens the cursor PR in the review overlay
-	// (beginPRReviewFor), reaching PRs whose head branch isn't checked out
-	// (which the cursor `enter` path can't).
-	viewModePRsModal
+	// viewModePRsPage is the full-screen Pull Requests tab (the 4th page,
+	// after Local Changes), reached via the tab/shift+tab cycle. It lists
+	// every open PR `gh pr list` returned — including ones whose head branch
+	// isn't checked out (which the graph cursor can't reach). `enter` opens
+	// the cursor PR on the web; `m` opens the merge confirm.
+	viewModePRsPage
 	// viewModeRebaseConfirm gates the screen on the "rebase <head>
 	// onto <cursor>?" confirm dialog (centered overlay like the
 	// branch-delete confirm). Only y/esc/ctrl+c are accepted.
@@ -131,6 +130,12 @@ const (
 	// dialog (`x`). Unlike the single-y confirms it offers s/m/h for the
 	// three reset modes; the hard row warns about working-tree loss.
 	viewModeResetConfirm
+	// viewModeMergeConfirm is the standalone "merge PR #N?" dialog armed by
+	// `m` on the graph cursor or the Pull Requests page. It offers s/m/r for
+	// the three merge strategies (same surface as the reset confirm).
+	// mergeReturnMode records the launching page so the dialog composes over
+	// — and closes back to — the graph or the PR page.
+	viewModeMergeConfirm
 )
 
 // pendingCheckout remembers what the user was trying to check out so the
@@ -213,45 +218,24 @@ type Model struct {
 	// every successful fetch — the same cadence the user already expects
 	// remote state to refresh on. Nil until the first load lands.
 	prs map[string]prInfo
-	// prList is the same open PRs in gh's newest-first order, backing the `l`
-	// PR list modal — the surface that reaches PRs whose head branch isn't
-	// checked out (which the cursor `enter` path can't). Loaded alongside prs.
+	// prList is the same open PRs in gh's newest-first order, backing the
+	// Pull Requests page — the surface that reaches PRs whose head branch
+	// isn't checked out (which the cursor `enter` path can't). Loaded
+	// alongside prs.
 	prList []prInfo
 	// prsInFlight gates PR-list dispatches so an F-spam can't stack
 	// parallel `gh pr list` calls (and a slow older reply can't overwrite
 	// a newer one). New() arms it because Init always dispatches.
 	prsInFlight bool
-	// reviewPRNumber is the open PR whose diff currently fills the patch
-	// overlay (0 = the overlay shows a plain commit patch, not a PR). Set by
-	// `enter` (beginPRReview), cleared on overlay close / merge. While non-zero
-	// the overlay's bottom line is renderPRReviewHint and `a`/`m` arm the
-	// inline approve/merge confirms — see prreview.go.
-	reviewPRNumber int
-	// reviewReturnMode is where the PR-review overlay returns when it closes
-	// (esc) or merges. Zero value (viewModeNormal) = the graph; `enter` from the
-	// worktree dashboard sets viewModeWorktreesModal so the review-and-compare
-	// loop stays on the dashboard. A general "return here" slot rather than a
-	// per-origin boolean, so future launchers set their own target.
-	reviewReturnMode viewMode
-	// prAction is the inline confirm sub-state inside the PR overlay
-	// (none / approve / merge). Non-none gates the overlay keymap to the
-	// confirm keys and swaps the hint to the confirm prompt.
-	prAction prAction
-	// prReviewInFlight gates the overlay keys (ctrl+c only) while an approve
-	// or merge gh call runs, mirroring refActionInFlight for the delete
-	// confirm. The busy status it sets drives the spinner via statusIsBusy.
-	prReviewInFlight bool
-	// prReviewNotice is the one-shot approve-ok / action-failed line shown in
-	// the overlay hint (the diff View() never renders m.status). Cleared on
-	// the next overlay keypress; prReviewNoticeErr picks its color.
-	prReviewNotice    string
-	prReviewNoticeErr bool
-	// prReviewBody is the comment / request-changes textarea, live while
-	// prAction is prActionComment / prActionRequestChanges. prReviewBodyErr is
-	// the inline editor error (empty-body guard / gh failure) — a failed submit
-	// keeps the editor open with the cause shown instead of closing it.
-	prReviewBody    textarea.Model
-	prReviewBodyErr string
+	// mergeConfirm backs viewModeMergeConfirm: the open PR the `m` dialog will
+	// merge. mergeReturnMode records the page that armed it (graph / PR page)
+	// so the centered dialog composes over — and closes back to — that page.
+	mergeConfirm    mergeConfirmState
+	mergeReturnMode viewMode
+	// mergeInFlight gates the merge dialog to ctrl+c only while `gh pr merge`
+	// runs so a second strategy key can't fork a parallel call. The busy
+	// status it sets drives the spinner via statusIsBusy.
+	mergeInFlight bool
 	// pullInFlight gates the p key. Tracked separately from fetchInFlight so
 	// F + P can run in parallel; git's own .git/index.lock is the real
 	// serialization point.
@@ -345,9 +329,9 @@ type Model struct {
 	// worktreesModal backs viewModeWorktreesModal. Cursor indexes into
 	// m.modalWorktrees() at modal-open time. Reset to zero on close.
 	worktreesModal worktreesModalState
-	// prsModal backs viewModePRsModal. Cursor indexes into m.prList at
-	// modal-open time. Reset to zero on close.
-	prsModal prsModalState
+	// prsPage backs viewModePRsPage. Cursor indexes into m.prList; clamped
+	// when a refresh lands a shorter list while the page is open.
+	prsPage prsPageState
 	// pendingRebase backs viewModeRebaseConfirm. Stamped on `R` with the
 	// cursor hash + display label + HEAD branch; consumed by the confirm
 	// key handler. Reset on esc / dispatch.
@@ -615,13 +599,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		pushFailedMsg:
 		return m.updateCheckoutMsg(msg)
 
-	case prApproveDoneMsg,
-		prApproveFailedMsg,
+	case prWebOpenedMsg,
+		prWebFailedMsg,
 		prMergeDoneMsg,
-		prMergeFailedMsg,
-		prReviewBodyDoneMsg,
-		prReviewBodyFailedMsg:
-		return m.updatePRReviewMsg(msg)
+		prMergeFailedMsg:
+		return m.updatePRActionMsg(msg)
 
 	case tea.FocusMsg,
 		fetchSucceededMsg,
@@ -1216,9 +1198,9 @@ func (m Model) View() string {
 	var main string
 	switch {
 	case m.mode == viewModeDiffWindow:
-		// The commit / PR-review patch now lives inside the page box — tabs
-		// above, keymap hint below — instead of a chrome-less full-screen
-		// overlay, mirroring the local-changes diff pane.
+		// The commit patch now lives inside the page box — tabs above, keymap
+		// hint below — instead of a chrome-less full-screen overlay, mirroring
+		// the local-changes diff pane.
 		main = boxStyle(true).Width(s.graphW).Height(s.graphH).Render(m.diff.PatchView())
 	case m.mode == viewModeLocalChanges:
 		// Drill-down: render only the focused pane, full-screen. `enter`
@@ -1234,18 +1216,18 @@ func (m Model) View() string {
 		// dashboard as their backdrop via isWorktreesSurface so the centered
 		// confirm box composes over it, not over the graph.
 		main = boxStyle(true).Width(s.graphW).Height(s.graphH).Render(m.renderWorktreesView(s.graphW, s.graphH))
+	case m.isPRsSurface():
+		// Full-screen Pull Requests page (same seam as the worktree dashboard).
+		// The merge confirm launched from it keeps the page as its backdrop via
+		// isPRsSurface so the centered box composes over it, not over the graph.
+		main = boxStyle(true).Width(s.graphW).Height(s.graphH).Render(m.renderPRsView(s.graphW, s.graphH))
 	default:
 		main = boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
 	}
-	// The diff page swaps the help/status line for its own keymap hint
-	// (scroll · file · close); PR review shows its action keymap instead.
 	// The commit diff page shares the local-changes diff's footer — `? help`,
 	// expanding into the panel — with the file/hunk position carried by the
-	// in-box header instead. A PR-review diff keeps its action keymap there.
+	// in-box header instead.
 	bottom := m.renderHelpStatus()
-	if m.mode == viewModeDiffWindow && m.reviewPRNumber != 0 && !m.showsHelp() {
-		bottom = m.renderPRReviewHint()
-	}
 	base := lipgloss.JoinVertical(lipgloss.Left, m.renderPageTabs(), main, bottom)
 
 	switch m.mode {
@@ -1261,8 +1243,8 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderWorktreeRemoveConfirmInner()), m.width, m.height)
 	case viewModeZombieCleanupConfirm:
 		return composeOverlay(base, renderModalBox(m.renderZombieCleanupConfirmInner()), m.width, m.height)
-	case viewModePRsModal:
-		return composeOverlay(base, renderModalBox(m.renderPRsModalInner()), m.width, m.height)
+	case viewModeMergeConfirm:
+		return composeOverlay(base, renderModalBox(m.renderMergeConfirmInner()), m.width, m.height)
 	case viewModeBranchCreateInput:
 		return composeOverlay(base, renderModalBox(m.renderBranchCreateInputInner()), m.width, m.height)
 	case viewModeRefDeleteConfirm:
@@ -1275,11 +1257,6 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderRevertConfirmInner()), m.width, m.height)
 	case viewModeResetConfirm:
 		return composeOverlay(base, renderModalBox(m.renderResetConfirmInner()), m.width, m.height)
-	}
-	// A PR-review approve/merge/comment confirm composes over the diff page,
-	// the same centered-box seam the graph-page modals use above.
-	if m.mode == viewModeDiffWindow && m.reviewPRNumber != 0 && m.prAction != prActionNone {
-		return composeOverlay(base, renderModalBox(m.renderPRActionConfirmInner()), m.width, m.height)
 	}
 	return base
 }
@@ -1303,6 +1280,21 @@ func (m Model) isWorktreesSurface() bool {
 	return false
 }
 
+// isPRsSurface reports whether the full-screen Pull Requests page owns the main
+// area — the page itself, or the merge confirm launched from it (which composes
+// over the PR page as its backdrop rather than over the graph). A merge confirm
+// launched from the graph keeps the graph backdrop (mergeReturnMode is the
+// graph's viewModeNormal), so it resolves to the default page instead.
+func (m Model) isPRsSurface() bool {
+	switch m.mode {
+	case viewModePRsPage:
+		return true
+	case viewModeMergeConfirm:
+		return m.mergeReturnMode == viewModePRsPage
+	}
+	return false
+}
+
 // pageTabsRows is the single row the page breadcrumb claims at the top of
 // every page. Page navigation moved entirely onto the tab/shift+tab cycle
 // (the `w` / `,` keys were retired), so the breadcrumb is the only always-on
@@ -1311,28 +1303,21 @@ const pageTabsRows = 1
 
 // pageTabLabels are the breadcrumb labels in cycle order: tab advances left to
 // right (wrapping), shift+tab reverses. Index matches currentPageIndex.
-var pageTabLabels = [...]string{"Graph", "Worktree", "Local Changes"}
+var pageTabLabels = [...]string{"Graph", "Worktree", "Local Changes", "Pull Requests"}
 
 // currentPageIndex maps the viewMode to its top-level page (0 graph, 1
-// worktree, 2 local changes). Overlays / confirms resolve to the page they
-// compose over (worktree sub-modals → worktree, everything else → graph) so
-// the breadcrumb stays steady while a modal is open.
+// worktree, 2 local changes, 3 pull requests). Overlays / confirms resolve to
+// the page they compose over (worktree sub-modals → worktree, the merge
+// confirm → its launching page, everything else → graph) so the breadcrumb
+// stays steady while a modal is open.
 func (m Model) currentPageIndex() int {
 	switch {
 	case m.mode == viewModeLocalChanges:
 		return 2
 	case m.isWorktreesSurface():
 		return 1
-	case m.mode == viewModeDiffWindow && m.reviewPRNumber != 0:
-		// The PR-review patch composes over whichever page launched it.
-		// reviewReturnMode records that origin: the worktree dashboard
-		// (`enter` there) keeps the Worktree tab; graph `enter` and the `l`
-		// PR-list modal both belong to the graph page. The plain commit patch
-		// (reviewPRNumber == 0) is always the graph page (default).
-		if m.reviewReturnMode == viewModeWorktreesModal {
-			return 1
-		}
-		return 0
+	case m.isPRsSurface():
+		return 3
 	default:
 		return 0
 	}
@@ -1343,7 +1328,7 @@ func (m Model) currentPageIndex() int {
 // The inline help panel only shows on these.
 func (m Model) isPageMode() bool {
 	switch m.mode {
-	case viewModeNormal, viewModeWorktreesModal, viewModeLocalChanges, viewModeDiffWindow:
+	case viewModeNormal, viewModeWorktreesModal, viewModeLocalChanges, viewModeDiffWindow, viewModePRsPage:
 		return true
 	}
 	return false
@@ -1355,11 +1340,7 @@ func (m Model) isPageMode() bool {
 // it short-circuits before helpCategoriesFor.
 func (m Model) currentHelpCategories() []helpCategory {
 	if m.mode == viewModeDiffWindow {
-		cats := []helpCategory{helpGlobal, helpDiff}
-		if m.reviewPRNumber != 0 {
-			cats = append(cats, helpPRReview)
-		}
-		return cats
+		return []helpCategory{helpGlobal, helpDiff}
 	}
 	return helpCategoriesFor(m.currentPageIndex())
 }
@@ -1411,7 +1392,7 @@ func (m Model) renderHelpStatus() string {
 		return renderHelpExpanded(m.currentHelpCategories(), m.width, m.helpReservedRows())
 	}
 	switch m.mode {
-	case viewModeBranchPicker, viewModeBranchesModal, viewModePRsModal,
+	case viewModeBranchPicker, viewModeBranchesModal, viewModeMergeConfirm,
 		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
 		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm,
 		viewModeBranchCreateInput, viewModeRefDeleteConfirm,

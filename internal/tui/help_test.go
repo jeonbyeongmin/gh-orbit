@@ -10,7 +10,7 @@ import (
 // hint carries — every refactor of the panel must keep them all.
 func TestHelpDataCoverage(t *testing.T) {
 	required := []string{
-		"j/k", "enter", "y", "d", "F", "p", "P", "r", "R", "c", "n",
+		"j/k", "enter", "y", "d", "F", "p", "P", "r", "R", "c", "n", "m",
 		"^C ^C", "tab/⇧tab", "space", "b",
 	}
 
@@ -128,6 +128,7 @@ func TestHelpCategoriesForPageScoping(t *testing.T) {
 		{0, "Global,Graph,Sync"},
 		{1, "Global,Worktree"},
 		{2, "Global,Tree,Diff"},
+		{3, "Global,Pull Requests"},
 	}
 	for _, tc := range cases {
 		got := helpCategoriesFor(tc.page)

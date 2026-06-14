@@ -76,7 +76,6 @@ var (
 			{
 				{"r", "reload"},
 				{"b", "branches modal"},
-				{"Z", "zombie cleanup"},
 			},
 		},
 	}

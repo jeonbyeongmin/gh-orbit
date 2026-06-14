@@ -7,7 +7,6 @@
 package tui
 
 import (
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -72,9 +71,6 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.mode == viewModeMergeConfirm {
 		return m.handleMergeConfirmKey(msg)
-	}
-	if m.mode == viewModeZombieCleanupConfirm {
-		return m.handleZombieCleanupConfirmKey(msg)
 	}
 	if m.mode == viewModeLocalChanges {
 		return m.handleLocalChangesKey(msg)
@@ -427,32 +423,6 @@ func (m Model) handleMergeConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleZombieCleanupConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// While the bulk-delete cmd is in flight, only ctrl+c (quit)
-	// is honored so a second y/Y can't fork a parallel sweep.
-	if m.zombieInFlight {
-		if msg.String() == "ctrl+c" {
-			return m.handleCtrlC()
-		}
-		return m, nil
-	}
-	switch msg.String() {
-	case "q", "esc":
-		m.mode = viewModeNormal
-		m.zombieCleanup = zombieCleanupState{}
-		m.status = "zombie cleanup: aborted"
-		m.statusStyle = statusOkS
-		return m, nil
-	case "ctrl+c":
-		return m.handleCtrlC()
-	case "y", "Y":
-		m.zombieInFlight = true
-		m.setBusyStatus(fmt.Sprintf("deleting %d zombie branches…", len(m.zombieCleanup.branches)))
-		return m, deleteZombieBranchesCmd(m.workdir, m.zombieCleanup.branches)
-	}
-	return m, nil
-}
-
 func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -613,17 +583,6 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Merge the cursor row's open PR — arms the merge confirm dialog.
 		// Rows without a PR-bearing chip report on the status line.
 		return m.beginMergeForCursor()
-	case "Z":
-		// Zombie-branch cleanup is a global action now that the sidebar
-		// is gone — the previous paneRefs focus gate had no meaningful
-		// successor, and the bulk-delete is the same regardless of
-		// which pane the user is on.
-		if m.zombieInFlight {
-			return m, nil
-		}
-		m.zombieInFlight = true
-		m.setBusyStatus("scanning for zombie branches…")
-		return m, detectZombieBranchesCmd(m.workdir)
 	case " ", "space":
 		// `space` runs the checkout / ff / detach evaluator on the cursor
 		// row — the action `enter` carried before PR review took the enter

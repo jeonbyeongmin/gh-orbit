@@ -634,7 +634,7 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateBranchOpsMsg handles branch lifecycle replies: single delete
-// (refs pane / branches modal `d`) and bulk zombie cleanup (`Z`).
+// (refs pane / branches modal `d`).
 func (m Model) updateBranchOpsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case branchDeleteSucceededMsg:
@@ -665,31 +665,6 @@ func (m Model) updateBranchOpsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refActionInFlight = false
 		m.pendingRefDelete.notMerged = true
 		return m, nil
-
-	case zombieDetectedMsg:
-		m.zombieInFlight = false
-		if len(msg.branches) == 0 {
-			m.status = fmt.Sprintf("no zombie branches (merged into %s, upstream gone, not checked out)", msg.baseline)
-			m.statusStyle = statusOkS
-			return m, nil
-		}
-		m.zombieCleanup = zombieCleanupState(msg)
-		m.mode = viewModeZombieCleanupConfirm
-		m.status = ""
-		return m, nil
-
-	case zombieDetectFailedMsg:
-		m.zombieInFlight = false
-		m.status = "zombie scan: " + firstLine(msg.err.Error())
-		m.statusStyle = statusErrS
-		return m, nil
-
-	case zombieDeletedMsg:
-		m.zombieInFlight = false
-		m.mode = viewModeNormal
-		m.zombieCleanup = zombieCleanupState{}
-		m.status, m.statusStyle = formatZombieSummary(msg.deleted, msg.failed)
-		return m, m.reloadCmd()
 	}
 	return m, nil
 }

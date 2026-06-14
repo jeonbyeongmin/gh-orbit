@@ -40,7 +40,6 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | `enter` (체크아웃 / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
 | `w` worktree (전환 / 추가 / 제거) | `git worktree list` / `add` / `remove` |
 | `b` → `d` (브랜치 삭제) | `git branch -d <branch>` |
-| `Z` (좀비 정리) | `git branch --merged` + `git branch -d` 반복 |
 | `c` / `R` | `git cherry-pick <commit>` / `git rebase <onto>` |
 | `v` / `x` | `git revert <commit>` / `git reset --soft\|--mixed\|--hard <commit>` |
 | `n` | `git checkout -b <name> <commit>` |
@@ -90,7 +89,6 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 - 체크아웃이 깨끗한 트리를 요구하면 `s` 로 stash 후 계속, `a` / `esc` 로 중단한다.
 - `n` 은 커서에 브랜치를 만들고 전환한다.
 - `b` 는 로컬 브랜치를 나열하고 `d` 로 커서 브랜치를 삭제한다(HEAD 보호).
-- `Z` 는 기본 브랜치에 머지됐고, upstream 이 `[gone]` 이며, 어디에도 체크아웃되지 않은 브랜치를 한 번의 확인으로 일괄 삭제한다(reflog 복구 힌트 포함).
 
 ### 히스토리 조작
 
@@ -125,7 +123,7 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | `n` | 그래프 | 커서에 브랜치 생성 + 전환 |
 | `F` / `p` / `P` | 전역 | fetch / pull / push |
 | `o` / `y` | 그래프 | GitHub 에서 PR 열기 / 해시 복사 |
-| `Z` / `r` | 전역 | 좀비 브랜치 정리 / reload |
+| `r` | 전역 | reload |
 | `?` | 전역 | help 패널 토글 |
 | `ctrl+c` `ctrl+c` | 전역 | 종료(두 번 누르기) |
 

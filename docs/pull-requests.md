@@ -69,9 +69,8 @@ merge PR #N?
 `--delete-branch` is deliberately never passed (deleting the branch is a
 surprise the reviewer didn't ask for). While the merge runs the dialog
 swaps to a `merging…` spinner line and `mergeInFlight` gates it to
-`ctrl+c` only, so a second strategy key can't fork a parallel `gh` call
-(mirrors `zombieInFlight` for the bulk-delete confirm). The busy status
-drives the spinner via `statusIsBusy`.
+`ctrl+c` only, so a second strategy key can't fork a parallel `gh` call.
+The busy status drives the spinner via `statusIsBusy`.
 
 ## Outcome routing
 

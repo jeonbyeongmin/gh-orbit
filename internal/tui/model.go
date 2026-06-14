@@ -16,7 +16,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/config"
-	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
 // focusFetchThrottle caps how often a `tea.FocusMsg` re-triggers a
@@ -88,13 +87,6 @@ const (
 	// matrix derives from dirty + locked: clean rows offer [y] remove,
 	// dirty/locked rows require [Y] for force.
 	viewModeWorktreeRemoveConfirm
-	// viewModeZombieCleanupConfirm hosts the bulk zombie-branch cleanup
-	// confirm. Triggered by `Z` on the refs pane; the modal lists every
-	// local branch that satisfies the 3-condition guard (merged + upstream
-	// gone + not checked out) and lets the user accept-all (y/Y) or abort
-	// (esc). post-delete summary lands on the bottom status line with the
-	// `git reflog` recovery hint.
-	viewModeZombieCleanupConfirm
 	// viewModeBranchesModal hosts the centered overlay listing every local
 	// branch. Entered via `b` from viewModeNormal. `d` on the cursor row
 	// arms viewModeRefDeleteConfirm against that branch — the delete-branch
@@ -147,15 +139,6 @@ const (
 // withFF / withCheckoutFF / ffHash flag the graph-Enter FF paths so the
 // modal hint can name the chain. ref carries the local-branch name;
 // ffHash carries the cursor commit MergeFFOnly should advance to.
-// zombieCleanupState is the snapshot the confirm modal renders. baseline
-// is the default branch that detect ran against (named in the modal so
-// the user knows which "merged" was tested); branches is the candidate
-// list — non-empty whenever the modal is open.
-type zombieCleanupState struct {
-	baseline string
-	branches []git.ZombieBranch
-}
-
 type pendingCheckout struct {
 	ref            string
 	detached       bool
@@ -358,14 +341,6 @@ type Model struct {
 	// from checkoutInFlight so a stuck refs write can't deadlock
 	// checkout / pull / FF chains.
 	refActionInFlight bool
-	// zombieCleanup backs viewModeZombieCleanupConfirm. Populated when the
-	// detect dispatch returns a non-empty list; the modal renderer + key
-	// router both read it without re-running the detection.
-	zombieCleanup zombieCleanupState
-	// zombieInFlight gates the `Z` key + the confirm's y/Y while a
-	// detect-or-delete cmd is running so a second press can't fork a
-	// parallel scan or double-delete the same list.
-	zombieInFlight bool
 	// localChanges hosts the file-tree + diff viewport rendered in place
 	// of the graph when mode == viewModeLocalChanges. The graph model is
 	// left untouched across the toggle so exiting the mode snaps back to
@@ -610,10 +585,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case branchDeleteSucceededMsg,
 		branchDeleteFailedMsg,
-		branchDeleteNotMergedMsg,
-		zombieDetectedMsg,
-		zombieDetectFailedMsg,
-		zombieDeletedMsg:
+		branchDeleteNotMergedMsg:
 		return m.updateBranchOpsMsg(msg)
 
 	case localChangesEnterRequestedMsg,
@@ -1109,7 +1081,7 @@ func (m Model) renderBranchPickerInner() string {
 // in-flight gate — never from the global m.status, which mode-blind
 // async handlers (fetch / push / pull done) keep writing while the
 // dialog is open. The in-flight hint swap mirrors the worktree-remove
-// and zombie-cleanup confirms.
+// confirm.
 func (m Model) renderRefDeleteConfirmInner() string {
 	d := m.pendingRefDelete
 	rows := []string{confirmPromptS.Render("delete '" + d.localName + "'?")}
@@ -1239,8 +1211,6 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderWorktreeAddInputInner()), m.width, m.height)
 	case viewModeWorktreeRemoveConfirm:
 		return composeOverlay(base, renderModalBox(m.renderWorktreeRemoveConfirmInner()), m.width, m.height)
-	case viewModeZombieCleanupConfirm:
-		return composeOverlay(base, renderModalBox(m.renderZombieCleanupConfirmInner()), m.width, m.height)
 	case viewModeMergeConfirm:
 		return composeOverlay(base, renderModalBox(m.renderMergeConfirmInner()), m.width, m.height)
 	case viewModeBranchCreateInput:
@@ -1392,7 +1362,7 @@ func (m Model) renderHelpStatus() string {
 	switch m.mode {
 	case viewModeBranchPicker, viewModeBranchesModal, viewModeMergeConfirm,
 		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
-		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm,
+		viewModeWorktreeRemoveConfirm,
 		viewModeBranchCreateInput, viewModeRefDeleteConfirm,
 		viewModeRebaseConfirm, viewModeCherryPickConfirm,
 		viewModeRevertConfirm, viewModeResetConfirm:

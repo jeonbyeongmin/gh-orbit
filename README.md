@@ -40,7 +40,6 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `space` (checkout / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
 | `w` worktrees (switch / add / remove) | `git worktree list` / `add` / `remove` |
 | `b` → `d` (delete branch) | `git branch -d <branch>` |
-| `Z` (zombie cleanup) | `git branch --merged` + a `git branch -d` loop |
 | `c` / `R` | `git cherry-pick <commit>` / `git rebase <onto>` |
 | `v` / `x` | `git revert <commit>` / `git reset --soft\|--mixed\|--hard <commit>` |
 | `n` | `git checkout -b <name> <commit>` |
@@ -90,7 +89,6 @@ Reviewing happens on GitHub; the cockpit jumps you there and lands the PR.
 - When checkout needs a clean tree, `s` stashes and continues, `a` / `esc` aborts.
 - `n` creates a branch at the cursor and switches to it.
 - `b` lists local branches; `d` deletes the cursor branch (HEAD protected).
-- `Z` bulk-deletes branches that are merged into the default branch, have a `[gone]` upstream, and aren't checked out anywhere — behind one confirm with a reflog recovery hint.
 
 ### History operations
 
@@ -124,7 +122,7 @@ Reviewing happens on GitHub; the cockpit jumps you there and lands the PR.
 | `n` | graph | create a branch at the cursor + switch |
 | `F` / `p` / `P` | global | fetch / pull / push |
 | `y` | graph | copy hash |
-| `Z` / `r` | global | zombie-branch cleanup / reload |
+| `r` | global | reload |
 | `?` | global | toggle help panel |
 | `ctrl+c` `ctrl+c` | global | quit (press twice) |
 

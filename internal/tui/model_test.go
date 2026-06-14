@@ -156,6 +156,26 @@ func TestHelpExpandedShowsColumns(t *testing.T) {
 	}
 }
 
+// TestViewFitsHeightWithHelpOpen guards the short-terminal overflow: the
+// breadcrumb row + main box + help panel must never paint taller than the
+// terminal. helpReservedRows must leave room for pageTabsRows, else the
+// composed view spills a row off-screen.
+func TestViewFitsHeightWithHelpOpen(t *testing.T) {
+	for _, h := range []int{6, 8, 12, 20, 30} {
+		m := New()
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: h})
+		m = updated.(Model)
+		// Open via the real key path so toggleHelp → applyPaneSizes resizes
+		// the graph to the help-reserved height (a bare m.helpOpen = true would
+		// leave the graph sized for the no-help layout — a test artifact).
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+		m = updated.(Model)
+		if got := strings.Count(m.View(), "\n") + 1; got > h {
+			t.Errorf("height=%d with help open: View() painted %d rows, want ≤ %d", h, got, h)
+		}
+	}
+}
+
 func TestRenderHelpStatusStatusOverridesHint(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

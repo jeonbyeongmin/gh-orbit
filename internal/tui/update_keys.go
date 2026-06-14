@@ -360,9 +360,7 @@ func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.enterGraphPage(), nil
 	case "?":
 		// Inline help on the worktree page (Global + Worktree categories).
-		m.helpOpen = !m.helpOpen
-		m.applyPaneSizes()
-		return m, nil
+		return m.toggleHelp()
 	case "ctrl+c":
 		return m.handleCtrlC()
 	}
@@ -428,9 +426,7 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		// Inline help on the local changes page itself — no longer yanks to
 		// the graph. Shows the Global + Local Changes categories.
-		m.helpOpen = !m.helpOpen
-		m.applyPaneSizes()
-		return m, nil
+		return m.toggleHelp()
 	case "r":
 		return m, loadStatusCmd(m.workdir)
 	}
@@ -521,13 +517,9 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m.handleCtrlC()
 	case "?":
-		// Toggle the inline help reference panel. It grows out of the
-		// footer (not a modal) — other shortcuts keep working while it is
-		// open, so applyPaneSizes reflows the page around the reserved rows
-		// on both expand and collapse.
-		m.helpOpen = !m.helpOpen
-		m.applyPaneSizes()
-		return m, nil
+		// Toggle the inline help reference panel. It grows out of the footer
+		// (not a modal) — other shortcuts keep working while it is open.
+		return m.toggleHelp()
 	case "F":
 		if m.fetchInFlight {
 			return m, nil

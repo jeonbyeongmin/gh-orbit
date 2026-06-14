@@ -730,6 +730,15 @@ func (m Model) enterGraphPage() Model {
 	return m
 }
 
+// toggleHelp flips the inline `?` reference panel and reflows the current page
+// around the reserved rows. Shared by every page's `?` handler so the toggle
+// contract stays in one place.
+func (m Model) toggleHelp() (tea.Model, tea.Cmd) {
+	m.helpOpen = !m.helpOpen
+	m.applyPaneSizes()
+	return m, nil
+}
+
 // enterLocalChangesDiff drills the tree into the diff for the cursor entry:
 // flips the sub-focus to the diff pane and loads its patch. The lazy
 // counterpart to the retired tab toggle — the diff isn't fetched until the
@@ -1027,8 +1036,8 @@ func (m Model) paneSizes() paneSizes {
 	// Reserve 1 row for the bottom help/status line, or the full inline panel
 	// height when `?` is open. The centered overlay modal modes (branchPicker /
 	// branchesModal / checkoutConfirm / worktree sub-modals) are painted on top
-	// of the unchanged 3-pane base by composeOverlay, so they reserve no extra
-	// rows here — only viewModeHelp grows the bottom region.
+	// of the unchanged base by composeOverlay, so they reserve no extra rows
+	// here — only an open help panel (showsHelp) grows the bottom region.
 	helpReserved := 1
 	if m.showsHelp() {
 		helpReserved = m.helpReservedRows()
@@ -1077,7 +1086,10 @@ func (m Model) paneSizes() paneSizes {
 func (m Model) helpReservedRows() int {
 	want := lipgloss.Height(renderHelpColumns(helpCategoriesFor(m.currentPageIndex())))
 	want = max(min(want, m.height/2), 3)
-	if upper := m.height - 3; upper > 0 {
+	// Keep ≥3 main rows after BOTH the help panel and the breadcrumb row are
+	// carved off (paneSizes subtracts pageTabsRows too) — without the
+	// -pageTabsRows the composed view overflows by a row on short terminals.
+	if upper := m.height - 3 - pageTabsRows; upper > 0 {
 		want = min(want, upper)
 	}
 	return max(want, 1)
@@ -1375,7 +1387,13 @@ func (m Model) renderPageTabs() string {
 		}
 	}
 	tabs := strings.Join(parts, pageTabInactiveS.Render(" · "))
-	return layoutLeftRight(tabs, help.Render("tab / shift+tab"), m.width)
+	hint := help.Render("tab / shift+tab")
+	// Drop the cycle hint before it would wrap the row on a narrow terminal —
+	// the labels (and the active highlight) are the load-bearing part.
+	if lipgloss.Width(tabs)+lipgloss.Width(hint)+1 > m.width {
+		return tabs
+	}
+	return layoutLeftRight(tabs, hint, m.width)
 }
 
 // renderHelpStatus lays out the bottom line as "help … status". When the
@@ -1388,8 +1406,8 @@ func (m Model) renderPageTabs() string {
 // row count stable across the modal toggle so View()'s base frame doesn't
 // jump in height.
 //
-// viewModeHelp expands the bottom line into a multi-row panel so the
-// shortcut reference can fit the full key matrix.
+// An open help panel (showsHelp) expands the bottom line into a multi-row
+// panel so the shortcut reference can fit the current page's key matrix.
 func (m Model) renderHelpStatus() string {
 	if m.showsHelp() {
 		// Inline column reference panel, grown out of the footer over the rows

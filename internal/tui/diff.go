@@ -75,6 +75,12 @@ func newDiffModel() diffModel {
 }
 
 func (d *diffModel) SetPatchViewportSize(w, h int) {
+	// Floor the height at 1 so a tiny terminal — or the `?` help panel open
+	// over the diff, which can shrink the box to one row — never collapses the
+	// body to zero visible lines (mirrors localChangesModel.SetSize's clamp).
+	if h < 1 {
+		h = 1
+	}
 	d.viewport.Width = w
 	d.viewport.Height = h
 	d.patchViewportInit = true
@@ -151,6 +157,10 @@ func (d *diffModel) ScrollPatch(msg tea.KeyMsg) tea.Cmd {
 	d.viewport, cmd = d.viewport.Update(msg)
 	d.syncActiveFileFromYOffset()
 	d.syncHunkFromYOffset()
+	// Repaint so the accented `@@` line tracks the hunk the scroll landed on —
+	// without this the header's [hunk K/N] advances but the highlight stays on
+	// the previous hunk.
+	d.refreshPatchViewport()
 	return cmd
 }
 
@@ -168,9 +178,14 @@ func (d *diffModel) MoveHunk(delta int) {
 	if d.hunkCursor >= len(d.hunkStarts) {
 		d.hunkCursor = len(d.hunkStarts) - 1
 	}
+	// Pair activeFile to the hunk itself, not the post-clamp YOffset — on a
+	// patch shorter than the viewport SetYOffset clamps to 0 and would drag the
+	// header's file back to file 0 while the hunk index advanced.
+	if fi := d.fileIndexForHunk(d.hunkCursor); fi >= 0 {
+		d.activeFile = fi
+	}
 	d.refreshPatchViewport()
 	d.viewport.SetYOffset(d.hunkStarts[d.hunkCursor])
-	d.syncActiveFileFromYOffset()
 }
 
 // syncHunkFromYOffset parks hunkCursor on the largest hunk header at or below
@@ -200,6 +215,43 @@ func (d diffModel) CurrentHunk() (index, total int) {
 		return 0, 0
 	}
 	return d.hunkCursor + 1, len(d.hunkStarts)
+}
+
+// fileIndexForHunk returns the index into files of the file owning the hunk at
+// hunkStarts[hi] (the largest `diff --git` boundary at or before it), or -1
+// when there are no files. Deriving activeFile from the hunk rather than the
+// viewport's YOffset keeps the header's file/hunk pair consistent even when the
+// patch is shorter than the viewport and SetYOffset clamps to 0.
+func (d diffModel) fileIndexForHunk(hi int) int {
+	if hi < 0 || hi >= len(d.hunkStarts) || len(d.files) == 0 {
+		return -1
+	}
+	line := d.hunkStarts[hi]
+	idx := 0
+	for i, f := range d.files {
+		if f.line <= line {
+			idx = i
+		} else {
+			break
+		}
+	}
+	return idx
+}
+
+// firstHunkForFile returns the index into hunkStarts of the first hunk at or
+// after files[fi]'s header — the hunk a `{`/`}` file jump should land on — or
+// the current cursor when that file carries no hunk.
+func (d diffModel) firstHunkForFile(fi int) int {
+	if fi < 0 || fi >= len(d.files) {
+		return d.hunkCursor
+	}
+	line := d.files[fi].line
+	for i, s := range d.hunkStarts {
+		if s >= line {
+			return i
+		}
+	}
+	return d.hunkCursor
 }
 
 // refreshPatchViewport repaints the viewport, accenting the selected hunk's
@@ -234,9 +286,11 @@ func (d *diffModel) JumpToNextFile() {
 		return
 	}
 	d.activeFile++
-	d.viewport.SetYOffset(d.files[d.activeFile].line)
-	d.syncHunkFromYOffset()
+	// Land the hunk cursor on the file's first hunk directly — syncing from
+	// the (possibly clamped) YOffset would leave it on the prior file's hunk.
+	d.hunkCursor = d.firstHunkForFile(d.activeFile)
 	d.refreshPatchViewport()
+	d.viewport.SetYOffset(d.files[d.activeFile].line)
 }
 
 // JumpToPrevFile retreats activeFile by one and slides the viewport up
@@ -248,9 +302,9 @@ func (d *diffModel) JumpToPrevFile() {
 		return
 	}
 	d.activeFile--
-	d.viewport.SetYOffset(d.files[d.activeFile].line)
-	d.syncHunkFromYOffset()
+	d.hunkCursor = d.firstHunkForFile(d.activeFile)
 	d.refreshPatchViewport()
+	d.viewport.SetYOffset(d.files[d.activeFile].line)
 }
 
 // syncActiveFileFromYOffset finds the largest file boundary at or below

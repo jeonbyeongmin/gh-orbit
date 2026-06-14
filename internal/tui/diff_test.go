@@ -189,6 +189,25 @@ func TestPatchHeaderCarriesPathAndHunk(t *testing.T) {
 	}
 }
 
+func TestPatchHeaderConsistentWhenYOffsetClamps(t *testing.T) {
+	d := newDiffModel()
+	// Viewport TALLER than the 22-line patch, so every SetYOffset clamps to 0.
+	// The header must still pair each file with its own hunk index, derived
+	// from the cursor rather than the clamped offset.
+	d.SetPatchViewportSize(120, 100)
+	d.BeginPatchLoad("h", 1)
+	d.ApplyPatchLoaded(1, "h", threeFilePatch)
+
+	d.MoveHunk(2) // → gamma's hunk; YOffset clamps to 0
+	if h := d.patchHeader(); !strings.Contains(h, "gamma.go") || !strings.Contains(h, "[hunk 3/3]") {
+		t.Errorf("clamped MoveHunk header = %q, want gamma.go + [hunk 3/3]", h)
+	}
+	d.JumpToPrevFile() // gamma → beta
+	if h := d.patchHeader(); !strings.Contains(h, "beta.go") || !strings.Contains(h, "[hunk 2/3]") {
+		t.Errorf("clamped JumpToPrevFile header = %q, want beta.go + [hunk 2/3]", h)
+	}
+}
+
 func TestMoveHunkWalksAllHunks(t *testing.T) {
 	d := newDiffModel()
 	// Viewport smaller than the patch so SetYOffset isn't clamped.

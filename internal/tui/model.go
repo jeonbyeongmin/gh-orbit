@@ -1324,9 +1324,15 @@ func (m Model) currentPageIndex() int {
 	case m.isWorktreesSurface():
 		return 1
 	case m.mode == viewModeDiffWindow && m.reviewPRNumber != 0:
-		// The PR-review patch opens from the worktree page; the plain commit
-		// patch (reviewPRNumber == 0) belongs to the graph page (default).
-		return 1
+		// The PR-review patch composes over whichever page launched it.
+		// reviewReturnMode records that origin: the worktree dashboard
+		// (`enter` there) keeps the Worktree tab; graph `enter` and the `l`
+		// PR-list modal both belong to the graph page. The plain commit patch
+		// (reviewPRNumber == 0) is always the graph page (default).
+		if m.reviewReturnMode == viewModeWorktreesModal {
+			return 1
+		}
+		return 0
 	default:
 		return 0
 	}

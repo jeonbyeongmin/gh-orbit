@@ -197,6 +197,9 @@ func TestWorktreesModalReviewPROpensReview(t *testing.T) {
 	if got.reviewReturnMode != viewModeWorktreesModal {
 		t.Error("review should arm reviewReturnMode = dashboard so close returns there")
 	}
+	if got.currentPageIndex() != 1 {
+		t.Errorf("worktree-launched PR review should keep the Worktree tab active, got page %d", got.currentPageIndex())
+	}
 	if cmd == nil {
 		t.Error("opening the review should dispatch the diff load")
 	}

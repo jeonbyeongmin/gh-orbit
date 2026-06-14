@@ -67,6 +67,26 @@ func TestPRReviewOpenFromCursorRow(t *testing.T) {
 	}
 }
 
+// A PR review launched from the graph (`enter`) must keep the Graph tab
+// active — the breadcrumb reads reviewReturnMode, not just reviewPRNumber.
+// Regression: currentPageIndex used to return Worktree for any PR overlay,
+// so graph `enter` lit the wrong tab.
+func TestPRReviewFromGraphKeepsGraphTab(t *testing.T) {
+	prev := prDiffExec
+	t.Cleanup(func() { prDiffExec = prev })
+	prDiffExec = func(_ context.Context, _ string, _ int) (string, error) { return "", nil }
+
+	m := browsePRFixture(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.mode != viewModeDiffWindow || m.reviewPRNumber == 0 {
+		t.Fatalf("enter should open the PR review overlay; mode=%v pr=%d", m.mode, m.reviewPRNumber)
+	}
+	if got := m.currentPageIndex(); got != 0 {
+		t.Errorf("graph-launched PR review should keep the Graph tab active, got page %d", got)
+	}
+}
+
 // enter without a PR-bearing chip reports instead of opening an empty overlay.
 func TestPRReviewOpenWithoutPRReports(t *testing.T) {
 	m := rebaseFixture(t)

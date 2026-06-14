@@ -62,9 +62,9 @@ var (
 			},
 		},
 	}
-	// helpSync — repo sync + list/cleanup modals, reachable only from the
+	// helpSync — repo sync + the branch-list modal, reachable only from the
 	// graph page (handleNormalKey): remote transfers apart from local
-	// refresh / cleanup. Split out of Graph so the column stays short.
+	// refresh / branch list. Split out of Graph so the column stays short.
 	helpSync = helpCategory{
 		title: "Sync",
 		groups: [][]helpEntry{

@@ -145,7 +145,12 @@ func parseRefLine(line string) (Ref, bool, error) {
 	if kind == RefKindUnknown {
 		return Ref{}, false, nil
 	}
-	if kind == RefKindRemote && strings.HasSuffix(shortName, "/HEAD") {
+	// refs/remotes/<remote>/HEAD is the symbolic default-branch pointer; its
+	// %(refname:short) collapses to just "<remote>" (e.g. "origin"), the only
+	// remote-tracking ref with no "<remote>/" prefix. Drop it — otherwise it
+	// masquerades as a checkout target and `git checkout origin` detaches HEAD
+	// (a chained pull then fails with "You are not currently on a branch").
+	if kind == RefKindRemote && !strings.ContainsRune(shortName, '/') {
 		return Ref{}, false, nil
 	}
 	if objType != "commit" && objType != "tag" {

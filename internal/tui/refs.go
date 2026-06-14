@@ -2,8 +2,13 @@
 // ref-list view, no cursor, no sidebar at all — refModel survives as a
 // data holder for everything the rest of the cockpit needs:
 //
-//   - byKind ([local, remote, tag]) backs graph Enter's chip evaluator
-//     and the branches modal's source list (via LocalRefs / RemoteRefs).
+//   - byKind ([local, remote, tag]) backs the branches modal's source
+//     list and the rebase/refs targets (via LocalRefs / RemoteRefs); its
+//     remote slice hides remotes a same-name local already mirrors.
+//   - allRemotes keeps every remote-tracking ref unfiltered — the graph
+//     Space evaluator needs origin/xx on a row even when local xx exists
+//     (to offer checkout+FF / a picker), so it reads AllRemoteRefs, not
+//     the mirror-filtered RemoteRefs.
 //   - worktrees + dirty/timed-out maps + currentWorktreePath back the
 //     worktrees dashboard (via Worktrees /
 //     WorktreeDirty / SelectedWorktree-style consumers in worktree.go).
@@ -25,9 +30,10 @@ import (
 const refLoadTimeout = 30 * time.Second
 
 type refModel struct {
-	byKind [3][]git.Ref
-	loaded bool
-	err    error
+	byKind     [3][]git.Ref
+	allRemotes []git.Ref
+	loaded     bool
+	err        error
 
 	worktrees           []git.Worktree
 	currentWorktreePath string
@@ -92,6 +98,7 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 	switch m := msg.(type) {
 	case refsLoadedMsg:
 		r.byKind = partitionByKind(m.refs)
+		r.allRemotes = remotesOnly(m.refs)
 		r.loaded = true
 		r.err = nil
 		return r, nil
@@ -107,9 +114,16 @@ func (r refModel) Update(msg tea.Msg) (refModel, tea.Cmd) {
 // evaluator + the branches modal both reach into byKind through this API.
 func (r refModel) LocalRefs() []git.Ref { return r.byKind[0] }
 
-// RemoteRefs returns the cached remote-tracking slice. graph Enter's
-// cross-branch FF path consumes this.
+// RemoteRefs returns the cached remote-tracking slice with same-name-local
+// mirrors hidden — the rebase target list and refs display want the deduped
+// view.
 func (r refModel) RemoteRefs() []git.Ref { return r.byKind[1] }
+
+// AllRemoteRefs returns every remote-tracking ref, including ones a
+// same-name local mirrors. The graph Space evaluator consumes this so
+// "Space on origin/xx" still sees origin/xx on the row when local xx
+// exists (to drive the checkout+FF / picker decision).
+func (r refModel) AllRemoteRefs() []git.Ref { return r.allRemotes }
 
 // SetWorktrees rewrites the inventory. Dirty / timed-out maps drop
 // entries that disappeared so the modal never paints a marker for a
@@ -214,6 +228,19 @@ func (r *refModel) SetLastFetchAt(t time.Time) { r.lastFetchAt = t }
 // remote-mirror filter hides a remote-tracking ref whose stripped name
 // matches a local branch — graph Enter + branches modal see the cleaned
 // list, no redundant mirror noise.
+// remotesOnly returns every remote-tracking ref unfiltered, preserving
+// for-each-ref order. Unlike partitionByKind's remote slice it keeps refs a
+// same-name local mirrors — the graph Space evaluator needs the full set.
+func remotesOnly(refs []git.Ref) []git.Ref {
+	var out []git.Ref
+	for _, ref := range refs {
+		if ref.Kind == git.RefKindRemote {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
 func partitionByKind(refs []git.Ref) [3][]git.Ref {
 	localNames := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {

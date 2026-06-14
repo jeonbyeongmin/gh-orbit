@@ -259,8 +259,13 @@ func TestGraphActionMsgStaleHashIsDropped(t *testing.T) {
 	}
 }
 
-func TestBranchPickerEnterDispatchesCheckout(t *testing.T) {
-	getRef, _ := stubCheckout(t)
+func TestBranchPickerEnterDispatchesCheckoutFF(t *testing.T) {
+	var coRef, ffHash string
+	withChainStubs(t, chainStubs{
+		checkout:    func(_ context.Context, _, r string) error { coRef = r; return nil },
+		mergeFFOnly: func(_ context.Context, _, h string) error { ffHash = h; return nil },
+		countAhead:  func(_ context.Context, _, _, _ string) (int, error) { return 2, nil },
+	})
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -276,18 +281,23 @@ func TestBranchPickerEnterDispatchesCheckout(t *testing.T) {
 	if m.mode != viewModeNormal {
 		t.Errorf("mode = %v, want viewModeNormal after enter", m.mode)
 	}
-	if !m.checkoutInFlight {
-		t.Error("picker enter should latch checkoutInFlight via beginCheckout")
-	}
-	if m.pendingCheckout.ref != "feat-b" {
-		t.Errorf("pendingCheckout.ref = %q, want feat-b (cursor=1)", m.pendingCheckout.ref)
+	// Picker enter checks out the choice then fast-forwards it up to the
+	// cursor row — the FF gate, not the plain checkout gate.
+	if !m.ffInFlight {
+		t.Error("picker enter should latch ffInFlight (checkout + ff)")
 	}
 	if cmd == nil {
 		t.Fatal("picker enter should return a cmd")
 	}
-	_ = cmd()
-	if got, ok := getRef(); !ok || got != "feat-b" {
-		t.Errorf("checkoutExec ref = %q ok=%v, want feat-b", got, ok)
+	msg := cmd()
+	if coRef != "feat-b" {
+		t.Errorf("checkoutExec ref = %q, want feat-b (cursor=1)", coRef)
+	}
+	if ffHash != "abc1234" {
+		t.Errorf("mergeFFOnly hash = %q, want the picker's cursor hash abc1234", ffHash)
+	}
+	if _, ok := msg.(checkoutThenFFSucceededMsg); !ok {
+		t.Errorf("msg = %T, want checkoutThenFFSucceededMsg", msg)
 	}
 }
 
@@ -487,81 +497,5 @@ func TestCheckoutThenFFSucceededMsgReloadsAndJumpsHEAD(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("checkoutThenFFSucceededMsg should dispatch reload cmd")
-	}
-}
-
-// --- pull-after chain (enter on origin/xx → checkout/FF → git pull) ---
-
-func TestPullAfterActionChainsPullOnFFSuccess(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m = seedGraphCursor(t, m, "abc1234")
-	m.actionInFlight = true
-
-	updated, _ = m.Update(graphActionMsg{
-		hash: "abc1234", kind: graphActionFF, branch: "main", advance: 2, pullAfter: true,
-	})
-	m = updated.(Model)
-	if !m.pullAfterAction {
-		t.Fatal("pullAfter dispatch should arm pullAfterAction")
-	}
-
-	updated, cmd := m.Update(ffSucceededMsg{branch: "main", advance: 2})
-	m = updated.(Model)
-	if m.pullAfterAction {
-		t.Error("success should consume pullAfterAction")
-	}
-	if !m.pullInFlight {
-		t.Error("success should flip pullInFlight and dispatch pull")
-	}
-	if !strings.Contains(m.status, "pulling…") {
-		t.Errorf("status should show the chained pull, got %q", m.status)
-	}
-	if cmd == nil {
-		t.Fatal("success should return reload+pull batch")
-	}
-}
-
-func TestPullAfterActionClearedOnFailureAndAbort(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.pullAfterAction = true
-	updated, _ = m.Update(ffFailedMsg{err: errors.New("ff: divergent")})
-	m = updated.(Model)
-	if m.pullAfterAction {
-		t.Error("ffFailedMsg should clear pullAfterAction")
-	}
-
-	// The needs-clean-tree detour keeps the chain armed — the modal's `s`
-	// (stash & continue) carries the remote-chip Enter's pull through the
-	// retry. Abort is what kills it.
-	m.pullAfterAction = true
-	updated, _ = m.Update(checkoutNeedsCleanTreeMsg{ref: "develop"})
-	m = updated.(Model)
-	if !m.pullAfterAction {
-		t.Error("needs-clean-tree detour should keep pullAfterAction armed for the stash branch")
-	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	m = updated.(Model)
-	if m.pullAfterAction {
-		t.Error("modal abort should clear pullAfterAction")
-	}
-}
-
-func TestPullAfterActionSkipsWhenPullAlreadyInFlight(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.pullAfterAction = true
-	m.pullInFlight = true
-	updated, _ = m.Update(ffSucceededMsg{branch: "main", advance: 1})
-	m = updated.(Model)
-	if m.pullAfterAction {
-		t.Error("in-flight pull should still consume the flag (no deferred surprise pull)")
-	}
-	if !strings.Contains(m.status, "fast-forward") {
-		t.Errorf("status should keep the FF outcome, got %q", m.status)
 	}
 }

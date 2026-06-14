@@ -17,39 +17,40 @@ import (
 type graphActionKind int
 
 const (
-	// graphActionNoOp fires when the cursor's row carries the same local
-	// branch HEAD is already on. Status surfaces "already on <branch>" and
-	// no git invocation runs.
+	// graphActionNoOp fires when HEAD is already on a branch sitting on the
+	// cursor row. Status surfaces "already on <branch>" and no git runs.
 	graphActionNoOp graphActionKind = iota
-	// graphActionCheckout fires when exactly one local-branch chip sits on
-	// the cursor row and HEAD is on a different branch (or is detached).
+	// graphActionCheckout fires when the lone row candidate is a local
+	// branch already on the cursor commit, or a remote name with no local
+	// yet (git dwim-creates it at the remote tip = cursor). Plain switch —
+	// it already lands synced, so no FF follows.
 	graphActionCheckout
-	// graphActionPicker fires when multiple local-branch chips share the
-	// cursor row and HEAD is on none of them. The model enters
-	// viewModeBranchPicker; the user picks one with j/k+enter.
+	// graphActionPicker fires when the cursor row resolves to several
+	// distinct candidates (local chips plus remote chips' tracking locals,
+	// deduped). The model enters viewModeBranchPicker; the user picks one
+	// with j/k+enter, which checks out + fast-forwards the chosen branch.
 	graphActionPicker
-	// graphActionFF fires when the cursor row has no local-branch chip
-	// (mid-commit or remote-only) and HEAD's tip is a strict ancestor of
-	// the cursor commit. Drives ffOnlyCmd to advance HEAD's branch.
+	// graphActionFF fires when the action advances HEAD's own branch up to
+	// the cursor (a mid-commit row strictly ahead, or a remote chip whose
+	// tracking local IS HEAD). Drives ffOnlyCmd.
 	graphActionFF
-	// graphActionCheckoutAndFF fires for the cross-branch case: cursor
-	// row has a remote chip (e.g., origin/develop) whose upstream-tracking
-	// local (e.g., develop) is NOT HEAD. Drives checkoutThenFFCmd —
-	// checkout the local then FF it to the cursor. Fork's "Checkout & Fast
-	// Forward" intent, made explicit instead of relying on the chipless
-	// FF path to coincidentally do the right thing.
+	// graphActionCheckoutAndFF fires when the lone candidate is an existing
+	// local branch sitting off the cursor row (e.g. Space on origin/develop
+	// while local develop is behind, from another branch). Drives
+	// checkoutThenFFCmd — checkout the local then FF it up to the cursor
+	// (the remote tip) so the switch lands synced.
 	graphActionCheckoutAndFF
-	// graphActionDetach fires when none of the above apply: no chip and
-	// either HEAD detached + no cross-branch candidate, or HEAD not an
-	// ancestor of cursor. Drives CheckoutDetached on the cursor hash.
+	// graphActionDetach fires when the cursor row has no branch candidate
+	// and either HEAD is detached or HEAD is not an ancestor of the cursor.
+	// Drives CheckoutDetached on the cursor hash.
 	graphActionDetach
 )
 
 // graphActionMsg is the evaluator's reply. Fields are populated by kind:
-//   - NoOp / Checkout / FF: branch is set (the relevant local-branch name).
+//   - NoOp / Checkout / FF / CheckoutAndFF: branch is the target local name.
 //   - FF: advance is the +N commit count between HEAD's tip and the cursor.
-//   - Picker: candidates is the sorted list of local-branch ShortNames at
-//     the cursor row.
+//   - Picker: candidates is the sorted, deduped list of local names the
+//     cursor row resolves to (local chips + remote chips' tracking locals).
 //   - Detach: only hash is consulted by the handler.
 //
 // hash echoes the cursor commit the evaluation ran against. The model's
@@ -62,12 +63,6 @@ type graphActionMsg struct {
 	branch     string
 	advance    int
 	candidates []string
-	// pullAfter marks an action that started from a remote chip on the
-	// cursor row (origin/xx). The outcome handlers chain a `git pull`
-	// after the checkout/FF lands so "enter on origin/xx" means "get me
-	// onto that branch, synced with the network" — not just synced with
-	// the last-fetch snapshot the graph happens to show.
-	pullAfter bool
 }
 
 // branchPickerState backs viewModeBranchPicker. Reset to the zero value
@@ -134,157 +129,137 @@ func branchPickerVisibleRows(screenH, candidates int) int {
 	return rows
 }
 
-// evaluateGraphActionCmd runs the full Enter decision tree on a goroutine
-// so the model's Update never blocks on git. The decision splits into
-// chip-driven (Checkout / Picker / NoOp) and chipless (CheckoutAndFF /
-// FF / Detach) halves; only the chipless half ever invokes git, and only
-// once (CountAhead). HEAD info and local chips are gathered in a single
-// pass over the locals slice.
+// evaluateGraphActionCmd runs the full Space/Enter decision tree on a
+// goroutine so the model's Update never blocks on git. It resolves the
+// cursor row to a set of checkout candidates — every local-branch chip
+// plus the local each remote chip maps onto (its upstream-tracking local,
+// or git's dwim name-strip when none tracks it) — and dispatches:
 //
-// Chipless precedence: a remote chip whose upstream-tracking local isn't
-// HEAD wins (Fork's "Checkout & Fast Forward" — go to that local and
-// advance it). Otherwise fall back to advancing HEAD's branch, or a
-// final detach.
+//   - already on a branch sitting on the cursor row → NoOp.
+//   - one candidate → switch to it. A remote-derived candidate whose local
+//     sits off the row checks out then fast-forwards up to the cursor (the
+//     remote tip) so "Space on origin/xx" lands on a synced local xx. No
+//     network pull/rebase runs — the FF to the fetched remote tip is the sync.
+//   - several distinct candidates → Picker (local + remote names, deduped).
+//   - no candidate (mid-commit / unrelated row) → FF HEAD's own branch up to
+//     the cursor if it's strictly ahead, else detach.
 //
-// A detached HEAD shows as "no ref with IsHead=true" → empty headBranch.
-// Cross-branch can still fire then (Enter on origin/develop while
-// detached → checkout local develop + FF). Divergent cursor (HEAD shares
-// an ancestor but neither is reachable from the other) dispatches as FF
-// and surfaces as ffFailedMsg with ErrFFNotPossible — by design, so the
-// user sees the rejection reason instead of a silent detach.
+// A detached HEAD shows as "no ref with IsHead=true" → empty headBranch;
+// the remote-derived checkout+FF still fires then. A divergent cursor (FF
+// not possible) surfaces later as ffFailedMsg with ErrFFNotPossible — by
+// design, so the user sees the rejection instead of a silent detach.
 func evaluateGraphActionCmd(dir, hash string, locals, remotes []git.Ref) tea.Cmd {
 	return func() tea.Msg {
 		var headBranch, headHash string
-		var chips []string
-		hasRemoteChip := false
-		for _, r := range remotes {
-			if r.ObjectName == hash {
-				hasRemoteChip = true
-				break
-			}
-		}
+		localChip := map[string]bool{}   // local-branch names on the cursor row
+		localExists := map[string]bool{} // every local-branch name
 		for _, r := range locals {
+			localExists[r.ShortName] = true
 			if r.IsHead {
 				headBranch = r.ShortName
 				headHash = r.ObjectName
 			}
 			if r.ObjectName == hash {
-				chips = append(chips, r.ShortName)
+				localChip[r.ShortName] = true
 			}
 		}
-		sort.Strings(chips)
 
-		if len(chips) > 0 {
-			if headBranch != "" {
-				for _, b := range chips {
-					if b == headBranch {
-						return graphActionMsg{hash: hash, kind: graphActionNoOp, branch: headBranch}
-					}
-				}
+		// Already standing on a branch that sits exactly on the cursor row —
+		// nothing to switch to or advance.
+		if headBranch != "" && headHash == hash {
+			return graphActionMsg{hash: hash, kind: graphActionNoOp, branch: headBranch}
+		}
+
+		candSet := map[string]bool{}
+		for name := range localChip {
+			candSet[name] = true
+		}
+		for _, r := range remotes {
+			if r.ObjectName == hash {
+				candSet[remoteCheckoutCandidate(r, locals)] = true
 			}
-			if len(chips) == 1 {
-				return graphActionMsg{hash: hash, kind: graphActionCheckout, branch: chips[0]}
-			}
-			return graphActionMsg{hash: hash, kind: graphActionPicker, candidates: chips}
 		}
 
-		// Cross-branch path: cursor row carries a remote chip whose
-		// upstream-tracking local is something other than HEAD. Pick the
-		// alphabetically first matching local — picker for cross-branch is
-		// out of scope (rare; refs panel `p` still works for explicit choice).
-		if crossBranch := findCrossBranchTarget(hash, locals, remotes, headBranch); crossBranch != "" {
-			log.Printf("graph space: checkout+ff (%s → %s)", crossBranch, shortHash(hash))
-			return graphActionMsg{hash: hash, kind: graphActionCheckoutAndFF, branch: crossBranch, pullAfter: true}
+		if len(candSet) == 0 {
+			return chiplessAction(dir, hash, headBranch, headHash)
 		}
 
-		// New-local path: cursor has a remote chip with no upstream-tracking
-		// local. Hand `git checkout <stripped name>` to dwim, which creates
-		// the tracking local and switches to it. The new branch is created
-		// at the remote's tip, which equals the cursor commit, so no FF is
-		// needed afterward.
-		if newLocal := findRemoteCheckoutTarget(hash, locals, remotes); newLocal != "" {
-			log.Printf("graph space: checkout (dwim from remote → %s)", newLocal)
-			return graphActionMsg{hash: hash, kind: graphActionCheckout, branch: newLocal, pullAfter: true}
+		candidates := make([]string, 0, len(candSet))
+		for name := range candSet {
+			candidates = append(candidates, name)
 		}
+		sort.Strings(candidates)
 
-		if headBranch == "" || headHash == "" {
-			log.Printf("graph space: detach (no HEAD branch in locals; HEAD likely detached)")
-			return graphActionMsg{hash: hash, kind: graphActionDetach}
+		if len(candidates) > 1 {
+			log.Printf("graph space: picker (%v)", candidates)
+			return graphActionMsg{hash: hash, kind: graphActionPicker, candidates: candidates}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), checkoutTimeout)
-		defer cancel()
-		advance, err := countAheadExec(ctx, dir, headHash, hash)
-		if err != nil {
-			log.Printf("graph space: detach (rev-list --count %s..%s failed: %v)", shortHash(headHash), shortHash(hash), err)
-			return graphActionMsg{hash: hash, kind: graphActionDetach}
-		}
-		if advance == 0 {
-			log.Printf("graph space: detach (advance=0; %s..%s — cursor not strictly ahead of HEAD %s)",
-				shortHash(headHash), shortHash(hash), headBranch)
-			return graphActionMsg{hash: hash, kind: graphActionDetach}
-		}
-		log.Printf("graph space: ff (%s +%d, %s..%s)",
-			headBranch, advance, shortHash(headHash), shortHash(hash))
-		return graphActionMsg{hash: hash, kind: graphActionFF, branch: headBranch, advance: advance, pullAfter: hasRemoteChip}
+		return singleCandidateAction(dir, hash, candidates[0], headBranch, headHash, localChip, localExists)
 	}
 }
 
-// findCrossBranchTarget returns the local branch name to checkout-and-FF
-// when the cursor row has only remote chips. For each remote chip on the
-// cursor row, we look for a local whose Upstream points at that remote;
-// HEAD's own branch is excluded so the chipless FF path can handle "FF
-// my own branch" without going through the cross-branch chain. Multiple
-// candidates are resolved alphabetically — the picker UX is reserved for
-// multi-local-chip rows where the choice is genuinely ambiguous.
-func findCrossBranchTarget(hash string, locals, remotes []git.Ref, headBranch string) string {
-	var picked string
-	for _, r := range remotes {
-		if r.ObjectName != hash {
-			continue
+// singleCandidateAction resolves the lone checkout candidate on the cursor
+// row to a concrete kind. b == HEAD's branch advances it (FF) when the
+// cursor is strictly ahead; a local already on the row (or a name git will
+// dwim-create at the remote tip) is a plain checkout; an existing local
+// sitting off the row is checked out then fast-forwarded up to the cursor.
+func singleCandidateAction(dir, hash, b, headBranch, headHash string, localChip, localExists map[string]bool) graphActionMsg {
+	if b == headBranch {
+		advance, err := countAhead(dir, headHash, hash)
+		if err != nil || advance == 0 {
+			log.Printf("graph space: noop (%s already at/ahead of cursor)", headBranch)
+			return graphActionMsg{hash: hash, kind: graphActionNoOp, branch: headBranch}
 		}
-		for _, l := range locals {
-			if l.Upstream != r.ShortName || l.ShortName == headBranch {
-				continue
-			}
-			if picked == "" || l.ShortName < picked {
-				picked = l.ShortName
-			}
-		}
+		log.Printf("graph space: ff (%s +%d)", headBranch, advance)
+		return graphActionMsg{hash: hash, kind: graphActionFF, branch: headBranch, advance: advance}
 	}
-	return picked
+	if localChip[b] || !localExists[b] {
+		log.Printf("graph space: checkout (%s)", b)
+		return graphActionMsg{hash: hash, kind: graphActionCheckout, branch: b}
+	}
+	log.Printf("graph space: checkout+ff (%s → %s)", b, shortHash(hash))
+	return graphActionMsg{hash: hash, kind: graphActionCheckoutAndFF, branch: b}
 }
 
-// findRemoteCheckoutTarget returns the dwim checkout target derived from
-// a remote chip on the cursor row when no local already tracks that
-// remote. The returned name is what `git checkout` will turn into a
-// local tracking branch — git's dwim creates one when no same-name
-// local exists, and just switches when one does. Returns "" if the
-// cursor has no remote chip or every remote chip is already tracked.
-//
-// findCrossBranchTarget gets first refusal in the evaluator, so this
-// helper only runs when no upstream-tracker exists; the dwim outcome
-// depends on whether a same-name local exists at all (separate from the
-// tracker check).
-func findRemoteCheckoutTarget(hash string, locals, remotes []git.Ref) string {
-	var picked string
-	for _, r := range remotes {
-		if r.ObjectName != hash {
-			continue
-		}
-		tracked := false
-		for _, l := range locals {
-			if l.Upstream == r.ShortName {
-				tracked = true
-				break
-			}
-		}
-		if tracked {
-			continue
-		}
-		target := git.CheckoutTarget(r)
-		if picked == "" || target < picked {
-			picked = target
+// chiplessAction handles a cursor row carrying no branch chip (a mid-commit
+// or an unrelated tip): advance HEAD's own branch when the cursor is
+// strictly ahead, otherwise detach onto the cursor commit.
+func chiplessAction(dir, hash, headBranch, headHash string) graphActionMsg {
+	if headBranch == "" || headHash == "" {
+		log.Printf("graph space: detach (HEAD detached, no candidate)")
+		return graphActionMsg{hash: hash, kind: graphActionDetach}
+	}
+	advance, err := countAhead(dir, headHash, hash)
+	if err != nil || advance == 0 {
+		log.Printf("graph space: detach (%s not strictly ahead of HEAD %s)", shortHash(hash), headBranch)
+		return graphActionMsg{hash: hash, kind: graphActionDetach}
+	}
+	log.Printf("graph space: ff (%s +%d)", headBranch, advance)
+	return graphActionMsg{hash: hash, kind: graphActionFF, branch: headBranch, advance: advance}
+}
+
+// countAhead wraps countAheadExec with the shared checkout timeout. It
+// returns the number of commits in headHash..hash (how far the cursor is
+// ahead of HEAD's tip); 0 means not strictly ahead (behind or diverged).
+func countAhead(dir, ancestor, descendant string) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), checkoutTimeout)
+	defer cancel()
+	return countAheadExec(ctx, dir, ancestor, descendant)
+}
+
+// remoteCheckoutCandidate maps a remote chip to the local-branch name a
+// checkout should land on: the upstream-tracking local if one exists
+// (alphabetically first when several track it), else git's dwim name-strip
+// (origin/develop → develop), which git turns into a new tracking local.
+func remoteCheckoutCandidate(remote git.Ref, locals []git.Ref) string {
+	var tracker string
+	for _, l := range locals {
+		if l.Upstream == remote.ShortName && (tracker == "" || l.ShortName < tracker) {
+			tracker = l.ShortName
 		}
 	}
-	return picked
+	if tracker != "" {
+		return tracker
+	}
+	return git.CheckoutTarget(remote)
 }

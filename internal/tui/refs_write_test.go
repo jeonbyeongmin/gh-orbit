@@ -42,11 +42,11 @@ func pressShiftTab(t *testing.T, m Model) (Model, tea.Cmd) {
 	return updated.(Model), cmd
 }
 
-// TestDKeyOnGraphFocusOpensPatchOverlay locks in the graph-focus `d`
-// override: instead of triggering a delete, it loads the patch overlay
-// for the commit under the graph cursor. The branches modal's `d` is a
-// completely separate code path (see branches_test.go).
-func TestDKeyOnGraphFocusOpensPatchOverlay(t *testing.T) {
+// TestRightOnGraphFocusOpensPatchOverlay locks in the graph-focus `→`:
+// it loads the patch overlay for the commit under the graph cursor (the
+// `d` that used to do this was retired). The branches modal's `d` delete
+// is a completely separate code path (see branches_test.go).
+func TestRightOnGraphFocusOpensPatchOverlay(t *testing.T) {
 	m := initSized(t)
 	m = seedRefs(t, m, []git.Ref{
 		{ShortName: "main", Kind: git.RefKindLocal, IsHead: true},
@@ -54,9 +54,10 @@ func TestDKeyOnGraphFocusOpensPatchOverlay(t *testing.T) {
 	m = seedGraphCursor(t, m, "abc1234")
 	m.focused = paneGraph
 
-	m, _ = pressRune(t, m, 'd')
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(Model)
 	if m.mode != viewModeDiffWindow {
-		t.Errorf("graph-focus d should open patch overlay, mode = %v", m.mode)
+		t.Errorf("graph-focus → should open patch overlay, mode = %v", m.mode)
 	}
 }
 

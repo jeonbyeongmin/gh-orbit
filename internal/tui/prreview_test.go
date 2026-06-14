@@ -113,12 +113,12 @@ func TestPRReviewArmMerge(t *testing.T) {
 	}
 }
 
-func TestPRReviewBrowseEscCloses(t *testing.T) {
+func TestPRReviewBrowseLeftCloses(t *testing.T) {
 	m := prReviewOpen(t)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	m = updated.(Model)
 	if m.mode != viewModeNormal {
-		t.Errorf("esc from browse should close the overlay; mode=%v", m.mode)
+		t.Errorf("← from browse should close the diff; mode=%v", m.mode)
 	}
 	if m.reviewPRNumber != 0 {
 		t.Errorf("close must clear reviewPRNumber, got %d", m.reviewPRNumber)
@@ -298,7 +298,7 @@ func TestUpdatePRReviewApproveFailed(t *testing.T) {
 func TestRenderPRReviewHint(t *testing.T) {
 	m := prReviewOpen(t) // width 120, reviewPRNumber 42, prAction none
 	browse := m.renderPRReviewHint()
-	for _, want := range []string{"PR #42", "approve", "merge", "comment", "changes", "esc close"} {
+	for _, want := range []string{"PR #42", "approve", "merge", "comment", "changes", "← close"} {
 		if !strings.Contains(browse, want) {
 			t.Errorf("browse hint missing %q: %q", want, browse)
 		}

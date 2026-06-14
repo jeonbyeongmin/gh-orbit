@@ -218,7 +218,7 @@ func (m Model) beginPRReviewFor(number int) (Model, tea.Cmd) {
 	m.prAction = prActionNone
 	m.prReviewNotice = ""
 	m.prReviewNoticeErr = false
-	m.diff.SetPatchViewportSize(m.width, m.height-1)
+	m.applyPaneSizes() // box-inner size now that the diff lives in the page
 	return m, loadPRDiffCmd(m.workdir, number, m.diffReqID)
 }
 
@@ -371,9 +371,9 @@ func (m Model) renderPRReviewHint() string {
 		if m.prReviewNoticeErr {
 			style = statusErrS
 		}
-		return style.Render(m.prReviewNotice) + help.Render(" · esc close")
+		return style.Render(m.prReviewNotice) + help.Render(" · ← close")
 	}
-	base := fmt.Sprintf("PR #%d · a approve · m merge · c comment · r changes · esc close", n)
+	base := fmt.Sprintf("PR #%d · a approve · m merge · c comment · r changes · ← close · ? help", n)
 	path, idx, total := m.diff.CurrentFile()
 	if total == 0 || path == "" {
 		return fitHelpLine(base, m.width)

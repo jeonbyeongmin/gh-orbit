@@ -280,11 +280,11 @@ func TestDiffOverlay_NavKeysSwallowed(t *testing.T) {
 		name string
 		msg  tea.KeyMsg
 	}{
-		{"tab", tea.KeyMsg{Type: tea.KeyTab}},
 		{"h", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}},
 		{"l", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}},
-		{"left", tea.KeyMsg{Type: tea.KeyLeft}},
 		{"right", tea.KeyMsg{Type: tea.KeyRight}},
+		// `left` (close) and `tab`/`shift+tab` (page cycle) are real bindings
+		// now, so they are deliberately not in this swallowed set.
 	}
 	for _, tc := range cases {
 		updated, cmd := m.Update(tc.msg)
@@ -301,7 +301,7 @@ func TestDiffOverlay_NavKeysSwallowed(t *testing.T) {
 	}
 }
 
-func TestDiffOverlay_BracketKeysJumpFiles(t *testing.T) {
+func TestDiffOverlay_BraceKeysJumpFiles(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -310,23 +310,23 @@ func TestDiffOverlay_BracketKeysJumpFiles(t *testing.T) {
 	m.diff.BeginPatchLoad("h", 1)
 	m.diff.ApplyPatchLoaded(1, "h", threeFilePatch)
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'}'}})
 	m = updated.(Model)
 	if cmd != nil {
-		t.Errorf("] should not dispatch a cmd, got %v", cmd)
+		t.Errorf("} should not dispatch a cmd, got %v", cmd)
 	}
 	if got := m.diff.viewport.YOffset; got != 7 {
-		t.Errorf("] from top, YOffset = %d, want 7 (beta header)", got)
+		t.Errorf("} from top, YOffset = %d, want 7 (beta header)", got)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'{'}})
 	m = updated.(Model)
 	if got := m.diff.viewport.YOffset; got != 0 {
-		t.Errorf("[ from beta, YOffset = %d, want 0 (alpha header)", got)
+		t.Errorf("{ from beta, YOffset = %d, want 0 (alpha header)", got)
 	}
 }
 
-func TestRenderDiffOverlayHintCarriesPathAndIndex(t *testing.T) {
+func TestDiffOverlay_BracketKeysMoveHunks(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -335,39 +335,17 @@ func TestRenderDiffOverlayHintCarriesPathAndIndex(t *testing.T) {
 	m.diff.BeginPatchLoad("h", 1)
 	m.diff.ApplyPatchLoaded(1, "h", threeFilePatch)
 
-	hint := m.renderDiffOverlayHint()
-	if !strings.Contains(hint, "alpha.go") {
-		t.Errorf("hint missing current path 'alpha.go': %q", hint)
-	}
-	if !strings.Contains(hint, "[1/3]") {
-		t.Errorf("hint missing index '[1/3]': %q", hint)
-	}
-	if !strings.Contains(hint, "[ ] file") {
-		t.Errorf("hint missing keymap '[ ] file': %q", hint)
-	}
-
-	m.diff.JumpToNextFile()
-	hint = m.renderDiffOverlayHint()
-	if !strings.Contains(hint, "beta.go") || !strings.Contains(hint, "[2/3]") {
-		t.Errorf("after ], hint = %q, want beta.go + [2/3]", hint)
-	}
-}
-
-func TestRenderDiffOverlayHintEmptyDiffFallsBackToKeymap(t *testing.T) {
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	// ] advances to the next @@ hunk (alpha@4 → beta@11).
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
 	m = updated.(Model)
-	m.mode = viewModeDiffWindow
-	m.diff.SetPatchViewportSize(120, 5)
-	m.diff.BeginPatchLoad("h", 1)
-	m.diff.ApplyPatchLoaded(1, "h", "")
-
-	hint := m.renderDiffOverlayHint()
-	if strings.Contains(hint, "[0/0]") {
-		t.Errorf("empty diff hint must not show [0/0], got %q", hint)
+	if got := m.diff.viewport.YOffset; got != 11 {
+		t.Errorf("] from hunk 0, YOffset = %d, want 11 (beta hunk)", got)
 	}
-	if !strings.Contains(hint, "esc close") {
-		t.Errorf("empty diff hint should still show keymap, got %q", hint)
+	// [ retreats to the previous hunk (beta@11 → alpha@4).
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	m = updated.(Model)
+	if got := m.diff.viewport.YOffset; got != 4 {
+		t.Errorf("[ from hunk 1, YOffset = %d, want 4 (alpha hunk)", got)
 	}
 }
 
@@ -847,7 +825,7 @@ func TestModelFetchSucceededReloadsBothPanes(t *testing.T) {
 	}
 }
 
-func TestModelDKeyOpensDiffWindow(t *testing.T) {
+func TestModelRightOpensDiffWindow(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -856,73 +834,77 @@ func TestModelDKeyOpensDiffWindow(t *testing.T) {
 	}})
 	m = updated.(Model)
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	m = updated.(Model)
 	if m.mode != viewModeDiffWindow {
-		t.Errorf("mode after d = %v, want viewModeDiffWindow", m.mode)
+		t.Errorf("mode after → = %v, want viewModeDiffWindow", m.mode)
 	}
 	if cmd == nil {
-		t.Fatal("d should dispatch loadDiffPatchCmd")
+		t.Fatal("→ should dispatch loadDiffPatchCmd")
 	}
 	if !m.diff.loadingPatch {
-		t.Error("d should mark patch loading")
+		t.Error("→ should mark patch loading")
 	}
 	if m.diff.currentHash != "aaa1111" {
 		t.Errorf("diff.currentHash = %q, want aaa1111", m.diff.currentHash)
 	}
 }
 
-func TestModelDKeyWithoutSelectionIsNoop(t *testing.T) {
+func TestModelRightWithoutSelectionIsNoop(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
 	// No commits loaded — Selected() returns false.
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	m = updated.(Model)
 	if m.mode != viewModeNormal {
-		t.Errorf("d without selection should not flip viewMode, got %v", m.mode)
+		t.Errorf("→ without selection should not flip viewMode, got %v", m.mode)
 	}
 	if cmd != nil {
-		t.Error("d without selection should not dispatch a cmd")
+		t.Error("→ without selection should not dispatch a cmd")
 	}
 }
 
-func TestModelEscClosesDiffWindow(t *testing.T) {
+func TestModelEscQDoNotCloseDiffWindow(t *testing.T) {
+	// `←` is the sole diff exit now (TestModelLeftClosesDiffWindow); q/esc no
+	// longer close, matching the arrow-only navigation the local-changes diff
+	// uses. q must also not arm quit — that is still ctrl+c twice.
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyEsc},
+		{Type: tea.KeyRunes, Runes: []rune{'q'}},
+	} {
+		m := New()
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+		m = updated.(Model)
+		m.mode = viewModeDiffWindow
+
+		updated, _ = m.Update(key)
+		m = updated.(Model)
+		if m.mode != viewModeDiffWindow {
+			t.Errorf("%v should not close the diff window, got mode %v", key, m.mode)
+		}
+		if m.quitArmed {
+			t.Errorf("%v must not arm quit in the diff window", key)
+		}
+	}
+}
+
+func TestModelLeftClosesDiffWindow(t *testing.T) {
+	// `←` climbs back out of the overlay, the mirror of the `→` that opened
+	// it from the graph (see TestModelRightOpensDiffWindow); q/esc still close.
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	m.mode = viewModeDiffWindow
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	m = updated.(Model)
 	if m.mode != viewModeNormal {
-		t.Errorf("esc should return to normal mode, got %v", m.mode)
+		t.Errorf("← should close the diff window, got mode %v", m.mode)
 	}
 	if cmd != nil {
-		t.Errorf("esc should not dispatch a cmd, got %v", cmd)
-	}
-}
-
-func TestModelQClosesDiffWindow(t *testing.T) {
-	// q closes the patch overlay, mirroring esc (see
-	// TestModelEscClosesDiffWindow). Quitting is still ctrl+c twice, so q must
-	// not arm quit.
-	m := New()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = updated.(Model)
-	m.mode = viewModeDiffWindow
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("q should close the diff window, got mode %v", m.mode)
-	}
-	if cmd != nil {
-		t.Errorf("q in diff window must not dispatch a cmd, got cmd=%v", cmd)
-	}
-	if m.quitArmed {
-		t.Errorf("q must not arm quit")
+		t.Errorf("← in diff window must not dispatch a cmd, got cmd=%v", cmd)
 	}
 }
 

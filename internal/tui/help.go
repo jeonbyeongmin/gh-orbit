@@ -48,7 +48,8 @@ var (
 			{"x", "reset to cursor"},
 			{"n", "new branch @ cursor"},
 			{"o", "open PR on GitHub"},
-			{"d", "patch overlay"},
+			{"→", "open diff"},
+			{"[/]", "prev/next page"},
 			{"y", "copy hash"},
 		},
 	}
@@ -80,17 +81,45 @@ var (
 			{"s", "sort"},
 		},
 	}
-	// helpLocalChanges — local changes page tree + diff keys.
-	helpLocalChanges = helpCategory{
-		title: "Local Changes",
+	// helpLCTree — local changes tree (file list) pane keys.
+	helpLCTree = helpCategory{
+		title: "Tree",
 		entries: []helpEntry{
 			{"j/k", "nav"},
 			{"g/G", "top/bot"},
-			{"enter", "open diff"},
-			{"space", "stage/unstage (file / hunk)"},
-			{"[/]", "prev/next hunk (diff)"},
-			{"esc", "diff → tree"},
+			{"space", "stage/unstage"},
+			{"→", "open diff"},
 			{"r", "reload"},
+		},
+	}
+	// helpLCDiff — local changes diff pane keys.
+	helpLCDiff = helpCategory{
+		title: "Diff",
+		entries: []helpEntry{
+			{"j/k", "scroll"},
+			{"[/]", "prev/next hunk"},
+			{"space", "stage/unstage hunk"},
+			{"←", "back to tree"},
+		},
+	}
+	// helpDiff — graph commit / PR patch keys (the diff page, opened with →).
+	helpDiff = helpCategory{
+		title: "Diff",
+		entries: []helpEntry{
+			{"j/k", "scroll"},
+			{"[/]", "prev/next hunk"},
+			{"{/}", "prev/next file"},
+			{"←", "close"},
+		},
+	}
+	// helpPRReview — extra actions while the diff page shows a PR (opened with O).
+	helpPRReview = helpCategory{
+		title: "PR Review",
+		entries: []helpEntry{
+			{"a", "approve"},
+			{"m", "merge"},
+			{"c", "comment"},
+			{"r", "request changes"},
 		},
 	}
 )
@@ -102,7 +131,7 @@ func helpCategoriesFor(page int) []helpCategory {
 	case 1:
 		return []helpCategory{helpGlobal, helpWorktree}
 	case 2:
-		return []helpCategory{helpGlobal, helpLocalChanges}
+		return []helpCategory{helpGlobal, helpLCTree, helpLCDiff}
 	default:
 		return []helpCategory{helpGlobal, helpGraph, helpSync}
 	}
@@ -111,7 +140,7 @@ func helpCategoriesFor(page int) []helpCategory {
 // helpData returns every category, for the coverage test that guards against
 // silently dropping a binding.
 func helpData() []helpCategory {
-	return []helpCategory{helpGlobal, helpGraph, helpSync, helpWorktree, helpLocalChanges}
+	return []helpCategory{helpGlobal, helpGraph, helpSync, helpWorktree, helpLCTree, helpLCDiff, helpDiff, helpPRReview}
 }
 
 // collapsedHintText is the entire bottom line in normal operation: a single

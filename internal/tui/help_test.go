@@ -36,7 +36,7 @@ func TestRenderHelpPanelLineCount(t *testing.T) {
 	if got > panelRows {
 		t.Errorf("renderHelpPanel emitted %d lines, want ≤ %d", got, panelRows)
 	}
-	for _, want := range []string{"[Global]", "[Graph]", "[Sync]", "[Worktree]", "[Local Changes]"} {
+	for _, want := range []string{"[Global]", "[Graph]", "[Sync]", "[Worktree]", "[Tree]", "[Diff]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("renderHelpPanel missing category header %q\n--- panel ---\n%s", want, out)
 		}
@@ -127,7 +127,7 @@ func TestHelpCategoriesForPageScoping(t *testing.T) {
 	}{
 		{0, "Global,Graph,Sync"},
 		{1, "Global,Worktree"},
-		{2, "Global,Local Changes"},
+		{2, "Global,Tree,Diff"},
 	}
 	for _, tc := range cases {
 		got := helpCategoriesFor(tc.page)

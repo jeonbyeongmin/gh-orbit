@@ -159,7 +159,10 @@ func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch msg.String() {
-	case "q", "esc":
+	case "left":
+		// `←` climbs back out of the diff, the mirror of the `→` that opened
+		// it. It is the sole exit now — q/esc no longer close, matching the
+		// arrow-only navigation the local-changes diff uses.
 		m.mode = m.reviewReturnMode
 		m.reviewReturnMode = viewModeNormal
 		m.diff.ClosePatch()
@@ -168,19 +171,66 @@ func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.prReviewNotice = ""
 		m.prReviewBody = textarea.Model{}
 		m.prReviewBodyErr = ""
+		// Resize the page we're returning to: if `?` is open its panel height
+		// differs from the diff's (Graph/Sync vs Diff columns), so the graph
+		// box must be recomputed or it overflows and clips the top rows.
+		m.applyPaneSizes()
 		return m, nil
+	case "?":
+		// Inline help panel, same toggle every page uses. The diff bottom
+		// line expands into the Diff (+ PR Review) key columns.
+		return m.toggleHelp()
+	case "tab":
+		// Global page cycle, like every other page — close the diff and
+		// advance to the next page from the one it sits on.
+		return m.cycleDiffPage(false)
+	case "shift+tab":
+		return m.cycleDiffPage(true)
 	case "ctrl+c":
 		return m.handleCtrlC()
 	case "j", "k", "down", "up", "pgdown", "pgup":
 		return m, m.diff.ScrollPatch(msg)
 	case "]":
-		m.diff.JumpToNextFile()
+		m.diff.MoveHunk(1)
 		return m, nil
 	case "[":
+		m.diff.MoveHunk(-1)
+		return m, nil
+	case "}":
+		m.diff.JumpToNextFile()
+		return m, nil
+	case "{":
 		m.diff.JumpToPrevFile()
 		return m, nil
 	}
 	return m, nil
+}
+
+// cycleDiffPage closes the diff and lands on the next (or previous) top-level
+// page, so tab/shift+tab work from inside the diff the same as from any page.
+// The diff's own page index (commit → graph, PR review → worktree) is the
+// cycle origin.
+func (m Model) cycleDiffPage(back bool) (tea.Model, tea.Cmd) {
+	idx := m.currentPageIndex()
+	m.diff.ClosePatch()
+	m.reviewReturnMode = viewModeNormal
+	m.reviewPRNumber = 0
+	m.prAction = prActionNone
+	m.prReviewNotice = ""
+	m.prReviewBody = textarea.Model{}
+	m.prReviewBodyErr = ""
+	delta := 1
+	if back {
+		delta = -1
+	}
+	switch (idx + delta + 3) % 3 {
+	case 1:
+		return m.beginWorktreesModal()
+	case 2:
+		return m, m.enterLocalChangesMode()
+	default:
+		return m.enterGraphPage(), nil
+	}
 }
 
 func (m Model) handleWorktreeAddInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -431,19 +481,19 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, loadStatusCmd(m.workdir)
 	}
 	// Single-pane drill-down. Tree owns cursor movement + stage/unstage;
-	// `enter` descends into the diff. Diff owns hunk navigation (`[`/`]`),
-	// per-hunk staging (`space`), and viewport scroll; `esc` climbs back to
+	// `→` descends into the diff. Diff owns hunk navigation (`[`/`]`),
+	// per-hunk staging (`space`), and viewport scroll; `←` climbs back to
 	// the tree. Page navigation is the tab cycle — there is no esc/q exit.
 	switch m.localChanges.Focused() {
 	case paneLCTree:
 		switch msg.String() {
-		case "enter":
+		case "right":
 			return m.enterLocalChangesDiff()
 		}
 		return m.handleLocalChangesTreeKey(msg)
 	case paneLCDiff:
 		switch msg.String() {
-		case "esc":
+		case "left":
 			m.localChanges.SetFocus(paneLCTree)
 			return m, nil
 		case "[":
@@ -630,10 +680,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d, remotes=%d)",
 			shortHash(c.Hash), len(locals), len(remotes))
 		return m, evaluateGraphActionCmd(m.workdir, c.Hash, locals, remotes)
-	case "d":
-		// `d` opens the patch overlay for the focused commit. Sidebar
-		// is gone so the previous paneRefs interpretation (worktree
-		// remove via cursor row) moved into the `w` worktree modal.
+	case "right":
+		// `→` opens the patch overlay for the focused commit (`←` closes it
+		// from inside — see handleDiffWindowKey), mirroring the local-changes
+		// tree→diff drill-down. Page paging moved to `[`/`]` to free the arrows.
 		c, ok := m.graph.Selected()
 		if !ok {
 			return m, nil
@@ -641,7 +691,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.diffReqID++
 		m.diff.BeginPatchLoad(c.Hash, m.diffReqID)
 		m.mode = viewModeDiffWindow
-		m.diff.SetPatchViewportSize(m.width, m.height-1)
+		m.applyPaneSizes() // box-inner size now that the diff lives in the page
 		return m, loadDiffPatchCmd(m.workdir, c.Hash, m.diffReqID)
 	case "b":
 		// Branches modal — local-branch list with cursor + `d` delete

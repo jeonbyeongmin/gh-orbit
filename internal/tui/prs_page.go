@@ -105,6 +105,9 @@ func (m Model) renderPRsView(width, height int) string {
 			visible = areaH - 2
 		}
 		rowW := width - 2
+		if rowW < 1 {
+			rowW = 1
+		}
 		lines = append(lines, renderScrollWindow(
 			m.prsPage.cursor-visible/2, visible, len(m.prList),
 			func(i int) string {

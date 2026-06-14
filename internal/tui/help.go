@@ -119,6 +119,7 @@ var (
 			{"j/k", "nav"},
 			{"enter", "open PR (web)"},
 			{"m", "merge PR"},
+			{"r", "refresh"},
 		},
 	}
 )

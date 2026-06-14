@@ -133,6 +133,26 @@ func TestPRsPageCursorClampsOnShrink(t *testing.T) {
 	}
 }
 
+// A refresh that shrinks the list while the merge confirm is composed over the
+// PR page must still clamp the cursor — closeMergeConfirm returns to the page
+// without re-clamping, so a stale out-of-range cursor would dead-no-op there.
+func TestPRsPageCursorClampsWithMergeConfirmOpen(t *testing.T) {
+	m := initSized(t)
+	m.prList = samplePRs() // 3 PRs
+	m, _ = m.enterPRsPage()
+	m = m.prsPageMoveCursor(2) // cursor → last (index 2)
+	m, _ = m.prsPageMerge()    // arm merge confirm over the PR page
+	if m.mode != viewModeMergeConfirm || m.mergeReturnMode != viewModePRsPage {
+		t.Fatalf("setup: want merge confirm over PR page, mode=%v return=%v", m.mode, m.mergeReturnMode)
+	}
+
+	updated, _ := m.Update(prsLoadedMsg{prs: map[string]prInfo{}, list: samplePRs()[:1]})
+	m = updated.(Model)
+	if m.prsPage.cursor != 0 {
+		t.Errorf("cursor after shrink with merge confirm open = %d, want 0 (clamped)", m.prsPage.cursor)
+	}
+}
+
 // renderPRsView fills exactly `height` lines (the box frame must never jump)
 // and surfaces the header plus a cursor row.
 func TestRenderPRsViewFillsHeight(t *testing.T) {

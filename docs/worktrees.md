@@ -29,9 +29,13 @@ Layout (N=2 example, full terminal width; the card renderer lives in
    feat/claude-code-agent-hint              #42✓  ↑2↓1  2w
      ~/project/gh-orbit/.claude/worktrees/feat+sort-by-last-commit
      docs(worktrees): re-anchor the keep-priority list
-
-[j/k] navigate · [enter] switch · [O] review PR · [a] add · [d] remove · [s] sort · [tab] page
 ```
+
+There is no in-box key hint row anymore: the page keys live in the
+shared `?` panel (the `Worktree` category) and the bottom line carries
+`? help` + status, same as the graph and local-changes pages. The
+earlier in-box hint duplicated the `?` panel once the panel went
+page-aware, so it was retired.
 
 The 2-col gutter carries two independent signals: the cursor bar `▌`
 (the card under `j`/`k`, running down all three lines) and the current
@@ -119,7 +123,7 @@ on row 0. An empty inventory still lands on the page — it renders a
 `(no worktrees loaded yet)` body rather than refusing entry, so the
 cycle never gets stuck. While the page owns the screen it owns every key
 (the global shortcuts route to its cursor); only the `tab` / `shift+tab`
-cycle and `^C` quit pass through.
+cycle, `?` (toggle the inline help panel), and `^C` quit pass through.
 
 ### Review a PR from a card (`O`)
 

@@ -67,7 +67,8 @@ var (
 			{"Z", "zombie cleanup"},
 		},
 	}
-	// helpWorktree — worktree page cursor actions (mirrors helpTextWorktreesModal).
+	// helpWorktree — worktree page cursor actions (the sole source now that the
+	// in-box hint row was retired in favor of the unified `?` panel).
 	helpWorktree = helpCategory{
 		title: "Worktree",
 		entries: []helpEntry{

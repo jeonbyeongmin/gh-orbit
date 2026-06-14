@@ -1417,7 +1417,7 @@ func (m Model) renderHelpStatus() string {
 	}
 	switch m.mode {
 	case viewModeBranchPicker, viewModeBranchesModal, viewModePRsModal,
-		viewModeCheckoutConfirm, viewModeWorktreesModal, viewModeWorktreeAddInput,
+		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
 		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm,
 		viewModeBranchCreateInput, viewModeRefDeleteConfirm,
 		viewModeRebaseConfirm, viewModeCherryPickConfirm,

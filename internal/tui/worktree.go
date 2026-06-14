@@ -450,8 +450,6 @@ type worktreesModalState struct {
 	sortByCommit bool
 }
 
-const helpTextWorktreesModal = "[j/k] navigate · [enter] switch · [O] review PR · [a] add · [d] remove · [s] sort · [tab] page"
-
 // modalWorktrees returns the worktrees in the modal's active
 // display order. With sortByCommit off it's the git natural order
 // (Worktrees() as-is, main first). On, the main worktree stays pinned at

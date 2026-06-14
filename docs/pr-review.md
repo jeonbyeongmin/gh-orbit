@@ -16,7 +16,7 @@ identically regardless of which entry point you used.
 ## PR list modal (`l`)
 
 `viewModePRsModal` is a centered overlay — same vocabulary as the
-branches / worktrees modals: `j` / `k` navigate, `enter` reviews,
+branches modal: `j` / `k` navigate, `enter` reviews,
 `l` / `q` / `esc` close. Rows read `#N <glyph> title · author`, where
 `<glyph>` is the shared CI rollup (`prCheckGlyph`); the title then the
 author absorb truncation so `#N` and the glyph always survive. The data

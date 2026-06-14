@@ -350,11 +350,17 @@ func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.worktreesModalRemove()
 	case "s":
 		return m.worktreesModalToggleSort(), nil
-	case "w", "q", "esc":
-		// `w` toggles the modal closed, mirroring how it opens.
-		m.mode = viewModeNormal
-		m.worktreesModal = worktreesModalState{}
-		return m, nil
+	case "tab":
+		// Page cycle: worktree → local changes. State is preserved (not
+		// zeroed) so the sort preference carries across the switch.
+		cmd := m.enterLocalChangesMode()
+		return m, cmd
+	case "shift+tab":
+		// Page cycle: worktree → graph (home).
+		return m.enterGraphPage(), nil
+	case "?":
+		// Inline help on the worktree page (Global + Worktree categories).
+		return m.toggleHelp()
 	case "ctrl+c":
 		return m.handleCtrlC()
 	}
@@ -410,31 +416,27 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m.handleCtrlC()
-	case ",", "q":
-		// q / , always exit the mode outright, from either pane.
-		m.exitLocalChangesMode()
-		m.status = "local changes: exit"
-		m.statusStyle = statusOkS
-		return m, nil
+	case "tab":
+		// Page cycle: local changes → graph (home). Releases the diff body.
+		return m.enterGraphPage(), nil
+	case "shift+tab":
+		// Page cycle: local changes → worktree.
+		m.localChanges.ClosePatch()
+		return m.beginWorktreesModal()
 	case "?":
-		m.mode = viewModeHelp
-		m.applyPaneSizes()
-		return m, nil
+		// Inline help on the local changes page itself — no longer yanks to
+		// the graph. Shows the Global + Local Changes categories.
+		return m.toggleHelp()
 	case "r":
 		return m, loadStatusCmd(m.workdir)
 	}
 	// Single-pane drill-down. Tree owns cursor movement + stage/unstage;
 	// `enter` descends into the diff. Diff owns hunk navigation (`[`/`]`),
 	// per-hunk staging (`space`), and viewport scroll; `esc` climbs back to
-	// the tree. `esc` from the tree exits the mode.
+	// the tree. Page navigation is the tab cycle — there is no esc/q exit.
 	switch m.localChanges.Focused() {
 	case paneLCTree:
 		switch msg.String() {
-		case "esc":
-			m.exitLocalChangesMode()
-			m.status = "local changes: exit"
-			m.statusStyle = statusOkS
-			return m, nil
 		case "enter":
 			return m.enterLocalChangesDiff()
 		}
@@ -515,17 +517,9 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m.handleCtrlC()
 	case "?":
-		// Toggle the inline help reference panel. It grows out of the
-		// footer (not a modal) — other shortcuts keep working while it is
-		// open, so applyPaneSizes reflows the graph around the reserved
-		// rows on both expand and collapse.
-		if m.mode == viewModeHelp {
-			m.mode = viewModeNormal
-		} else {
-			m.mode = viewModeHelp
-		}
-		m.applyPaneSizes()
-		return m, nil
+		// Toggle the inline help reference panel. It grows out of the footer
+		// (not a modal) — other shortcuts keep working while it is open.
+		return m.toggleHelp()
 	case "F":
 		if m.fetchInFlight {
 			return m, nil
@@ -549,10 +543,13 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// reloads finish in tens of ms, so any busy/done status just
 		// flickers; the in-place graph swap is the feedback.
 		return m, tea.Batch(m.reloadCmd(), m.dispatchPRList())
-	case ",":
+	case "tab":
+		// Page cycle: graph → worktree. `w` / `,` were retired in favor of
+		// the single tab/shift+tab cycle (see renderPageTabs breadcrumb).
+		return m.beginWorktreesModal()
+	case "shift+tab":
+		// Page cycle: graph → local changes (the reverse neighbor).
 		cmd := m.enterLocalChangesMode()
-		m.status = "local changes"
-		m.statusStyle = statusOkS
 		return m, cmd
 	case "y":
 		m = m.copyHashFromGraph()
@@ -604,8 +601,8 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		// Graph is the only focused pane. The sidebar was retired in
 		// PR B2; the bottom tab pane was retired with the subtract-
-		// bottom-pane change. Worktree switch + Local Changes enter
-		// come from `w` modal and `,` global.
+		// bottom-pane change. Worktree + Local Changes are now sibling
+		// pages reached via the tab/shift+tab cycle, not `w` / `,`.
 		if m.gitMutationInFlight() {
 			return m, nil
 		}
@@ -650,10 +647,6 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Branches modal — local-branch list with cursor + `d` delete
 		// entry. Global, independent of focused pane.
 		return m.beginBranchesModal()
-	case "w":
-		// Worktrees modal — same overlay pattern as `b`. Global,
-		// independent of focused pane.
-		return m.beginWorktreesModal()
 	}
 	var cmd tea.Cmd
 	m.graph, cmd = m.graph.Update(msg)

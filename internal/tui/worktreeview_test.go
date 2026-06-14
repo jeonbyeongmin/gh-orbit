@@ -198,23 +198,29 @@ func TestRenderWorktreesViewWindowsToCursor(t *testing.T) {
 	}
 }
 
-func TestRenderWorktreesViewShowsStatus(t *testing.T) {
-	// Feedback set while the dashboard owns the screen (e.g. `O` with no PR)
-	// must surface in-box, since renderHelpStatus is blank for this mode.
+func TestWorktreePageStatusRidesBottomLine(t *testing.T) {
+	// Feedback set while the worktree page owns the screen (e.g. `O` with no
+	// PR) now rides the shared bottom line (renderHelpStatus), not an in-box
+	// row — same as the graph / local-changes pages.
 	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/a"}}, "/wt/a")
+	m.mode = viewModeWorktreesModal
 	m.status = "no open PR for this worktree's branch"
-	out := ansi.Strip(m.renderWorktreesView(60, 20))
-	if !strings.Contains(out, "no open PR") {
-		t.Errorf("dashboard should surface m.status in-box: %q", out)
+	if out := ansi.Strip(m.renderHelpStatus()); !strings.Contains(out, "no open PR") {
+		t.Errorf("worktree page status should surface on the bottom line: %q", out)
 	}
-	if lines := strings.Split(out, "\n"); len(lines) != 20 {
-		t.Errorf("view should stay exactly 20 lines with a status, got %d", len(lines))
+	// The in-box view no longer carries the status; it stays exactly height.
+	body := m.renderWorktreesView(60, 20)
+	if strings.Contains(ansi.Strip(body), "no open PR") {
+		t.Errorf("status must no longer render in-box: %q", ansi.Strip(body))
+	}
+	if lines := strings.Split(body, "\n"); len(lines) != 20 {
+		t.Errorf("view should stay exactly 20 lines, got %d", len(lines))
 	}
 }
 
 func TestRenderWorktreesViewTinyHeightNoOverflow(t *testing.T) {
-	// graphH clamps to ≥1; the status + hint trailing lines must not push the
-	// box past its height at degenerate small heights.
+	// graphH clamps to ≥1; the padded card body must not push the box past its
+	// height at degenerate small heights.
 	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/a"}}, "/wt/a")
 	for _, h := range []int{1, 2, 3, 4, 5} {
 		if n := len(strings.Split(m.renderWorktreesView(40, h), "\n")); n > h {

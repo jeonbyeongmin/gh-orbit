@@ -19,27 +19,24 @@ type helpCategory struct {
 	entries []helpEntry
 }
 
-// helpCategories is the source of truth for the expanded `?` panel. Keep
-// row order in sync with the docs/architecture.md table — the panel and
-// the doc are supposed to be readable side-by-side.
-var helpCategories = []helpCategory{
-	{
+// Help categories are split by the page they apply to. Only helpGlobal works
+// on every page (page cycle / quit / help); the rest are page-scoped. The `?`
+// panel shows Global + the current page's categories (helpCategoriesFor), so a
+// reviewer sees only the keys that do something where they are. Keep row order
+// in sync with the docs/architecture.md table.
+var (
+	// helpGlobal — the only truly cross-page keys (handled in every page's
+	// key handler, or in updateKey itself for ctrl+c).
+	helpGlobal = helpCategory{
 		title: "Global",
 		entries: []helpEntry{
 			{"?", "help"},
 			{"^C ^C", "quit"},
-			{"F", "fetch"},
-			{"p", "pull"},
-			{"P", "push"},
-			{"r", "reload"},
-			{",", "local changes"},
-			{"w", "worktrees modal"},
-			{"b", "branches modal"},
-			{"l", "PR list modal"},
-			{"Z", "zombie cleanup"},
+			{"tab/⇧tab", "next/prev page"},
 		},
-	},
-	{
+	}
+	// helpGraph — cursor-driven graph actions (graph page only).
+	helpGraph = helpCategory{
 		title: "Graph",
 		entries: []helpEntry{
 			{"j/k", "nav"},
@@ -54,8 +51,37 @@ var helpCategories = []helpCategory{
 			{"d", "patch overlay"},
 			{"y", "copy hash"},
 		},
-	},
-	{
+	}
+	// helpSync — repo sync + list/cleanup modals. Reachable only from the
+	// graph page (handleNormalKey), split out of Graph so the column stays
+	// short rather than one tall list.
+	helpSync = helpCategory{
+		title: "Sync",
+		entries: []helpEntry{
+			{"F", "fetch"},
+			{"p", "pull"},
+			{"P", "push"},
+			{"r", "reload"},
+			{"b", "branches modal"},
+			{"l", "PR list modal"},
+			{"Z", "zombie cleanup"},
+		},
+	}
+	// helpWorktree — worktree page cursor actions (the sole source now that the
+	// in-box hint row was retired in favor of the unified `?` panel).
+	helpWorktree = helpCategory{
+		title: "Worktree",
+		entries: []helpEntry{
+			{"j/k", "nav"},
+			{"enter", "switch"},
+			{"O", "review PR"},
+			{"a", "add"},
+			{"d", "remove"},
+			{"s", "sort"},
+		},
+	}
+	// helpLocalChanges — local changes page tree + diff keys.
+	helpLocalChanges = helpCategory{
 		title: "Local Changes",
 		entries: []helpEntry{
 			{"j/k", "nav"},
@@ -63,14 +89,30 @@ var helpCategories = []helpCategory{
 			{"enter", "open diff"},
 			{"space", "stage/unstage (file / hunk)"},
 			{"[/]", "prev/next hunk (diff)"},
-			{"esc", "back / exit"},
+			{"esc", "diff → tree"},
 			{"r", "reload"},
-			{",/q", "exit"},
 		},
-	},
+	}
+)
+
+// helpCategoriesFor returns the panel categories for a page index (0 graph, 1
+// worktree, 2 local changes) — always led by Global.
+func helpCategoriesFor(page int) []helpCategory {
+	switch page {
+	case 1:
+		return []helpCategory{helpGlobal, helpWorktree}
+	case 2:
+		return []helpCategory{helpGlobal, helpLocalChanges}
+	default:
+		return []helpCategory{helpGlobal, helpGraph, helpSync}
+	}
 }
 
-func helpData() []helpCategory { return helpCategories }
+// helpData returns every category, for the coverage test that guards against
+// silently dropping a binding.
+func helpData() []helpCategory {
+	return []helpCategory{helpGlobal, helpGraph, helpSync, helpWorktree, helpLocalChanges}
+}
 
 // collapsedHintText is the entire bottom line in normal operation: a single
 // pressable `? help` token. The full key reference lives behind the `?`
@@ -104,12 +146,12 @@ const helpTextBranchPicker = "j/k navigate · enter checkout · esc cancel"
 // row plus a single entries row joined inline with `·`. Rows past the cap
 // are dropped. This is the narrow-terminal fallback for renderHelpExpanded
 // when the side-by-side columns are wider than the terminal.
-func renderHelpPanel(width, height int) string {
+func renderHelpPanel(cats []helpCategory, width, height int) string {
 	if width < 1 || height < 1 {
 		return ""
 	}
 	var lines []string
-	for _, c := range helpCategories {
+	for _, c := range cats {
 		lines = append(lines, "["+c.title+"]")
 		parts := make([]string, len(c.entries))
 		for i, e := range c.entries {
@@ -135,10 +177,10 @@ const helpColumnGutter = 2
 // a bold title row over one `keys action` row per entry. lipgloss pads each
 // column to its own widest line and to the tallest column, so the gutter
 // stays aligned regardless of how many entries a category has.
-func renderHelpColumns() string {
-	blocks := make([]string, 0, len(helpCategories)*2-1)
+func renderHelpColumns(cats []helpCategory) string {
+	blocks := make([]string, 0, len(cats)*2-1)
 	gutter := strings.Repeat(" ", helpColumnGutter)
-	for i, c := range helpCategories {
+	for i, c := range cats {
 		if i > 0 {
 			blocks = append(blocks, gutter)
 		}
@@ -154,15 +196,16 @@ func renderHelpColumns() string {
 
 // renderHelpExpanded renders the `?` reference for the inline bottom panel
 // that grows out of the footer (it is not a modal — the base view stays put
-// and shortcuts keep working). Wide terminals get the side-by-side column
-// layout, clamped to `height` rows; when the columns are wider than the
-// terminal it falls back to the stacked renderHelpPanel form. The graph above
-// shrinks by `height` rows (see paneSizes / helpReservedRows).
-func renderHelpExpanded(width, height int) string {
+// and shortcuts keep working). cats is the current page's category set. Wide
+// terminals get the side-by-side column layout, clamped to `height` rows; when
+// the columns are wider than the terminal it falls back to the stacked
+// renderHelpPanel form. The page above shrinks by `height` rows (see paneSizes
+// / helpReservedRows).
+func renderHelpExpanded(cats []helpCategory, width, height int) string {
 	if width < 1 || height < 1 {
 		return ""
 	}
-	if columns := renderHelpColumns(); lipgloss.Width(columns) <= width {
+	if columns := renderHelpColumns(cats); lipgloss.Width(columns) <= width {
 		lines := strings.Split(columns, "\n")
 		if len(lines) > height {
 			lines = lines[:height]
@@ -170,5 +213,5 @@ func renderHelpExpanded(width, height int) string {
 		return strings.Join(lines, "\n")
 	}
 	// Too narrow for columns: reuse the stacked-rows layout.
-	return renderHelpPanel(width, height)
+	return renderHelpPanel(cats, width, height)
 }

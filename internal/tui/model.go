@@ -64,12 +64,6 @@ const (
 	// context); only the help/status line below switches to the choice
 	// keys, and every key except a/esc/ctrl+c is swallowed.
 	viewModeCheckoutConfirm
-	// viewModeHelp expands the bottom area into a multi-line help panel.
-	// The 3-pane layout stays visible above; only the bottom shrinks the
-	// main area to make room. All other shortcuts keep working while the
-	// panel is open — `?` re-toggles, j/k navigate, etc. — so the
-	// expanded panel functions as a reference, not a modal.
-	viewModeHelp
 	// viewModeBranchPicker gates the screen on a "pick which local branch"
 	// modal triggered when the graph Enter evaluator returns multiple
 	// chips at the cursor row (graphActionPicker). The 3-pane layout stays
@@ -296,6 +290,12 @@ type Model struct {
 	// actually quits. No timer — disarm is purely key-driven, handled at the
 	// top of the tea.KeyMsg branch in Update.
 	quitArmed bool
+	// helpOpen toggles the inline `?` reference panel. It is orthogonal to
+	// mode — the panel grows out of the footer on whichever page is showing
+	// (graph / worktree / local changes) and the page's own keys keep working
+	// while it's open, so it stays a reference, not a modal. showsHelp() gates
+	// rendering to the bare page modes so a confirm/overlay hides it.
+	helpOpen bool
 	// checkoutInFlight gates Enter on the refs pane and Enter on the graph
 	// while a background checkout is running. fetch/pull have their own
 	// gates; git's .git/index.lock is the real serialization point.
@@ -717,13 +717,26 @@ func (m *Model) enterLocalChangesMode() tea.Cmd {
 	return loadStatusCmd(m.workdir)
 }
 
-// exitLocalChangesMode flips back to the normal layout. Entries / cursor
-// state are kept so re-entry restores them; the diff body is released so
-// a large untracked-file diff doesn't sit resident between sessions.
-func (m *Model) exitLocalChangesMode() {
+// enterGraphPage returns to the commit graph — the home page of the
+// tab/shift+tab cycle. Local Changes entries / cursor state are kept so
+// re-entry restores them, but the diff body is released so a large
+// untracked-file patch doesn't sit resident behind the graph.
+func (m Model) enterGraphPage() Model {
+	if m.mode == viewModeLocalChanges {
+		m.localChanges.ClosePatch()
+	}
 	m.mode = viewModeNormal
-	m.localChanges.ClosePatch()
 	m.applyPaneSizes()
+	return m
+}
+
+// toggleHelp flips the inline `?` reference panel and reflows the current page
+// around the reserved rows. Shared by every page's `?` handler so the toggle
+// contract stays in one place.
+func (m Model) toggleHelp() (tea.Model, tea.Cmd) {
+	m.helpOpen = !m.helpOpen
+	m.applyPaneSizes()
+	return m, nil
 }
 
 // enterLocalChangesDiff drills the tree into the diff for the cursor entry:
@@ -1023,13 +1036,15 @@ func (m Model) paneSizes() paneSizes {
 	// Reserve 1 row for the bottom help/status line, or the full inline panel
 	// height when `?` is open. The centered overlay modal modes (branchPicker /
 	// branchesModal / checkoutConfirm / worktree sub-modals) are painted on top
-	// of the unchanged 3-pane base by composeOverlay, so they reserve no extra
-	// rows here — only viewModeHelp grows the bottom region.
+	// of the unchanged base by composeOverlay, so they reserve no extra rows
+	// here — only an open help panel (showsHelp) grows the bottom region.
 	helpReserved := 1
-	if m.mode == viewModeHelp {
+	if m.showsHelp() {
 		helpReserved = m.helpReservedRows()
 	}
-	mainH := m.height - helpReserved
+	// pageTabsRows reserves the top breadcrumb row; it shows on every page
+	// (the diff overlay returns before paneSizes, so it isn't affected).
+	mainH := m.height - helpReserved - pageTabsRows
 	if mainH < 1 {
 		mainH = 1
 	}
@@ -1069,9 +1084,12 @@ func (m Model) paneSizes() paneSizes {
 // header), clamped so the graph keeps priority: never more than half the
 // screen, and never so tall that the main area drops below 3 rows. Floor: 1.
 func (m Model) helpReservedRows() int {
-	want := lipgloss.Height(renderHelpColumns())
+	want := lipgloss.Height(renderHelpColumns(helpCategoriesFor(m.currentPageIndex())))
 	want = max(min(want, m.height/2), 3)
-	if upper := m.height - 3; upper > 0 {
+	// Keep ≥3 main rows after BOTH the help panel and the breadcrumb row are
+	// carved off (paneSizes subtracts pageTabsRows too) — without the
+	// -pageTabsRows the composed view overflows by a row on short terminals.
+	if upper := m.height - 3 - pageTabsRows; upper > 0 {
 		want = min(want, upper)
 	}
 	return max(want, 1)
@@ -1171,6 +1189,11 @@ var (
 	statusBusyS   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	statusOkS     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	statusErrS    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	// pageTabActiveS / pageTabInactiveS style the top breadcrumb that names
+	// the current page. Active reuses the focused-pane accent (205); inactive
+	// reuses the dim help color so the three labels read as one quiet bar.
+	pageTabActiveS   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected)).Bold(true)
+	pageTabInactiveS = lipgloss.NewStyle().Foreground(lipgloss.Color(colorDim))
 )
 
 // renderModalBox wraps inner content in modalBoxStyle.
@@ -1258,7 +1281,7 @@ func (m Model) View() string {
 	default:
 		main = boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
 	}
-	base := lipgloss.JoinVertical(lipgloss.Left, main, m.renderHelpStatus())
+	base := lipgloss.JoinVertical(lipgloss.Left, m.renderPageTabs(), main, m.renderHelpStatus())
 
 	switch m.mode {
 	case viewModeBranchPicker:
@@ -1310,6 +1333,69 @@ func (m Model) isWorktreesSurface() bool {
 	return false
 }
 
+// pageTabsRows is the single row the page breadcrumb claims at the top of
+// every page. Page navigation moved entirely onto the tab/shift+tab cycle
+// (the `w` / `,` keys were retired), so the breadcrumb is the only always-on
+// signal of which page is showing and that the others exist.
+const pageTabsRows = 1
+
+// pageTabLabels are the breadcrumb labels in cycle order: tab advances left to
+// right (wrapping), shift+tab reverses. Index matches currentPageIndex.
+var pageTabLabels = [...]string{"Graph", "Worktree", "Local Changes"}
+
+// currentPageIndex maps the viewMode to its top-level page (0 graph, 1
+// worktree, 2 local changes). Overlays / confirms resolve to the page they
+// compose over (worktree sub-modals → worktree, everything else → graph) so
+// the breadcrumb stays steady while a modal is open.
+func (m Model) currentPageIndex() int {
+	switch {
+	case m.mode == viewModeLocalChanges:
+		return 2
+	case m.isWorktreesSurface():
+		return 1
+	default:
+		return 0
+	}
+}
+
+// isPageMode reports whether the bare top-level page owns the screen (graph /
+// worktree / local changes) — i.e. no overlay, confirm, or sub-modal is up.
+// The inline help panel only shows on these.
+func (m Model) isPageMode() bool {
+	switch m.mode {
+	case viewModeNormal, viewModeWorktreesModal, viewModeLocalChanges:
+		return true
+	}
+	return false
+}
+
+// showsHelp reports whether the inline `?` panel is currently painted: it is
+// open AND a bare page owns the screen (opening a modal hides it without
+// clearing the toggle, so closing the modal restores it).
+func (m Model) showsHelp() bool { return m.helpOpen && m.isPageMode() }
+
+// renderPageTabs draws the top breadcrumb: the three pages with the active one
+// accented, plus a right-aligned cycle hint. One row tall (pageTabsRows).
+func (m Model) renderPageTabs() string {
+	cur := m.currentPageIndex()
+	parts := make([]string, len(pageTabLabels))
+	for i, label := range pageTabLabels {
+		if i == cur {
+			parts[i] = pageTabActiveS.Render(label)
+		} else {
+			parts[i] = pageTabInactiveS.Render(label)
+		}
+	}
+	tabs := strings.Join(parts, pageTabInactiveS.Render(" · "))
+	hint := help.Render("tab / shift+tab")
+	// Drop the cycle hint before it would wrap the row on a narrow terminal —
+	// the labels (and the active highlight) are the load-bearing part.
+	if lipgloss.Width(tabs)+lipgloss.Width(hint)+1 > m.width {
+		return tabs
+	}
+	return layoutLeftRight(tabs, hint, m.width)
+}
+
 // renderHelpStatus lays out the bottom line as "help … status". When the
 // terminal is too narrow to fit both, status wins — the user just triggered
 // an action and seeing its outcome matters more than the help reminder.
@@ -1320,21 +1406,23 @@ func (m Model) isWorktreesSurface() bool {
 // row count stable across the modal toggle so View()'s base frame doesn't
 // jump in height.
 //
-// viewModeHelp expands the bottom line into a multi-row panel so the
-// shortcut reference can fit the full key matrix.
+// An open help panel (showsHelp) expands the bottom line into a multi-row
+// panel so the shortcut reference can fit the current page's key matrix.
 func (m Model) renderHelpStatus() string {
+	if m.showsHelp() {
+		// Inline column reference panel, grown out of the footer over the rows
+		// helpReservedRows() carved from the current page. Shows only that
+		// page's categories (helpCategoriesFor).
+		return renderHelpExpanded(helpCategoriesFor(m.currentPageIndex()), m.width, m.helpReservedRows())
+	}
 	switch m.mode {
 	case viewModeBranchPicker, viewModeBranchesModal, viewModePRsModal,
-		viewModeCheckoutConfirm, viewModeWorktreesModal, viewModeWorktreeAddInput,
+		viewModeCheckoutConfirm, viewModeWorktreeAddInput,
 		viewModeWorktreeRemoveConfirm, viewModeZombieCleanupConfirm,
 		viewModeBranchCreateInput, viewModeRefDeleteConfirm,
 		viewModeRebaseConfirm, viewModeCherryPickConfirm,
 		viewModeRevertConfirm, viewModeResetConfirm:
 		return " "
-	case viewModeHelp:
-		// Inline column reference panel, grown out of the footer over the rows
-		// helpReservedRows() carved from the graph.
-		return renderHelpExpanded(m.width, m.helpReservedRows())
 	}
 	// Normal operation: the status message on the left, a single pressable
 	// `? help` token pinned to the right edge. The full key reference lives

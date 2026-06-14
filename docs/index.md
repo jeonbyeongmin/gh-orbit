@@ -20,7 +20,7 @@ detail.
 - [branches.md](branches.md) — `n` / `d` / `m` modals for create /
   delete / rename, key matrix, modal mechanics. The "pile of
   leftover branches" cleanup surface.
-- [worktrees.md](worktrees.md) — the `w` worktrees modal for
+- [worktrees.md](worktrees.md) — the `tab`-cycle Worktree page for
   list / switch / add / remove, in-process switch + dirty fan-out.
   The "work lives in worktree A, you inspect worktree B" surface.
 - [pr-review.md](pr-review.md) — `O` pulls a PR diff into the patch

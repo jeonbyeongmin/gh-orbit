@@ -438,19 +438,17 @@ func validateWorktreePath(path string) error {
 }
 
 // worktreesModalState backs viewModeWorktreesModal — the full-screen
-// worktree dashboard toggled by `w` (renders via renderWorktreesView, the
-// same graph-replacing seam Local Changes uses). An int cursor into
+// worktree page reached via the tab cycle (renders via renderWorktreesView,
+// the same graph-replacing seam Local Changes uses). An int cursor into
 // m.modalWorktrees() (the active display order) at open time; reloads (after
 // add / remove) clamp via beginWorktreesModal on re-entry. sortByCommit is
-// the session-local last-commit sort toggle (`s`); it resets on close because
-// the whole struct is zeroed there. ("Modal" in the name is a historical
-// artifact from when it was a centered overlay.)
+// the session-local last-commit sort toggle (`s`); it persists across page
+// switches (the cycle no longer zeroes the struct). ("Modal" in the name is a
+// historical artifact from when it was a centered overlay.)
 type worktreesModalState struct {
 	cursor       int
 	sortByCommit bool
 }
-
-const helpTextWorktreesModal = "[j/k] navigate · [enter] switch · [O] review PR · [a] add · [d] remove · [s] sort · [esc] close"
 
 // modalWorktrees returns the worktrees in the modal's active
 // display order. With sortByCommit off it's the git natural order
@@ -480,16 +478,12 @@ func (m Model) modalWorktrees() []git.Worktree {
 	return sorted
 }
 
-// beginWorktreesModal opens viewModeWorktreesModal. Cursor lands on
-// the current worktree if found, else 0. Empty inventory surfaces an
-// inline error and stays in viewModeNormal.
+// beginWorktreesModal flips to the full-screen worktree page. Cursor lands on
+// the current worktree if found, else 0. An empty inventory is not refused —
+// renderWorktreesView shows its own "(no worktrees loaded yet)" body — so the
+// tab cycle always lands on the page.
 func (m Model) beginWorktreesModal() (Model, tea.Cmd) {
 	wts := m.modalWorktrees()
-	if len(wts) == 0 {
-		m.status = "worktrees: none loaded yet"
-		m.statusStyle = statusErrS
-		return m, nil
-	}
 	cursor := 0
 	for i, wt := range wts {
 		if wt.Path == m.workdir {

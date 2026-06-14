@@ -28,6 +28,20 @@ func pressRune(t *testing.T, m Model, r rune) (Model, tea.Cmd) {
 	return updated.(Model), cmd
 }
 
+// pressDown / pressUp dispatch the arrow cursor-movement keys. j/k were
+// dropped as movement bindings, so cursor tests drive the arrows instead.
+func pressDown(t *testing.T, m Model) (Model, tea.Cmd) {
+	t.Helper()
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	return updated.(Model), cmd
+}
+
+func pressUp(t *testing.T, m Model) (Model, tea.Cmd) {
+	t.Helper()
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	return updated.(Model), cmd
+}
+
 // pressTab / pressShiftTab dispatch the page-cycle keys. From the graph,
 // tab advances to the Worktree page and shift+tab wraps to Pull Requests
 // (the last of the four pages).
@@ -95,7 +109,7 @@ func TestDeleteConfirmKeystrokeSequence(t *testing.T) {
 		})
 		// b → modal opens at HEAD (main, cursor=0). j → feat/foo. d → arm.
 		m, _ = pressRune(t, m, 'b')
-		m, _ = pressRune(t, m, 'j')
+		m, _ = pressDown(t, m)
 		m, _ = pressRune(t, m, 'd')
 		_ = called
 		_ = callForce
@@ -232,7 +246,7 @@ func TestDeleteConfirmYRetryAfterNotMerged(t *testing.T) {
 		{ShortName: "feat/foo", Kind: git.RefKindLocal},
 	})
 	m, _ = pressRune(t, m, 'b')
-	m, _ = pressRune(t, m, 'j')
+	m, _ = pressDown(t, m)
 	m, _ = pressRune(t, m, 'd')
 
 	// First y: safe-delete attempt → not-merged.

@@ -69,7 +69,7 @@ Mechanics:
 Other invariants:
 
 - Multiple locals tracking the same upstream: cross-branch picks the alphabetically first. Picker UX is reserved for ambiguous local-chip rows; there is no explicit-choice escape hatch on the refs pane.
-- `viewModeBranchPicker`: `j` / `k` move cursor, `enter` confirms, `esc` cancels. Every other key swallowed.
+- `viewModeBranchPicker`: `↑` / `↓` move cursor, `enter` confirms, `esc` cancels. Every other key swallowed.
 - Decision computed asynchronously via `evaluateGraphActionCmd` — model never blocks `Update` on git. `actionInFlight` swallows a second `space` while the evaluator is running. A cursor move between `space` dispatch and reply causes the reply to be dropped — re-press `space` on the new row.
 - Status surfaces are one-line: `fast-forward: main +3`, `fast-forward: develop +2 (after checkout)`, `fast-forward failed: <reason>`, `already on main`, `branch select cancelled`.
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -111,7 +112,12 @@ type localChangesModel struct {
 }
 
 func newLocalChangesModel() localChangesModel {
-	return localChangesModel{diff: viewport.New(0, 0)}
+	vp := viewport.New(0, 0)
+	// Scroll is arrow-only — the j/k vim bindings were dropped, so override
+	// viewport's default Up/Down (which include k/j).
+	vp.KeyMap.Up = key.NewBinding(key.WithKeys("up"))
+	vp.KeyMap.Down = key.NewBinding(key.WithKeys("down"))
+	return localChangesModel{diff: vp}
 }
 
 // SetSize takes the tree column and diff column dimensions separately because
@@ -396,7 +402,7 @@ func (m *localChangesModel) SelectByPath(path string, preferStaged bool) bool {
 }
 
 // Focused / SetFocus expose the tree-vs-diff sub-focus to the parent so the
-// outer key dispatcher can route j/k to cursor-move (tree) or viewport-scroll
+// outer key dispatcher can route ↑/↓ to cursor-move (tree) or viewport-scroll
 // (diff).
 func (m localChangesModel) Focused() localChangesPane { return m.focused }
 func (m *localChangesModel) SetFocus(p localChangesPane) {
@@ -820,9 +826,9 @@ func classifyStatus(src []git.StatusEntry) []localChangesEntry {
 	}
 	// Emit in render order (Conflicts → Unstaged → Staged) so the entries
 	// slice index lines up with flatRows' visual order: cursor 0 is the first
-	// visible row, and j/k step the way the eye expects. The git status stream
+	// visible row, and ↑/↓ step the way the eye expects. The git status stream
 	// interleaves sections arbitrarily, so without this the cursor would land
-	// off the top row and j/k would jump across sections.
+	// off the top row and ↑/↓ would jump across sections.
 	out := make([]localChangesEntry, 0, len(conflicts)+len(unstaged)+len(staged))
 	out = append(out, conflicts...)
 	out = append(out, unstaged...)

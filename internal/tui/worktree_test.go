@@ -275,7 +275,7 @@ func TestWorktreesModalSpaceDispatchesSwitch(t *testing.T) {
 	if m.mode != viewModeWorktreesModal {
 		t.Fatalf("tab should open the worktree page, mode = %v", m.mode)
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(Model)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	m = updated.(Model)
@@ -309,7 +309,7 @@ func TestWorktreesModalDOpensRemoveConfirm(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)
@@ -391,7 +391,7 @@ func TestWorktreesModalDOnMainFromLinkedRejects(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)
@@ -441,7 +441,7 @@ func TestWorktreesTabCycle(t *testing.T) {
 		t.Fatalf("tab from graph should open the worktree page, mode = %v", m.mode)
 	}
 	// Move the cursor; tab to the next page must not reset it.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(Model)
 	if m.worktreesModal.cursor != 1 {
 		t.Fatalf("j should move cursor to 1, cursor = %d", m.worktreesModal.cursor)
@@ -529,7 +529,7 @@ func TestWorktreesModalJKBoundedClamp(t *testing.T) {
 	m = updated.(Model)
 	// j j j → still 1 (last row), no wrap.
 	for i := 0; i < 3; i++ {
-		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = updated.(Model)
 	}
 	if m.worktreesModal.cursor != 1 {
@@ -537,7 +537,7 @@ func TestWorktreesModalJKBoundedClamp(t *testing.T) {
 	}
 	// k k k → back to 0 and stays.
 	for i := 0; i < 3; i++ {
-		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 		m = updated.(Model)
 	}
 	if m.worktreesModal.cursor != 0 {

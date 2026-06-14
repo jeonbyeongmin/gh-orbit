@@ -12,115 +12,141 @@ type helpEntry struct {
 	keys, action string
 }
 
-// helpCategory groups entries under a pane label. Categories mirror
-// docs/architecture.md's key-bindings table.
+// helpCategory groups entries under a pane label. entries are split into
+// subcategory groups (e.g. movement vs actions) so the panel can render a
+// blank row between them; categories with too few keys to split stay a single
+// group. Mirrors docs/architecture.md's key bindings.
 type helpCategory struct {
-	title   string
-	entries []helpEntry
+	title  string
+	groups [][]helpEntry
 }
 
 // Help categories are split by the page they apply to. Only helpGlobal works
 // on every page (page cycle / quit / help); the rest are page-scoped. The `?`
 // panel shows Global + the current page's categories (helpCategoriesFor), so a
-// reviewer sees only the keys that do something where they are. Keep row order
-// in sync with the docs/architecture.md table.
+// reviewer sees only the keys that do something where they are. Within a
+// category, entries are grouped into subcategories (movement keys apart from
+// the mutating actions); see docs/architecture.md for the full key bindings.
 var (
 	// helpGlobal — the only truly cross-page keys (handled in every page's
-	// key handler, or in updateKey itself for ctrl+c).
+	// key handler, or in updateKey itself for ctrl+c). One group.
 	helpGlobal = helpCategory{
 		title: "Global",
-		entries: []helpEntry{
+		groups: [][]helpEntry{{
 			{"?", "help"},
 			{"^C ^C", "quit"},
 			{"tab/⇧tab", "next/prev page"},
-		},
+		}},
 	}
-	// helpGraph — cursor-driven graph actions (graph page only).
+	// helpGraph — cursor-driven graph actions (graph page only): movement
+	// keys grouped apart from the mutating actions.
 	helpGraph = helpCategory{
 		title: "Graph",
-		entries: []helpEntry{
-			{"j/k", "nav"},
-			{"g/G", "top/bot"},
-			{"space", "checkout / ff / detach"},
-			{"enter", "open PR (web)"},
-			{"m", "merge PR"},
-			{"R", "rebase onto cursor"},
-			{"c", "cherry-pick cursor"},
-			{"v", "revert cursor"},
-			{"x", "reset to cursor"},
-			{"n", "new branch @ cursor"},
-			{"→", "open diff"},
-			{"[/]", "prev/next page"},
-			{"y", "copy hash"},
+		groups: [][]helpEntry{
+			{
+				{"↑/↓", "nav"},
+				{"g/G", "top/bot"},
+				{"[/]", "prev/next page"},
+			},
+			{
+				{"space", "checkout / ff / detach"},
+				{"enter", "open PR (web)"},
+				{"m", "merge PR"},
+				{"R", "rebase onto cursor"},
+				{"c", "cherry-pick cursor"},
+				{"v", "revert cursor"},
+				{"x", "reset to cursor"},
+				{"n", "new branch @ cursor"},
+				{"→", "open diff"},
+				{"y", "copy hash"},
+			},
 		},
 	}
-	// helpSync — repo sync + list/cleanup modals. Reachable only from the
-	// graph page (handleNormalKey), split out of Graph so the column stays
-	// short rather than one tall list.
+	// helpSync — repo sync + list/cleanup modals, reachable only from the
+	// graph page (handleNormalKey): remote transfers apart from local
+	// refresh / cleanup. Split out of Graph so the column stays short.
 	helpSync = helpCategory{
 		title: "Sync",
-		entries: []helpEntry{
-			{"F", "fetch"},
-			{"p", "pull"},
-			{"P", "push"},
-			{"r", "reload"},
-			{"b", "branches modal"},
-			{"Z", "zombie cleanup"},
+		groups: [][]helpEntry{
+			{
+				{"F", "fetch"},
+				{"p", "pull"},
+				{"P", "push"},
+			},
+			{
+				{"r", "reload"},
+				{"b", "branches modal"},
+				{"Z", "zombie cleanup"},
+			},
 		},
 	}
-	// helpWorktree — worktree page cursor actions (the sole source now that the
-	// in-box hint row was retired in favor of the unified `?` panel).
+	// helpWorktree — worktree page cursor actions: list movement apart from
+	// the worktree mutations.
 	helpWorktree = helpCategory{
 		title: "Worktree",
-		entries: []helpEntry{
-			{"j/k", "nav"},
-			{"space", "switch"},
-			{"enter", "open PR (web)"},
-			{"a", "add"},
-			{"d", "remove"},
-			{"s", "sort"},
+		groups: [][]helpEntry{
+			{
+				{"↑/↓", "nav"},
+				{"s", "sort"},
+			},
+			{
+				{"space", "switch"},
+				{"enter", "open PR (web)"},
+				{"a", "add"},
+				{"d", "remove"},
+			},
 		},
 	}
 	// helpLCTree — local changes tree (file list) pane keys.
 	helpLCTree = helpCategory{
 		title: "Tree",
-		entries: []helpEntry{
-			{"j/k", "nav"},
-			{"g/G", "top/bot"},
-			{"space", "stage/unstage"},
-			{"→", "open diff"},
-			{"r", "reload"},
+		groups: [][]helpEntry{
+			{
+				{"↑/↓", "nav"},
+				{"g/G", "top/bot"},
+			},
+			{
+				{"space", "stage/unstage"},
+				{"→", "open diff"},
+				{"r", "reload"},
+			},
 		},
 	}
 	// helpLCDiff — local changes diff pane keys.
 	helpLCDiff = helpCategory{
 		title: "Diff",
-		entries: []helpEntry{
-			{"j/k", "scroll"},
-			{"[/]", "prev/next hunk"},
-			{"space", "stage/unstage hunk"},
-			{"←", "back to tree"},
+		groups: [][]helpEntry{
+			{
+				{"↑/↓", "scroll"},
+				{"[/]", "prev/next hunk"},
+			},
+			{
+				{"space", "stage/unstage hunk"},
+				{"←", "back to tree"},
+			},
 		},
 	}
-	// helpDiff — graph commit / PR patch keys (the diff page, opened with →).
+	// helpDiff — graph commit / PR patch keys (the diff page, opened with →):
+	// movement keys beside a single close action, kept as one group.
 	helpDiff = helpCategory{
 		title: "Diff",
-		entries: []helpEntry{
-			{"j/k", "scroll"},
+		groups: [][]helpEntry{{
+			{"↑/↓", "scroll"},
 			{"[/]", "prev/next hunk"},
 			{"{/}", "prev/next file"},
 			{"←", "close"},
-		},
+		}},
 	}
-	// helpPRs — Pull Requests page cursor actions (the 4th tab).
+	// helpPRs — Pull Requests page cursor actions (the 4th tab). One nav key
+	// beside the actions, kept as one group.
 	helpPRs = helpCategory{
 		title: "Pull Requests",
-		entries: []helpEntry{
-			{"j/k", "nav"},
+		groups: [][]helpEntry{{
+			{"↑/↓", "nav"},
 			{"enter", "open PR (web)"},
 			{"m", "merge PR"},
 			{"r", "refresh"},
-		},
+		}},
 	}
 )
 
@@ -168,9 +194,9 @@ func fitHelpLine(text string, width int) string {
 }
 
 // helpTextBranchPicker is the bottom hint shown while the branch picker
-// modal is open. The picker swallows everything but j/k/enter/esc, so
+// modal is open. The picker swallows everything but ↑/↓/enter/esc, so
 // the hint enumerates exactly what works.
-const helpTextBranchPicker = "j/k navigate · enter checkout · esc cancel"
+const helpTextBranchPicker = "↑/↓ navigate · enter checkout · esc cancel"
 
 // renderHelpPanel composes the stacked-rows help layout as a multi-line
 // string capped at `height` rows. Each category emits a `[Title]` header
@@ -184,9 +210,11 @@ func renderHelpPanel(cats []helpCategory, width, height int) string {
 	var lines []string
 	for _, c := range cats {
 		lines = append(lines, "["+c.title+"]")
-		parts := make([]string, len(c.entries))
-		for i, e := range c.entries {
-			parts[i] = e.keys + " " + e.action
+		var parts []string
+		for _, g := range c.groups {
+			for _, e := range g {
+				parts = append(parts, e.keys+" "+e.action)
+			}
 		}
 		lines = append(lines, "  "+strings.Join(parts, " · "))
 	}
@@ -205,9 +233,10 @@ func renderHelpPanel(cats []helpCategory, width, height int) string {
 const helpColumnGutter = 2
 
 // renderHelpColumns lays the categories out as side-by-side vertical lists:
-// a bold title row over one `keys action` row per entry. lipgloss pads each
-// column to its own widest line and to the tallest column, so the gutter
-// stays aligned regardless of how many entries a category has.
+// a title row over each subcategory group's rows, with a blank row between
+// groups. lipgloss pads each column to its own widest line and to the tallest
+// column, so the gutter stays aligned regardless of how many entries a
+// category has.
 func renderHelpColumns(cats []helpCategory) string {
 	blocks := make([]string, 0, len(cats)*2-1)
 	gutter := strings.Repeat(" ", helpColumnGutter)
@@ -215,14 +244,37 @@ func renderHelpColumns(cats []helpCategory) string {
 		if i > 0 {
 			blocks = append(blocks, gutter)
 		}
-		lines := make([]string, 0, len(c.entries)+1)
-		lines = append(lines, modalHeaderS.Render(c.title))
-		for _, e := range c.entries {
-			lines = append(lines, e.keys+" "+e.action)
-		}
-		blocks = append(blocks, strings.Join(lines, "\n"))
+		blocks = append(blocks, renderHelpCategory(c))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, blocks...)
+}
+
+// renderHelpCategory renders one category as a vertical block: a styled title
+// over each group's `keys  action` rows, blank-line separated. Key chords are
+// padded to the category's widest chord so the action column lines up across
+// every group, and keys / actions get distinct gray tones so the columns read
+// without shouting.
+func renderHelpCategory(c helpCategory) string {
+	keyW := 0
+	for _, g := range c.groups {
+		for _, e := range g {
+			if w := runewidth.StringWidth(e.keys); w > keyW {
+				keyW = w
+			}
+		}
+	}
+	var lines []string
+	lines = append(lines, helpTitleS.Render(c.title))
+	for gi, g := range c.groups {
+		if gi > 0 {
+			lines = append(lines, "")
+		}
+		for _, e := range g {
+			pad := strings.Repeat(" ", keyW-runewidth.StringWidth(e.keys))
+			lines = append(lines, helpKeyS.Render(e.keys+pad)+"  "+help.Render(e.action))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderHelpExpanded renders the `?` reference for the inline bottom panel

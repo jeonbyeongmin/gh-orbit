@@ -28,7 +28,7 @@ const (
 	// graphActionPicker fires when the cursor row resolves to several
 	// distinct candidates (local chips plus remote chips' tracking locals,
 	// deduped). The model enters viewModeBranchPicker; the user picks one
-	// with j/k+enter, which checks out + fast-forwards the chosen branch.
+	// with ↑/↓+enter, which checks out + fast-forwards the chosen branch.
 	graphActionPicker
 	// graphActionFF fires when the action advances HEAD's own branch up to
 	// the cursor (a mid-commit row strictly ahead, or a remote chip whose
@@ -71,7 +71,7 @@ type graphActionMsg struct {
 //
 // viewportTop is the index of the first candidate visible inside the
 // scroll window. The picker's renderer caps visible rows at ~70% of the
-// screen height; j/k handlers slide viewportTop so the cursor stays in
+// screen height; ↑/↓ handlers slide viewportTop so the cursor stays in
 // the window. Zero value (0) is the natural top-of-list start.
 type branchPickerState struct {
 	candidates  []string
@@ -81,7 +81,7 @@ type branchPickerState struct {
 }
 
 // scrollIntoView slides viewportTop so the current cursor sits inside the
-// [viewportTop, viewportTop+visibleRows) window. Called from the j/k
+// [viewportTop, viewportTop+visibleRows) window. Called from the ↑/↓
 // handlers after the cursor moves; visibleRows is computed by
 // branchPickerVisibleRows from the model's screen height.
 func (s *branchPickerState) scrollIntoView(visibleRows int) {

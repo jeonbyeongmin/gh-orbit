@@ -34,7 +34,7 @@ only owns its own cursor (`prsPage.cursor`).
 
 | Key            | Action                                                       |
 | -------------- | ------------------------------------------------------------ |
-| `j` / `k`      | move the cursor                                              |
+| `↑` / `↓`      | move the cursor                                              |
 | `enter`        | open the cursor PR on the web (`gh pr view --web`)           |
 | `m`            | merge the cursor PR (arms the merge confirm)                 |
 | `r`            | refresh the open-PR list (`gh pr list`)                      |

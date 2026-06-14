@@ -67,7 +67,7 @@ const (
 	// viewModeBranchPicker gates the screen on a "pick which local branch"
 	// modal triggered when the graph Enter evaluator returns multiple
 	// chips at the cursor row (graphActionPicker). The 3-pane layout stays
-	// visible underneath; only j/k/enter/esc are accepted while open.
+	// visible underneath; only ↑/↓/enter/esc are accepted while open.
 	viewModeBranchPicker
 	// viewModeRefDeleteConfirm gates the screen on the branch-delete
 	// confirm dialog (centered overlay, same surface as every other
@@ -727,17 +727,17 @@ func (m Model) enterLocalChangesDiff() (tea.Model, tea.Cmd) {
 	return m.dispatchLocalChangesDiff()
 }
 
-// handleLocalChangesTreeKey routes j/k/g/G/space inside the tree pane. Cursor
+// handleLocalChangesTreeKey routes ↑/↓/g/G/space inside the tree pane. Cursor
 // moves don't fetch a diff — the diff pane is single-pane drill-down, loaded
 // lazily on `enter` (enterLocalChangesDiff), so moving the cursor while the
 // tree is on screen costs nothing. space toggles the entry between Staged and
 // Unstaged via Add / RestoreStaged.
 func (m Model) handleLocalChangesTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "j", "down":
+	case "down":
 		m.localChanges.MoveCursor(1)
 		return m, nil
-	case "k", "up":
+	case "up":
 		m.localChanges.MoveCursor(-1)
 		return m, nil
 	case "g":
@@ -1163,9 +1163,14 @@ var (
 	// "the new active surface" — same visual vocabulary, just centered.
 	modalBoxStyle = borderFocused.Padding(0, 1)
 	help          = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	statusBusyS   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	statusOkS     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	statusErrS    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	// helpTitleS / helpKeyS dress the expanded `?` panel in muted grays: the
+	// title a touch brighter (still gray, not bold-white), key chords lighter
+	// than their dim-gray actions so the aligned columns read at a glance.
+	helpTitleS  = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
+	helpKeyS    = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
+	statusBusyS = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	statusOkS   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	statusErrS  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	// pageTabActiveS / pageTabInactiveS style the top breadcrumb that names
 	// the current page. Active reuses the focused-pane accent (205); inactive
 	// reuses the dim help color so the three labels read as one quiet bar.

@@ -10,14 +10,16 @@ import (
 // hint carries — every refactor of the panel must keep them all.
 func TestHelpDataCoverage(t *testing.T) {
 	required := []string{
-		"j/k", "enter", "y", "d", "F", "p", "P", "r", "R", "c", "n", "m",
+		"↑/↓", "enter", "y", "d", "F", "p", "P", "r", "R", "c", "n", "m",
 		"^C ^C", "tab/⇧tab", "space", "b",
 	}
 
 	var have []string
 	for _, c := range helpData() {
-		for _, e := range c.entries {
-			have = append(have, e.keys)
+		for _, g := range c.groups {
+			for _, e := range g {
+				have = append(have, e.keys)
+			}
 		}
 	}
 	joined := strings.Join(have, "|")
@@ -112,9 +114,11 @@ func TestHelpCategoriesForPageScoping(t *testing.T) {
 	}
 	hasKey := func(cats []helpCategory, key string) bool {
 		for _, c := range cats {
-			for _, e := range c.entries {
-				if e.keys == key {
-					return true
+			for _, g := range c.groups {
+				for _, e := range g {
+					if e.keys == key {
+						return true
+					}
 				}
 			}
 		}

@@ -336,14 +336,14 @@ func TestBranchPickerJKMovesCursorWithinClamp(t *testing.T) {
 		candidates: []string{"a", "b", "c"},
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	m = updated.(Model)
 	if m.branchPicker.cursor != 0 {
 		t.Errorf("k at top: cursor = %d, want 0 (clamped)", m.branchPicker.cursor)
 	}
 
 	for range 5 {
-		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = updated.(Model)
 	}
 	if m.branchPicker.cursor != 2 {

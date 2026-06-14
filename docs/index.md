@@ -14,7 +14,7 @@ detail.
   everything-shells-out-to-one-`git` boundary.
 - [config.md](config.md) — XDG paths for log + prefs,
   `[pull] strategy` resolution chain.
-- [checkout.md](checkout.md) — refs `enter` / `p`, graph `space`,
+- [checkout.md](checkout.md) — graph `space`, `p` (pull),
   dirty-tree confirm flow, fast-forward variants. The "land on the
   branch you need fast" surface.
 - [branches.md](branches.md) — `n` / `d` / `m` modals for create /

@@ -93,8 +93,8 @@ const (
 	// chain stays single-codepath with the refs-pane inline d.
 	viewModeBranchesModal
 	// viewModeWorktreesModal hosts the centered overlay listing every
-	// worktree. Entered via `w` from viewModeNormal — same pattern as the
-	// branches modal. enter switches, a/d reuse the existing add-input /
+	// worktree. Entered via `tab` (page cycle). space switches, enter opens
+	// the cursor worktree's PR on the web, a/d reuse the existing add-input /
 	// remove-confirm sub-modals, s toggles last-commit sort.
 	viewModeWorktreesModal
 	// viewModePRsPage is the full-screen Pull Requests tab (the 4th page,

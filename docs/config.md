@@ -31,7 +31,6 @@ strategy = "rebase"   # "ff-only" | "merge" | "rebase"
 
 1. prefs `[pull] strategy`
 2. git config `pull.rebase` (`true` → rebase)
-3. git config `pull.ff` (`only` → ff-only)
-4. fallback `--ff-only`
+3. fallback `--ff-only`
 
 A pull conflict surfaces `pull: CONFLICT — resolve in your terminal` in the status bar; the user resolves with their normal git workflow outside the TUI.

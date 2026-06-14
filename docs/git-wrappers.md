@@ -4,7 +4,7 @@
 
 ## Rules
 
-- **Typed wrappers only.** TUI calls `Log`, `Stat`, `Patch`, `PatchForFile`, `CommitDetail`, `Refs`, `Fetch`, etc. Stubbable in tests.
+- **Typed wrappers only.** TUI calls `LogStream`, `Stat`, `Patch`, `PatchForFile`, `CommitDetail`, `ForEachRef`, `Fetch`, etc. Stubbable in tests.
 - **Stream large output.** Prefer `StdoutPipe` + scanner over `CombinedOutput` for anything that can be large (`git log`, `git diff`).
 - **Wrap stderr into the returned error.** The TUI must be able to surface a real message, not `exit status 128`.
 - **Parse machine output.** Use `--porcelain` / `-z` / `--format=...` whenever available. Don't scrape human-readable text. NUL separators in `--format=%H%x00%P%x00...` keep newline-bearing fields like commit bodies safe to split.
@@ -21,6 +21,6 @@ Stderr matching turns common git failures into typed sentinels so the TUI can br
 - `ErrCheckoutNeedsCleanTree` — "Please commit your changes or stash them" / "would be overwritten" / "Your local changes". Drives the dirty-tree confirm flow ([checkout.md](checkout.md)).
 - `ErrPullConflict` / `ErrRebaseConflict` — a "CONFLICT" token in `git pull` / `git rebase` output. Drives the "resolve in your terminal" delegation ([checkout.md](checkout.md)); the mid-merge/mid-rebase state is left in place.
 - `ErrCherryPickConflict` / `ErrRevertConflict` — the same "CONFLICT" scan over `git cherry-pick` / `git revert` output, same delegation + leave-in-place contract. `git.Reset` has no conflict sentinel — reset never stops mid-flight, so its failures pass stderr through unchanged.
-- `ErrBranchAlreadyExists`, `ErrInvalidRefName`, `ErrBranchNotFullyMerged` — branch lifecycle ([branches.md](branches.md)).
+- `ErrBranchNotFullyMerged`, `ErrBranchNotFound` — branch lifecycle ([branches.md](branches.md)).
 
 Add new sentinels when a TUI flow needs to react to a specific git failure mode; otherwise pass stderr through unchanged.

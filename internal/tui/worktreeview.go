@@ -1,8 +1,8 @@
-// Full-screen worktree dashboard (the `w` view). Replaces the graph with a
+// Full-screen worktree dashboard (the Worktree page). Replaces the graph with a
 // vertical stack of 3-line cards — one per worktree — so the reviewer can
 // compare every tree's branch, PR/CI state, and last activity at once instead
 // of squeezing them into a single overlay row. Switching is still one stroke:
-// open with `w`, `↑`/`↓` to a card, `enter` to switch back to the graph.
+// opened via `tab`, `↑`/`↓` to a card, `space` to switch.
 //
 // Card anatomy (gutter is 2 cols: cursor bar `▌` + current marker `▶`):
 //

@@ -10,7 +10,7 @@ global action (`p`).
 ## Dirty-tree confirm flow
 
 - The wrapper does **not** pre-flight `git status`. It runs the checkout, matches git's stderr, and wraps the failure with `ErrCheckoutNeedsCleanTree`. No race window between detection and the actual command.
-- On that sentinel the TUI enters `viewModeCheckoutConfirm`. Only `s` / `a` / `esc` / `ctrl+c` work; every other key is swallowed.
+- On that sentinel the TUI enters `viewModeCheckoutConfirm`. Only `s` / `a` / `q` / `esc` / `ctrl+c` work; every other key is swallowed.
 - `s` (stash & continue) runs `git stash push --include-untracked`, then replays the interrupted chain (checkout / FF / checkout+FF). The stash is left in place — nothing pops it automatically. The success status appends `stashed on <branch>`, and a later checkout back onto that branch appends a `git stash pop` reminder (in-session memory keyed by branch name, not a `git stash list` query — a repeat reminder after a manual pop is the accepted cost). A stash-step failure kills the whole chain (`stash failed: …`) and leaves the tree untouched.
 - `a` / `esc` clear `pendingCheckout` and leave the working tree alone.
 
@@ -31,9 +31,9 @@ Single context-aware shortcut. Action depends on the cursor commit's chip state 
 | local branch chip 1 (`B`), HEAD elsewhere                          | —                                               | `checkout B`                                                                                                        |
 | local branch chips ≥ 2, HEAD on one of them                        | —                                               | no-op                                                                                                               |
 | local branch chips ≥ 2, HEAD elsewhere                             | —                                               | open `viewModeBranchPicker` → user picks → `checkout`                                                               |
-| no local chip, remote chip with upstream-tracking local `L` (≠ HEAD) | —                                             | `checkout L` then `git merge --ff-only <cursor>` (cross-branch), then **`git pull`**                                |
-| no local chip, remote chip with no upstream-tracking local         | —                                               | `git checkout <stripped name>` — dwim creates the local tracking branch, then **`git pull`**                        |
-| no local chip (mid-commit or remote-only chip)                     | attached, tip is ancestor of cursor (≠ cursor)  | `git merge --ff-only <cursor>` (no checkout step), then **`git pull`** iff the row carried a remote chip            |
+| no local chip, remote chip with upstream-tracking local `L` (≠ HEAD) | —                                             | `checkout L` then `git merge --ff-only <cursor>` (cross-branch)                                                     |
+| no local chip, remote chip with no upstream-tracking local         | —                                               | `git checkout <stripped name>` — dwim creates the local tracking branch                                            |
+| no local chip (mid-commit or remote-only chip)                     | attached, tip is ancestor of cursor (≠ cursor)  | `git merge --ff-only <cursor>` (no checkout step)                                                                   |
 | no local chip                                                      | detached, **or** not an ancestor of cursor      | `git checkout --detach <cursor>`                                                                                    |
 
 ### Notes
@@ -44,32 +44,10 @@ Fork's "Checkout & Fast-Forward" surfaces in three ways:
 - **Cross-branch**: HEAD on `feat/foo`, cursor row has only an `origin/develop` chip whose upstream-tracking local is `develop` → `checkout develop` then `git merge --ff-only <cursor>`. The local-tracker rule excludes HEAD itself so the same-branch case stays in the FF lane.
 - **New-local**: cursor row has only an `origin/develop` chip and no local tracks it → `git checkout develop` and let dwim create the local tracking branch at the remote's tip.
 
-### Pull-after chain (remote-chip rows)
-
-Every `space` that *started from a remote chip* (the three Fork-style rows
-above) chains a background `git pull` once the checkout/FF lands —
-"`space` on `origin/xx`" means "get me onto that branch synced with the
-network", not just synced with the last-fetch snapshot the graph shows.
-Mechanics:
-
-- The evaluator tags the dispatch (`graphActionMsg.pullAfter`); the model
-  arms `pullAfterAction` only for tagged Checkout / FF / CheckoutAndFF
-  dispatches, and clears it on every failure, so an aborted chain can
-  never pull later by surprise. The clean-tree detour keeps it armed
-  while the confirm modal decides: `s` (stash & continue) carries it
-  through the retry — the remote-chip `space` still ends synced with the
-  network — and `a` / `esc` clear it.
-- On success the status shows `<outcome> · pulling…` and reload + pull run
-  in one batch; the pull respects the same strategy resolution as `p`
-  (`[pull] strategy` → git config → `--ff-only`) and the `pullInFlight`
-  gate (an already-running pull wins; the flag is consumed, not deferred).
-- Plain FF on a chipless row and local-chip checkouts do **not** pull —
-  those are local-only motions.
-
 Other invariants:
 
 - Multiple locals tracking the same upstream: cross-branch picks the alphabetically first. Picker UX is reserved for ambiguous local-chip rows; there is no explicit-choice escape hatch on the refs pane.
-- `viewModeBranchPicker`: `↑` / `↓` move cursor, `enter` confirms, `esc` cancels. Every other key swallowed.
+- `viewModeBranchPicker`: `↑` / `↓` move cursor, `enter` confirms, `esc` / `q` cancel. Every other key swallowed.
 - Decision computed asynchronously via `evaluateGraphActionCmd` — model never blocks `Update` on git. `actionInFlight` swallows a second `space` while the evaluator is running. A cursor move between `space` dispatch and reply causes the reply to be dropped — re-press `space` on the new row.
 - Status surfaces are one-line: `fast-forward: main +3`, `fast-forward: develop +2 (after checkout)`, `fast-forward failed: <reason>`, `already on main`, `branch select cancelled`.
 

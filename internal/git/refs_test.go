@@ -43,7 +43,9 @@ func TestParseRefLineRemoteBranch(t *testing.T) {
 }
 
 func TestParseRefLineDropsSymbolicRemoteHead(t *testing.T) {
-	line := "refs/remotes/origin/HEAD\x00origin/HEAD\x00commit\x00abc123\x00\x00 \x00"
+	// %(refname:short) for refs/remotes/origin/HEAD is "origin" (no "/HEAD"),
+	// matching real `git for-each-ref` output.
+	line := "refs/remotes/origin/HEAD\x00origin\x00commit\x00abc123\x00\x00 \x00"
 	_, ok, err := parseRefLine(line)
 	if err != nil {
 		t.Fatalf("parseRefLine: %v", err)

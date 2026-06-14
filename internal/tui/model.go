@@ -110,7 +110,7 @@ const (
 	// Entered via `l` from viewModeNormal — same pattern as the branches /
 	// worktrees modals. enter opens the cursor PR in the review overlay
 	// (beginPRReviewFor), reaching PRs whose head branch isn't checked out
-	// (which the `O` cursor path can't).
+	// (which the cursor `enter` path can't).
 	viewModePRsModal
 	// viewModeRebaseConfirm gates the screen on the "rebase <head>
 	// onto <cursor>?" confirm dialog (centered overlay like the
@@ -209,13 +209,13 @@ type Model struct {
 	// fetched"; the footer stays blank until the first attempt.
 	lastFetchAt time.Time
 	// prs is the head-branch → open-PR map behind the chip PR badges and
-	// the `O` key. Loaded by `gh pr list` at startup, on `r`, and after
+	// the `enter` key. Loaded by `gh pr list` at startup, on `r`, and after
 	// every successful fetch — the same cadence the user already expects
 	// remote state to refresh on. Nil until the first load lands.
 	prs map[string]prInfo
 	// prList is the same open PRs in gh's newest-first order, backing the `l`
 	// PR list modal — the surface that reaches PRs whose head branch isn't
-	// checked out (which the `O` cursor path can't). Loaded alongside prs.
+	// checked out (which the cursor `enter` path can't). Loaded alongside prs.
 	prList []prInfo
 	// prsInFlight gates PR-list dispatches so an F-spam can't stack
 	// parallel `gh pr list` calls (and a slow older reply can't overwrite
@@ -223,12 +223,12 @@ type Model struct {
 	prsInFlight bool
 	// reviewPRNumber is the open PR whose diff currently fills the patch
 	// overlay (0 = the overlay shows a plain commit patch, not a PR). Set by
-	// `O` (beginPRReview), cleared on overlay close / merge. While non-zero
+	// `enter` (beginPRReview), cleared on overlay close / merge. While non-zero
 	// the overlay's bottom line is renderPRReviewHint and `a`/`m` arm the
 	// inline approve/merge confirms — see prreview.go.
 	reviewPRNumber int
 	// reviewReturnMode is where the PR-review overlay returns when it closes
-	// (esc) or merges. Zero value (viewModeNormal) = the graph; `O` from the
+	// (esc) or merges. Zero value (viewModeNormal) = the graph; `enter` from the
 	// worktree dashboard sets viewModeWorktreesModal so the review-and-compare
 	// loop stays on the dashboard. A general "return here" slot rather than a
 	// per-origin boolean, so future launchers set their own target.

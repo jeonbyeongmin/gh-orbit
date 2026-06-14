@@ -85,8 +85,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// PR review sub-states gate the overlay's scroll keymap. Only reached
-	// when `O` opened a PR (reviewPRNumber != 0); a plain commit patch
-	// (reviewPRNumber == 0) falls straight through to scroll/close below.
+	// when a PR review opened the overlay (reviewPRNumber != 0); a plain
+	// commit patch (reviewPRNumber == 0) falls straight through to scroll/close below.
 	if m.reviewPRNumber != 0 {
 		if m.prReviewInFlight {
 			// Mid approve/merge — swallow everything but quit so a second
@@ -631,8 +631,8 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.beginPush()
 	case "l":
 		// Open the PR list modal — every open PR, including ones whose head
-		// branch isn't checked out locally (which `O` can't reach). enter
-		// opens the cursor PR in the same review overlay `O` uses.
+		// branch isn't checked out locally (which the graph cursor can't
+		// reach). enter opens the cursor PR in the same review overlay.
 		return m.beginPRsModal()
 	case "Z":
 		// Zombie-branch cleanup is a global action now that the sidebar

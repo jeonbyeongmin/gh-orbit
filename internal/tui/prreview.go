@@ -1,4 +1,4 @@
-// PR review pane: `O` on a PR-badged graph row pulls that PR's diff into the
+// PR review pane: `enter` on a PR-badged graph row pulls that PR's diff into the
 // same full-screen patch overlay the commit diff uses (viewModeDiffWindow),
 // then approve / merge run inline without leaving the cockpit. The cockpit is
 // a gh extension, so the gh CLI is guaranteed present; non-GitHub remotes /
@@ -230,7 +230,7 @@ func (m Model) beginPRReview() (Model, tea.Cmd) {
 }
 
 // beginPRReviewFor opens the PR diff overlay for an explicit PR number — the
-// shared core behind both `O` (cursor row, via beginPRReview) and the `l` PR
+// shared core behind both `enter` (cursor row, via beginPRReview) and the `l` PR
 // list modal (prsModalEnter). Bumps diffReqID, arms the synthetic patch load,
 // sizes the viewport, dispatches the diff fetch.
 func (m Model) beginPRReviewFor(number int) (Model, tea.Cmd) {

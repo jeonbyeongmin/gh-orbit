@@ -37,7 +37,7 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `d` patch overlay + `[` / `]` | `git show -p <commit>`, navigated file by file |
 | `,` Local Changes + `space` | `git status` + `git diff` + `git add` / `git restore --staged` |
 | `[` / `]` + `space` (diff pane) | per-hunk `git apply --cached` (`--reverse` to unstage) |
-| `enter` (checkout / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
+| `space` (checkout / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
 | `w` worktrees (switch / add / remove) | `git worktree list` / `add` / `remove` |
 | `b` → `d` (delete branch) | `git branch -d <branch>` |
 | `Z` (zombie cleanup) | `git branch --merged` + a `git branch -d` loop |
@@ -45,9 +45,8 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `v` / `x` | `git revert <commit>` / `git reset --soft\|--mixed\|--hard <commit>` |
 | `n` | `git checkout -b <name> <commit>` |
 | `F` / `p` / `P` | `git fetch --all` / `git pull` / `git push` |
-| `o` (open PR on web) | `gh pr view --web <number>` |
-| `O` → `a` / `m` / `c` / `r` (review PR) | `gh pr diff <n>` · `gh pr review --approve\|--comment\|--request-changes` · `gh pr merge --squash\|--merge\|--rebase` |
-| `l` PR list modal | `gh pr list` (reused) → review a row via the `O` overlay |
+| `enter` → `a` / `m` / `c` / `r` (review PR) | `gh pr diff <n>` · `gh pr review --approve\|--comment\|--request-changes` · `gh pr merge --squash\|--merge\|--rebase` |
+| `l` PR list modal | `gh pr list` (reused) → review a row via the `enter` overlay |
 | PR badges on branch chips | `gh pr list` + `gh pr checks <number>` |
 | `y` | `git rev-parse <commit>` → clipboard |
 
@@ -68,10 +67,10 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 - `,` opens Local Changes — a working-tree diff (file tree + diff pane) split into Conflicts / Unstaged / Staged. `space` stages/unstages the focused file, `tab` cycles tree ↔ diff focus, `r` reloads.
 - Per-hunk staging: `tab` into the diff pane, `[` / `]` move between hunks (the selected `@@` header is highlighted), and `space` stages just that hunk (`git apply --cached`) — or unstages it when viewing a staged entry. Untracked / conflict files stage whole-file from the tree.
 
-### PR review (`O` / `l`)
+### PR review (`enter` / `l`)
 
-- `O` on a commit whose chip carries an open-PR badge pulls that PR's diff (`gh pr diff`) into the same full-screen patch overlay the commit diff uses — `[` / `]` file navigation and scrolling work identically.
-- `l` opens the PR list modal — every open PR, including ones whose head branch isn't checked out locally (which `O` can't reach). Rows read `#N <CI glyph> title · author`; `enter` opens the cursor row in the same review overlay, so `a` / `m` behave identically.
+- `enter` on a commit whose chip carries an open-PR badge pulls that PR's diff (`gh pr diff`) into the same full-screen patch overlay the commit diff uses — `[` / `]` file navigation and scrolling work identically.
+- `l` opens the PR list modal — every open PR, including ones whose head branch isn't checked out locally (which `enter` can't reach). Rows read `#N <CI glyph> title · author`; `enter` opens the cursor row in the same review overlay, so `a` / `m` behave identically.
 - `a` approves (`gh pr review --approve`); `m` merges, picking a strategy — `[s]` squash · `[m]` merge · `[r]` rebase (`gh pr merge`). Both ask in a centered confirm dialog composed over the diff, so it stays in view (dimmed) while you decide.
 - `c` comments, `r` requests changes — both open a multi-line body editor over the dimmed diff; `ctrl+s` submits (`gh pr review --comment` / `--request-changes`), `esc` cancels. A failed submit keeps the editor open with the error inline.
 - Approve keeps the overlay open (read on, or merge next); merge closes back to the graph and refreshes the PR badges. gh errors (approving your own PR, not mergeable, logged-out `gh`) surface on the hint line.
@@ -79,14 +78,14 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 ### Worktrees (`w`)
 
 - `w` opens a full-screen dashboard — one 3-line card per worktree (branch + PR/CI + dirty/time · path · last commit) — so every tree's state reads at once. `esc` returns to the graph.
-- `enter` switches the whole UI to another worktree in-process; `O` reviews that worktree's open PR in the review overlay (approve / merge / comment inline) and returns to the dashboard on close — review and land each agent's PR without leaving.
+- `space` switches the whole UI to another worktree in-process; `enter` reviews that worktree's open PR in the review overlay (approve / merge / comment inline) and returns to the dashboard on close — review and land each agent's PR without leaving.
 - `a` adds a worktree (sibling path auto-derived), `d` removes it (force-confirm for dirty/locked), `s` sorts by last-commit time.
 - Each card carries an open-PR `#N` + CI badge (when the branch has one), the `↑a↓b` ahead/behind vs upstream, a `●N` dirty marker (`N` changed files), and the worktree HEAD's last-commit subject and relative time.
 - `.git/HEAD` and `.git/index` are watched (fsnotify), so external commits/rebases refresh the list; `r` is always a manual fallback.
 
 ### Branches & checkout
 
-- `enter` on the graph picks checkout / fast-forward / detach from the cursor's chips and HEAD relationship. Ambiguous rows open a branch picker; remote-chip rows chain a `git pull`.
+- `space` on the graph picks checkout / fast-forward / detach from the cursor's chips and HEAD relationship. Ambiguous rows open a branch picker; remote-chip rows chain a `git pull`.
 - When checkout needs a clean tree, `s` stashes and continues, `a` / `esc` aborts.
 - `n` creates a branch at the cursor and switches to it.
 - `b` lists local branches; `d` deletes the cursor branch (HEAD protected).
@@ -102,7 +101,7 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 ### Network & other keys
 
 - `F` fetch (`git fetch --all`) · `p` pull (strategy-resolved) · `P` push (first push sets upstream; never forces).
-- `o` opens the focused commit's PR on GitHub · `y` copies the commit hash · `r` reloads refs + log.
+- `y` copies the commit hash · `r` reloads refs + log.
 - `?` toggles an inline help panel (Global / Graph / Local Changes columns).
 
 ## Key bindings
@@ -110,9 +109,9 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | Key | Where | Action |
 | --- | --- | --- |
 | `j` / `k` · `g` / `G` | graph | navigate · jump to top / bottom |
-| `enter` | graph | checkout / fast-forward / detach |
+| `space` | graph | checkout / fast-forward / detach |
 | `d` | graph | open the full-screen patch overlay |
-| `O` | graph | open the cursor PR's diff in the review overlay |
+| `enter` | graph | open the cursor PR's diff in the review overlay |
 | `l` | global | open the PR list modal (review any open PR) |
 | `[` / `]` | patch | jump to previous / next file |
 | `a` / `m` | PR review | approve / merge the open PR (`m` → s/m/r) |
@@ -124,7 +123,7 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `c` / `R` / `v` / `x` | graph | cherry-pick / rebase / revert / reset |
 | `n` | graph | create a branch at the cursor + switch |
 | `F` / `p` / `P` | global | fetch / pull / push |
-| `o` / `y` | graph | open PR on GitHub / copy hash |
+| `y` | graph | copy hash |
 | `Z` / `r` | global | zombie-branch cleanup / reload |
 | `?` | global | toggle help panel |
 | `ctrl+c` `ctrl+c` | global | quit (press twice) |

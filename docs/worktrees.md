@@ -2,7 +2,7 @@
 
 Multi-worktree is a first-class cockpit concept. The shape it's built
 for: work is in flight on worktree A; the user presses `tab` to reach the
-full-screen Worktree page, picks worktree B, hits `enter` to
+full-screen Worktree page, picks worktree B, hits `space` to
 switch — all in-process, no second terminal, no disturbance to whatever
 is running on the other tree.
 
@@ -84,8 +84,8 @@ when it was a centered overlay — it's a full-screen page now.)
 | Key         | Action                                                            |
 | ----------- | ----------------------------------------------------------------- |
 | `j` / `k`   | move cursor within the list (bounded; no wrap)                    |
-| `enter`     | switch to the worktree under the cursor (returns to the graph)    |
-| `O`         | review the cursor worktree's open PR (no-op + status if none)     |
+| `space`     | switch to the worktree under the cursor (returns to the graph)    |
+| `enter`     | review the cursor worktree's open PR (no-op + status if none)     |
 | `a`         | open the add-worktree input sub-modal                             |
 | `d`         | open the remove-worktree confirm sub-modal (refuses main + current entry) |
 | `s`         | toggle last-commit sort (main pinned, rest newest-first)          |
@@ -125,10 +125,10 @@ cycle never gets stuck. While the page owns the screen it owns every key
 (the global shortcuts route to its cursor); only the `tab` / `shift+tab`
 cycle, `?` (toggle the inline help panel), and `^C` quit pass through.
 
-### Review a PR from a card (`O`)
+### Review a PR from a card (`enter`)
 
-`O` opens the cursor worktree's open PR in the full PR-review overlay —
-the same `beginPRReviewFor(number)` path graph `O` and the `l` PR-list
+`enter` opens the cursor worktree's open PR in the full PR-review overlay —
+the same `beginPRReviewFor(number)` path graph `enter` and the `l` PR-list
 modal use (`worktreesModalReviewPR` looks the PR up by `wt.Branch` in
 `Model.prs`). So `a` approve / `m` merge / `c` comment / `r`
 request-changes all work identically. A card whose branch has no open PR
@@ -179,7 +179,7 @@ user never burns a switch on a target that's permanently unremovable.
 ## In-process switch
 
 `switchWorktreeMsg{path}` is the seam every "go to a different worktree"
-surface dispatches through (today: `enter` in the worktrees modal). On
+surface dispatches through (today: `space` in the worktrees modal). On
 switch:
 
 1. Validate path (directory containing `.git`); fail surfaces on status.

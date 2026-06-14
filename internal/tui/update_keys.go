@@ -390,9 +390,14 @@ func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.worktreesModalMoveCursor(1), nil
 	case "k", "up":
 		return m.worktreesModalMoveCursor(-1), nil
-	case "enter":
+	case " ", "space":
+		// `space` switches to the cursor worktree — the action `enter`
+		// carried before review PR took the enter slot, mirroring the graph
+		// page's space/enter split.
 		return m.worktreesModalEnter()
-	case "O":
+	case "enter":
+		// `enter` opens the cursor worktree's open PR in the inline review
+		// overlay (was `O`), keeping graph and worktree key models aligned.
 		return m.worktreesModalReviewPR()
 	case "a":
 		return m.beginWorktreeAdd()
@@ -624,14 +629,6 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "P":
 		// Push the current branch (first push auto-sets upstream).
 		return m.beginPush()
-	case "o":
-		// Open the cursor row's open PR on GitHub (chip badge rows only).
-		return m.beginBrowsePR()
-	case "O":
-		// Pull the cursor row's open PR diff into the patch overlay to
-		// review (approve / merge) inline. `o` leaves for the browser; `O`
-		// keeps the review in the cockpit. Chip badge rows only.
-		return m.beginPRReview()
 	case "l":
 		// Open the PR list modal — every open PR, including ones whose head
 		// branch isn't checked out locally (which `O` can't reach). enter
@@ -648,8 +645,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.zombieInFlight = true
 		m.setBusyStatus("scanning for zombie branches…")
 		return m, detectZombieBranchesCmd(m.workdir)
-	case "enter":
-		// Graph is the only focused pane. The sidebar was retired in
+	case " ", "space":
+		// `space` runs the checkout / ff / detach evaluator on the cursor
+		// row — the action `enter` carried before PR review took the enter
+		// slot. Graph is the only focused pane. The sidebar was retired in
 		// PR B2; the bottom tab pane was retired with the subtract-
 		// bottom-pane change. Worktree + Local Changes are now sibling
 		// pages reached via the tab/shift+tab cycle, not `w` / `,`.
@@ -658,7 +657,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// During a stale-while-revalidate window the visible rows are the
 		// old graph — evaluating a checkout/FF against them could act on
-		// state the in-flight reload is about to replace. Drop Enter for
+		// state the in-flight reload is about to replace. Drop the key for
 		// the sub-second window, like the old hard-reset (unloaded graph,
 		// Selected() !ok) used to.
 		if m.graph.pendingSwap {
@@ -677,9 +676,16 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		remotes := m.refs.RemoteRefs()
 		m.actionInFlight = true
 		m.setBusyStatus("→ resolving…")
-		log.Printf("graph enter: dispatch evaluator (cursor=%s, locals=%d, remotes=%d)",
+		log.Printf("graph space: dispatch evaluator (cursor=%s, locals=%d, remotes=%d)",
 			shortHash(c.Hash), len(locals), len(remotes))
 		return m, evaluateGraphActionCmd(m.workdir, c.Hash, locals, remotes)
+	case "enter":
+		// `enter` pulls the cursor row's open PR into the inline review
+		// overlay (the action `O` carried before). Graph stays the return
+		// mode so merging drops back here, not to the worktree page. Rows
+		// without a PR-bearing chip report on the status line.
+		m.reviewReturnMode = viewModeNormal
+		return m.beginPRReview()
 	case "right":
 		// `→` opens the patch overlay for the focused commit (`←` closes it
 		// from inside — see handleDiffWindowKey), mirroring the local-changes

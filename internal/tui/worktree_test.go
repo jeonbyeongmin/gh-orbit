@@ -303,14 +303,11 @@ func TestDirtyFanoutTimeoutMarksWorktreeMap(t *testing.T) {
 	}
 }
 
-// TestWorktreesModalEnterDispatchesSwitch verifies the post-PR-B2 entry:
-// `w` opens the worktrees modal, j moves to a non-current entry, enter
-// emits switchWorktreeMsg.
-// TestWorktreesModalEnterDispatchesSwitch — `w` opens the worktrees
-// modal with cursor on the current worktree; j moves the cursor
-// to the next row; enter dispatches switchWorktreeMsg for the cursor
-// entry; enter closes the modal and dispatches the switch.
-func TestWorktreesModalEnterDispatchesSwitch(t *testing.T) {
+// TestWorktreesModalSpaceDispatchesSwitch — tab opens the worktrees page with
+// cursor on the current worktree; j moves the cursor to the next row; space
+// dispatches switchWorktreeMsg for the cursor entry and closes the page.
+// (`enter` now opens PR review; switch moved to `space`.)
+func TestWorktreesModalSpaceDispatchesSwitch(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -327,10 +324,10 @@ func TestWorktreesModalEnterDispatchesSwitch(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m = updated.(Model)
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	m = updated.(Model)
 	if cmd == nil {
-		t.Fatal("enter should dispatch switchWorktreeMsg")
+		t.Fatal("space should dispatch switchWorktreeMsg")
 	}
 	msg := cmd()
 	sw, ok := msg.(switchWorktreeMsg)
@@ -341,7 +338,7 @@ func TestWorktreesModalEnterDispatchesSwitch(t *testing.T) {
 		t.Errorf("path = %q, want /r/feat", sw.path)
 	}
 	if m.mode != viewModeNormal {
-		t.Errorf("enter should close the modal before dispatching, mode = %v", m.mode)
+		t.Errorf("space should close the modal before dispatching, mode = %v", m.mode)
 	}
 }
 

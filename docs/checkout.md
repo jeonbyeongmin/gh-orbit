@@ -1,10 +1,11 @@
 # checkout
 
-Single entry point: graph `enter`. The refs-pane Enter handler was retired
-together with the refs LIST in the subtract-sidebar sequence — every
-checkout scenario (local branch, remote-ahead-of-local, detached commit,
-multi-chip ambiguous row) is covered by the graph Enter decision tree
-below. Pull is a separate global action (`p`).
+Single entry point: graph `space`. The refs-pane Enter handler was retired
+together with the refs LIST in the subtract-sidebar sequence, and `space`
+took the slot from `enter` (now PR review) — every checkout scenario (local
+branch, remote-ahead-of-local, detached commit, multi-chip ambiguous row)
+is covered by the graph `space` decision tree below. Pull is a separate
+global action (`p`).
 
 ## Dirty-tree confirm flow
 
@@ -18,9 +19,9 @@ subtract-stash (PR #42): no stash refs section, chips, drop modal, or
 auto-pop chain. Here the stash is an exit ramp for the reviewer's own
 WIP when another branch needs attention now — not a managed object.
 
-The modal is reused for the same-branch FF (`withFF`) and cross-branch FF (`withCheckoutFF`) paths — the hint text reflects which chain the decision applies to. graph Enter is the only entry, so the modal lookups never need to disambiguate refs-vs-graph callsites.
+The modal is reused for the same-branch FF (`withFF`) and cross-branch FF (`withCheckoutFF`) paths — the hint text reflects which chain the decision applies to. graph `space` is the only entry, so the modal lookups never need to disambiguate refs-vs-graph callsites.
 
-## graph `enter`
+## graph `space`
 
 Single context-aware shortcut. Action depends on the cursor commit's chip state and HEAD's relationship to the cursor:
 
@@ -45,9 +46,9 @@ Fork's "Checkout & Fast-Forward" surfaces in three ways:
 
 ### Pull-after chain (remote-chip rows)
 
-Every Enter that *started from a remote chip* (the three Fork-style rows
+Every `space` that *started from a remote chip* (the three Fork-style rows
 above) chains a background `git pull` once the checkout/FF lands —
-"enter on `origin/xx`" means "get me onto that branch synced with the
+"`space` on `origin/xx`" means "get me onto that branch synced with the
 network", not just synced with the last-fetch snapshot the graph shows.
 Mechanics:
 
@@ -56,7 +57,7 @@ Mechanics:
   dispatches, and clears it on every failure, so an aborted chain can
   never pull later by surprise. The clean-tree detour keeps it armed
   while the confirm modal decides: `s` (stash & continue) carries it
-  through the retry — the remote-chip Enter still ends synced with the
+  through the retry — the remote-chip `space` still ends synced with the
   network — and `a` / `esc` clear it.
 - On success the status shows `<outcome> · pulling…` and reload + pull run
   in one batch; the pull respects the same strategy resolution as `p`
@@ -69,16 +70,16 @@ Other invariants:
 
 - Multiple locals tracking the same upstream: cross-branch picks the alphabetically first. Picker UX is reserved for ambiguous local-chip rows; there is no explicit-choice escape hatch on the refs pane.
 - `viewModeBranchPicker`: `j` / `k` move cursor, `enter` confirms, `esc` cancels. Every other key swallowed.
-- Decision computed asynchronously via `evaluateGraphActionCmd` — model never blocks `Update` on git. `actionInFlight` swallows a second Enter while the evaluator is running. A cursor move between Enter dispatch and reply causes the reply to be dropped — re-press Enter on the new row.
+- Decision computed asynchronously via `evaluateGraphActionCmd` — model never blocks `Update` on git. `actionInFlight` swallows a second `space` while the evaluator is running. A cursor move between `space` dispatch and reply causes the reply to be dropped — re-press `space` on the new row.
 - Status surfaces are one-line: `fast-forward: main +3`, `fast-forward: develop +2 (after checkout)`, `fast-forward failed: <reason>`, `already on main`, `branch select cancelled`.
 
-The old `C` (detach) shortcut is subsumed — graph `enter` produces it as the detached-HEAD outcome.
+The old `C` (detach) shortcut is subsumed — graph `space` produces it as the detached-HEAD outcome.
 
 ## Rebase (`R`)
 
 `R` rebases the **current branch onto the cursor commit** — the everyday
 "my feature branch is behind develop, replay it" move, driven from the
-same graph cursor as `enter`.
+same graph cursor as `space`.
 
 - **Confirm-first**: `R` arms a centered confirm dialog
   (`rebase <head> onto <label>? [y] rebase · [esc] cancel`) — same
@@ -139,13 +140,9 @@ collision, dirty tree) surface as an inline error and keep the modal
 open for correction; success closes the modal, reloads, and HEAD-jumps
 the graph cursor onto the new branch tip.
 
-## Push (`P`) / open PR on GitHub (`o`)
+## Push (`P`)
 
 `P` completes the network triad (`F` fetch · `p` pull · `P` push):
 plain `git push` for the current branch, with a one-shot
 `--set-upstream origin <branch>` retry when the branch has no upstream
-yet. Never forces; detached HEAD is rejected up front. `o` runs
-`gh pr view --web <number>` for the open PR named by the cursor row's
-chip badge — rows without a PR-bearing chip report "no open PR on this
-commit" instead; gh's own error (non-GitHub remote, auth) lands on the
-status line.
+yet. Never forces; detached HEAD is rejected up front.

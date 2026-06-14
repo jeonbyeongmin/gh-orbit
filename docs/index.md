@@ -14,7 +14,7 @@ detail.
   everything-shells-out-to-one-`git` boundary.
 - [config.md](config.md) — XDG paths for log + prefs,
   `[pull] strategy` resolution chain.
-- [checkout.md](checkout.md) — refs `enter` / `p`, graph `enter`,
+- [checkout.md](checkout.md) — refs `enter` / `p`, graph `space`,
   dirty-tree confirm flow, fast-forward variants. The "land on the
   branch you need fast" surface.
 - [branches.md](branches.md) — `n` / `d` / `m` modals for create /
@@ -23,7 +23,7 @@ detail.
 - [worktrees.md](worktrees.md) — the `tab`-cycle Worktree page for
   list / switch / add / remove, in-process switch + dirty fan-out.
   The "work lives in worktree A, you inspect worktree B" surface.
-- [pr-review.md](pr-review.md) — `O` pulls a PR diff into the patch
+- [pr-review.md](pr-review.md) — `enter` pulls a PR diff into the patch
   overlay; `a` / `m` approve / merge inline. The "review and land a PR
   without leaving the graph" surface.
 

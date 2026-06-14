@@ -612,9 +612,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		branchCreateSucceededMsg,
 		branchCreateFailedMsg,
 		pushSucceededMsg,
-		pushFailedMsg,
-		browseFailedMsg,
-		prBrowseOpenedMsg:
+		pushFailedMsg:
 		return m.updateCheckoutMsg(msg)
 
 	case prApproveDoneMsg,

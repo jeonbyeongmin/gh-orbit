@@ -1,6 +1,6 @@
 # pr-review
 
-`O` pulls the cursor row's open PR into the same full-screen patch
+`enter` pulls the cursor row's open PR into the same full-screen patch
 overlay the commit diff (`d`) uses, then approve / merge run inline
 without leaving the cockpit. The row's `#N` chip badge is the
 affordance, resolved by the same `prForCursorRow` the badge renderer
@@ -57,8 +57,7 @@ shows on the hint line behind it.
 | `esc` / `q` | browse | close overlay → graph |
 | `ctrl+c` | in-flight | only key honored while a gh call runs |
 
-`O` opens the cursor PR; `l` opens the list. Lowercase `o` still opens
-the PR on the web (`gh pr view --web`). `--delete-branch` is
+`enter` opens the cursor PR; `l` opens the list. `--delete-branch` is
 deliberately never passed to `gh pr merge`.
 
 ## Body editor (`c` / `r`)

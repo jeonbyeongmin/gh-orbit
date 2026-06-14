@@ -183,92 +183,42 @@ func TestSidebarWorktreesLoadedDropsStaleReqID(t *testing.T) {
 	}
 }
 
-func TestWorktreesModalReviewPROpensReview(t *testing.T) {
+func TestWorktreesEnterOpensPRWeb(t *testing.T) {
+	prev := prViewWebExec
+	t.Cleanup(func() { prViewWebExec = prev })
+	var gotNumber int
+	prViewWebExec = func(_ context.Context, _ string, number int) error {
+		gotNumber = number
+		return nil
+	}
+
 	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/x"}}, "/wt/a")
+	m.mode = viewModeWorktreesModal
 	m.prs = map[string]prInfo{"feat/x": {Number: 42, HeadRef: "feat/x"}}
 	m.worktreesModal.cursor = 0
-	got, cmd := m.worktreesModalReviewPR()
-	if got.mode != viewModeDiffWindow {
-		t.Errorf("O should open the review overlay, mode=%v", got.mode)
-	}
-	if got.reviewPRNumber != 42 {
-		t.Errorf("reviewPRNumber = %d, want 42", got.reviewPRNumber)
-	}
-	if got.reviewReturnMode != viewModeWorktreesModal {
-		t.Error("review should arm reviewReturnMode = dashboard so close returns there")
-	}
-	if got.currentPageIndex() != 1 {
-		t.Errorf("worktree-launched PR review should keep the Worktree tab active, got page %d", got.currentPageIndex())
+	got, cmd := m.worktreesModalOpenPRWeb()
+	// Opening the web is fire-and-forget — the worktree page stays put.
+	if got.mode != viewModeWorktreesModal {
+		t.Errorf("opening the web should keep the worktree page, mode=%v", got.mode)
 	}
 	if cmd == nil {
-		t.Error("opening the review should dispatch the diff load")
+		t.Fatal("opening the PR should dispatch openPRWebCmd")
+	}
+	cmd()
+	if gotNumber != 42 {
+		t.Errorf("opened #%d, want 42", gotNumber)
 	}
 }
 
-func TestWorktreesModalReviewPRNoPRReports(t *testing.T) {
+func TestWorktreesEnterNoPRReports(t *testing.T) {
 	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/x"}}, "/wt/a")
 	m.worktreesModal.cursor = 0 // no entry in m.prs
-	got, cmd := m.worktreesModalReviewPR()
-	if got.mode == viewModeDiffWindow {
-		t.Error("a card with no open PR must not open the review overlay")
-	}
+	got, cmd := m.worktreesModalOpenPRWeb()
 	if cmd != nil {
-		t.Error("no-PR review should not dispatch a command")
+		t.Error("no-PR worktree should not dispatch a command")
 	}
 	if !strings.Contains(got.status, "no open PR") {
-		t.Errorf("no-PR review should report on the status line, got %q", got.status)
-	}
-}
-
-func TestWorktreesModalReviewPRClearsStaleStatus(t *testing.T) {
-	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/x"}}, "/wt/a")
-	m.prs = map[string]prInfo{"feat/x": {Number: 42, HeadRef: "feat/x"}}
-	m.worktreesModal.cursor = 0
-	m.status = "remove: cancelled (dirty …)" // stale from a prior dashboard action
-	got, _ := m.worktreesModalReviewPR()
-	if got.status != "" {
-		t.Errorf("opening the review should drop stale dashboard status, got %q", got.status)
-	}
-}
-
-func TestReviewReturnModeDefaultsToGraph(t *testing.T) {
-	// Zero value of viewMode is viewModeNormal, so a review opened from the
-	// graph (which never sets reviewReturnMode) returns to the graph.
-	if m := New(); m.reviewReturnMode != viewModeNormal {
-		t.Errorf("fresh model reviewReturnMode = %v, want viewModeNormal (graph)", m.reviewReturnMode)
-	}
-}
-
-func TestReviewLeftReturnsToDashboard(t *testing.T) {
-	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/x"}}, "/wt/a")
-	m.prs = map[string]prInfo{"feat/x": {Number: 42, HeadRef: "feat/x"}}
-	m.worktreesModal.cursor = 0
-	opened, _ := m.worktreesModalReviewPR()
-	updated, _ := opened.handleDiffWindowKey(tea.KeyMsg{Type: tea.KeyLeft})
-	got := updated.(Model)
-	if got.mode != viewModeWorktreesModal {
-		t.Errorf("← from a dashboard-opened review should return to the dashboard, mode=%v", got.mode)
-	}
-	if got.reviewReturnMode != viewModeNormal {
-		t.Error("reviewReturnMode should reset to graph on close")
-	}
-	if got.reviewPRNumber != 0 {
-		t.Error("reviewPRNumber should reset on close")
-	}
-}
-
-func TestReviewMergeReturnsToDashboard(t *testing.T) {
-	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/x"}}, "/wt/a")
-	m.prs = map[string]prInfo{"feat/x": {Number: 42, HeadRef: "feat/x"}}
-	m.worktreesModal.cursor = 0
-	opened, _ := m.worktreesModalReviewPR()
-	updated, _ := opened.Update(prMergeDoneMsg{number: 42, strategy: "squash"})
-	got := updated.(Model)
-	if got.mode != viewModeWorktreesModal {
-		t.Errorf("merge from a dashboard-opened review should return to the dashboard, mode=%v", got.mode)
-	}
-	if got.reviewReturnMode != viewModeNormal {
-		t.Error("reviewReturnMode should reset to graph after merge")
+		t.Errorf("no-PR worktree should report on the status line, got %q", got.status)
 	}
 }
 
@@ -309,7 +259,7 @@ func TestDirtyFanoutTimeoutMarksWorktreeMap(t *testing.T) {
 // TestWorktreesModalSpaceDispatchesSwitch — tab opens the worktrees page with
 // cursor on the current worktree; j moves the cursor to the next row; space
 // dispatches switchWorktreeMsg for the cursor entry and closes the page.
-// (`enter` now opens PR review; switch moved to `space`.)
+// (`enter` opens the PR on the web; switch moved to `space`.)
 func TestWorktreesModalSpaceDispatchesSwitch(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -506,8 +456,13 @@ func TestWorktreesTabCycle(t *testing.T) {
 	}
 
 	m, _ = pressTab(t, m)
+	if m.mode != viewModePRsPage {
+		t.Fatalf("tab from local changes should advance to pull requests, mode = %v", m.mode)
+	}
+
+	m, _ = pressTab(t, m)
 	if m.mode != viewModeNormal {
-		t.Errorf("tab from local changes should return to the graph, mode = %v", m.mode)
+		t.Errorf("tab from pull requests should wrap to the graph, mode = %v", m.mode)
 	}
 }
 

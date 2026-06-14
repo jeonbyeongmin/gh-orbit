@@ -574,12 +574,10 @@ func (m Model) worktreesModalRemove() (Model, tea.Cmd) {
 	return m, nil
 }
 
-// worktreesModalReviewPR opens the cursor worktree's open PR in the review
-// overlay — the same beginPRReviewFor path graph `enter` and the `l` modal use.
-// reviewFromWorktrees is armed so the overlay returns to the dashboard on
-// close / merge (the review-and-compare loop). A worktree whose branch has no
-// open PR reports on the status line instead of opening an empty overlay.
-func (m Model) worktreesModalReviewPR() (Model, tea.Cmd) {
+// worktreesModalOpenPRWeb opens the cursor worktree's open PR on GitHub in the
+// browser — the same `gh pr view --web` jump graph `enter` and the PR page use.
+// A worktree whose branch has no open PR reports on the status line.
+func (m Model) worktreesModalOpenPRWeb() (Model, tea.Cmd) {
 	wt, ok := m.cursorWorktree()
 	if !ok {
 		return m, nil
@@ -590,7 +588,5 @@ func (m Model) worktreesModalReviewPR() (Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 	}
-	m.status = "" // opening the overlay — drop any stale dashboard status
-	m.reviewReturnMode = viewModeWorktreesModal
-	return m.beginPRReviewFor(pr.Number)
+	return m.openPRWeb(pr.Number)
 }

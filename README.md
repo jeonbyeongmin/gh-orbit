@@ -45,8 +45,9 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `v` / `x` | `git revert <commit>` / `git reset --soft\|--mixed\|--hard <commit>` |
 | `n` | `git checkout -b <name> <commit>` |
 | `F` / `p` / `P` | `git fetch --all` / `git pull` / `git push` |
-| `enter` → `a` / `m` / `c` / `r` (review PR) | `gh pr diff <n>` · `gh pr review --approve\|--comment\|--request-changes` · `gh pr merge --squash\|--merge\|--rebase` |
-| `l` PR list modal | `gh pr list` (reused) → review a row via the `enter` overlay |
+| `enter` (open PR on the web) | `gh pr view <n> --web` |
+| `m` (merge PR) | `gh pr merge --squash\|--merge\|--rebase` |
+| Pull Requests tab | `gh pr list` (reused) → `enter` opens a row on the web, `m` merges it |
 | PR badges on branch chips | `gh pr list` + `gh pr checks <number>` |
 | `y` | `git rev-parse <commit>` → clipboard |
 
@@ -67,18 +68,18 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 - `,` opens Local Changes — a working-tree diff (file tree + diff pane) split into Conflicts / Unstaged / Staged. `space` stages/unstages the focused file, `tab` cycles tree ↔ diff focus, `r` reloads.
 - Per-hunk staging: `tab` into the diff pane, `[` / `]` move between hunks (the selected `@@` header is highlighted), and `space` stages just that hunk (`git apply --cached`) — or unstages it when viewing a staged entry. Untracked / conflict files stage whole-file from the tree.
 
-### PR review (`enter` / `l`)
+### Pull requests (`enter` / `m` / the Pull Requests tab)
 
-- `enter` on a commit whose chip carries an open-PR badge pulls that PR's diff (`gh pr diff`) into the same full-screen patch overlay the commit diff uses — `[` / `]` file navigation and scrolling work identically.
-- `l` opens the PR list modal — every open PR, including ones whose head branch isn't checked out locally (which `enter` can't reach). Rows read `#N <CI glyph> title · author`; `enter` opens the cursor row in the same review overlay, so `a` / `m` behave identically.
-- `a` approves (`gh pr review --approve`); `m` merges, picking a strategy — `[s]` squash · `[m]` merge · `[r]` rebase (`gh pr merge`). Both ask in a centered confirm dialog composed over the diff, so it stays in view (dimmed) while you decide.
-- `c` comments, `r` requests changes — both open a multi-line body editor over the dimmed diff; `ctrl+s` submits (`gh pr review --comment` / `--request-changes`), `esc` cancels. A failed submit keeps the editor open with the error inline.
-- Approve keeps the overlay open (read on, or merge next); merge closes back to the graph and refreshes the PR badges. gh errors (approving your own PR, not mergeable, logged-out `gh`) surface on the hint line.
+Reviewing happens on GitHub; the cockpit jumps you there and lands the PR.
+
+- `enter` on a commit whose chip carries an open-PR badge opens that PR on GitHub in your browser (`gh pr view --web`). The same web jump is wired to `enter` on the Worktree and Pull Requests pages.
+- `m` merges the cursor row's open PR via a centered confirm dialog — `[s]` squash · `[m]` merge · `[r]` rebase (`gh pr merge`). Merge closes the dialog and refreshes the PR badges; gh errors (not mergeable, logged-out `gh`) surface on the status line.
+- The **Pull Requests tab** (last in the `tab` / `shift+tab` cycle) lists every open PR — including ones whose head branch isn't checked out locally (which the graph cursor can't reach). Rows read `#N <CI glyph> title · author`; `enter` opens the cursor row on the web, `m` merges it, `r` refreshes the list.
 
 ### Worktrees (`w`)
 
 - `w` opens a full-screen dashboard — one 3-line card per worktree (branch + PR/CI + dirty/time · path · last commit) — so every tree's state reads at once. `esc` returns to the graph.
-- `space` switches the whole UI to another worktree in-process; `enter` reviews that worktree's open PR in the review overlay (approve / merge / comment inline) and returns to the dashboard on close — review and land each agent's PR without leaving.
+- `space` switches the whole UI to another worktree in-process; `enter` opens that worktree's open PR on GitHub in the browser — review each agent's PR on the web, land it with `m` from the graph / Pull Requests tab.
 - `a` adds a worktree (sibling path auto-derived), `d` removes it (force-confirm for dirty/locked), `s` sorts by last-commit time.
 - Each card carries an open-PR `#N` + CI badge (when the branch has one), the `↑a↓b` ahead/behind vs upstream, a `●N` dirty marker (`N` changed files), and the worktree HEAD's last-commit subject and relative time.
 - `.git/HEAD` and `.git/index` are watched (fsnotify), so external commits/rebases refresh the list; `r` is always a manual fallback.
@@ -111,11 +112,10 @@ Each action runs your own `git` / `gh` — gh-orbit is the interface, not a reim
 | `j` / `k` · `g` / `G` | graph | navigate · jump to top / bottom |
 | `space` | graph | checkout / fast-forward / detach |
 | `d` | graph | open the full-screen patch overlay |
-| `enter` | graph | open the cursor PR's diff in the review overlay |
-| `l` | global | open the PR list modal (review any open PR) |
+| `enter` | graph | open the cursor row's open PR on the web |
+| `m` | graph | merge the cursor row's open PR (`s`/`m`/`r` strategy) |
 | `[` / `]` | patch | jump to previous / next file |
-| `a` / `m` | PR review | approve / merge the open PR (`m` → s/m/r) |
-| `c` / `r` | PR review | comment / request changes (body editor → `ctrl+s`) |
+| `enter` / `m` | pull requests | open on the web / merge the cursor PR |
 | `,` | global | Local Changes view |
 | `space` | local changes | stage / unstage the focused file (or hunk, in the diff pane) |
 | `[` / `]` | local changes diff | previous / next hunk |

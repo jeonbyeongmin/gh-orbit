@@ -632,14 +632,15 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prs = msg.prs
 		m.prList = msg.list
 		m.graph.SetPRs(msg.prs)
-		// A refresh can land while the `l` modal is open (a fetch/pull was
-		// in flight when it opened) and return a shorter list — clamp the
-		// cursor so it stays on a visible row instead of vanishing past the
-		// end with enter dead-no-opping.
-		if m.mode == viewModePRsModal && m.prsModal.cursor >= len(m.prList) {
-			m.prsModal.cursor = len(m.prList) - 1
-			if m.prsModal.cursor < 0 {
-				m.prsModal.cursor = 0
+		// A refresh can land while the PR surface is up (a fetch/pull was in
+		// flight when it opened) and return a shorter list — clamp the cursor
+		// so it stays on a visible row instead of vanishing past the end with
+		// enter dead-no-opping. isPRsSurface covers the merge confirm composed
+		// over the page too: closeMergeConfirm returns there without re-clamping.
+		if m.isPRsSurface() && m.prsPage.cursor >= len(m.prList) {
+			m.prsPage.cursor = len(m.prList) - 1
+			if m.prsPage.cursor < 0 {
+				m.prsPage.cursor = 0
 			}
 		}
 		return m, nil

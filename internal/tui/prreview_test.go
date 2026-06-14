@@ -9,166 +9,86 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestPRDiffID(t *testing.T) {
-	if got := prDiffID(95); got != "pr/95" {
-		t.Errorf("prDiffID(95) = %q, want pr/95", got)
-	}
-}
-
-// prReviewOpen presses `enter` on browsePRFixture's PR-bearing cursor row so
-// the overlay is in PR-review mode (reviewPRNumber=42, prAction=none) for the
-// sub-state tests. The diff load is stubbed but never executed here.
-func prReviewOpen(t *testing.T) Model {
-	t.Helper()
-	prev := prDiffExec
-	t.Cleanup(func() { prDiffExec = prev })
-	prDiffExec = func(_ context.Context, _ string, _ int) (string, error) { return "", nil }
-	m := browsePRFixture(t)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	return updated.(Model)
-}
-
-// enter on a PR-badged cursor row opens the patch overlay in PR-review mode and
-// dispatches the PR diff under the synthetic pr/<n> id.
-func TestPRReviewOpenFromCursorRow(t *testing.T) {
-	prev := prDiffExec
-	t.Cleanup(func() { prDiffExec = prev })
+// enter on a PR-badged cursor row opens the PR on the web (`gh pr view --web`)
+// for the cursor PR — reviewing happens on GitHub, not in an overlay.
+func TestPREnterOpensWebFromCursorRow(t *testing.T) {
+	prev := prViewWebExec
+	t.Cleanup(func() { prViewWebExec = prev })
 	var gotNumber int
-	prDiffExec = func(_ context.Context, _ string, number int) (string, error) {
+	prViewWebExec = func(_ context.Context, _ string, number int) error {
 		gotNumber = number
-		return "diff --git a/x b/x\n", nil
+		return nil
 	}
 
 	m := browsePRFixture(t)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
-	if m.mode != viewModeDiffWindow {
-		t.Fatalf("mode = %v, want viewModeDiffWindow", m.mode)
-	}
-	if m.reviewPRNumber != 42 {
-		t.Errorf("reviewPRNumber = %d, want 42", m.reviewPRNumber)
-	}
-	if m.prAction != prActionNone {
-		t.Errorf("prAction = %v, want none on open", m.prAction)
+	// enter must not enter any overlay/page — it stays on the graph.
+	if m.mode != viewModeNormal {
+		t.Fatalf("mode = %v, want viewModeNormal (enter just opens the web)", m.mode)
 	}
 	if cmd == nil {
-		t.Fatal("enter should dispatch loadPRDiffCmd")
+		t.Fatal("enter should dispatch openPRWebCmd")
 	}
 	msg := cmd()
 	if gotNumber != 42 {
-		t.Errorf("loadPRDiff number = %d, want 42", gotNumber)
+		t.Errorf("gh pr view number = %d, want 42", gotNumber)
 	}
-	loaded, ok := msg.(diffPatchLoadedMsg)
-	if !ok {
-		t.Fatalf("want diffPatchLoadedMsg, got %T", msg)
-	}
-	if loaded.hash != "pr/42" {
-		t.Errorf("diff id = %q, want pr/42", loaded.hash)
+	if _, ok := msg.(prWebOpenedMsg); !ok {
+		t.Fatalf("want prWebOpenedMsg, got %T", msg)
 	}
 }
 
-// A PR review launched from the graph (`enter`) must keep the Graph tab
-// active — the breadcrumb reads reviewReturnMode, not just reviewPRNumber.
-// Regression: currentPageIndex used to return Worktree for any PR overlay,
-// so graph `enter` lit the wrong tab.
-func TestPRReviewFromGraphKeepsGraphTab(t *testing.T) {
-	prev := prDiffExec
-	t.Cleanup(func() { prDiffExec = prev })
-	prDiffExec = func(_ context.Context, _ string, _ int) (string, error) { return "", nil }
-
-	m := browsePRFixture(t)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
-	if m.mode != viewModeDiffWindow || m.reviewPRNumber == 0 {
-		t.Fatalf("enter should open the PR review overlay; mode=%v pr=%d", m.mode, m.reviewPRNumber)
-	}
-	if got := m.currentPageIndex(); got != 0 {
-		t.Errorf("graph-launched PR review should keep the Graph tab active, got page %d", got)
-	}
-}
-
-// enter without a PR-bearing chip reports instead of opening an empty overlay.
-func TestPRReviewOpenWithoutPRReports(t *testing.T) {
+// enter without a PR-bearing chip reports instead of dispatching.
+func TestPREnterWithoutPRReports(t *testing.T) {
 	m := rebaseFixture(t)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if cmd != nil {
 		t.Fatal("enter without a PR-bearing chip should not dispatch")
 	}
-	if m.mode == viewModeDiffWindow {
-		t.Error("mode should stay out of the overlay when no PR is on the cursor row")
+	if !strings.Contains(m.status, "no open PR") {
+		t.Errorf("status = %q, want 'no open PR'", m.status)
 	}
-	if m.reviewPRNumber != 0 {
-		t.Errorf("reviewPRNumber = %d, want 0", m.reviewPRNumber)
+}
+
+// `m` on a PR-badged cursor row arms the standalone merge confirm dialog for
+// the cursor PR, recording the graph as the page to return to.
+func TestPRMergeArmsConfirmFromCursorRow(t *testing.T) {
+	m := browsePRFixture(t)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = updated.(Model)
+	if m.mode != viewModeMergeConfirm {
+		t.Fatalf("m should arm the merge confirm; mode=%v", m.mode)
+	}
+	if m.mergeConfirm.number != 42 {
+		t.Errorf("mergeConfirm.number = %d, want 42", m.mergeConfirm.number)
+	}
+	if m.mergeReturnMode != viewModeNormal {
+		t.Errorf("graph-launched merge should return to the graph, got %v", m.mergeReturnMode)
+	}
+	if m.currentPageIndex() != 0 {
+		t.Errorf("graph-launched merge keeps the Graph tab, got page %d", m.currentPageIndex())
+	}
+	if cmd != nil {
+		t.Error("arming the confirm should not dispatch yet")
+	}
+}
+
+// `m` without a PR-bearing chip reports instead of arming an empty dialog.
+func TestPRMergeWithoutPRReports(t *testing.T) {
+	m := rebaseFixture(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = updated.(Model)
+	if m.mode == viewModeMergeConfirm {
+		t.Error("m with no PR on the cursor row must not arm the merge confirm")
 	}
 	if !strings.Contains(m.status, "no open PR") {
 		t.Errorf("status = %q, want 'no open PR'", m.status)
 	}
 }
 
-func TestPRReviewArmAndCancelApprove(t *testing.T) {
-	m := prReviewOpen(t)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	m = updated.(Model)
-	if m.prAction != prActionApprove {
-		t.Fatalf("prAction = %v, want approve after 'a'", m.prAction)
-	}
-	// esc cancels back to browse; the overlay stays open.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = updated.(Model)
-	if m.prAction != prActionNone {
-		t.Errorf("prAction = %v, want none after esc", m.prAction)
-	}
-	if m.mode != viewModeDiffWindow {
-		t.Errorf("esc from armed approve must not close the overlay; mode=%v", m.mode)
-	}
-}
-
-func TestPRReviewArmMerge(t *testing.T) {
-	m := prReviewOpen(t)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
-	m = updated.(Model)
-	if m.prAction != prActionMerge {
-		t.Fatalf("prAction = %v, want merge after 'm'", m.prAction)
-	}
-}
-
-func TestPRReviewBrowseLeftCloses(t *testing.T) {
-	m := prReviewOpen(t)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("← from browse should close the diff; mode=%v", m.mode)
-	}
-	if m.reviewPRNumber != 0 {
-		t.Errorf("close must clear reviewPRNumber, got %d", m.reviewPRNumber)
-	}
-}
-
-func TestPRReviewApproveDispatch(t *testing.T) {
-	prev := prReviewExec
-	t.Cleanup(func() { prReviewExec = prev })
-	var gotNumber int
-	prReviewExec = func(_ context.Context, _ string, number int) error {
-		gotNumber = number
-		return nil
-	}
-	m := prReviewOpen(t)
-	m.prAction = prActionApprove
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	m = updated.(Model)
-	if !m.prReviewInFlight {
-		t.Error("y should arm prReviewInFlight")
-	}
-	if cmd == nil {
-		t.Fatal("y should dispatch approvePRCmd")
-	}
-	if _, ok := cmd().(prApproveDoneMsg); !ok || gotNumber != 42 {
-		t.Errorf("approve cmd: number=%d, want prApproveDoneMsg for 42", gotNumber)
-	}
-}
-
-func TestPRReviewMergeStrategies(t *testing.T) {
+func TestMergeConfirmStrategies(t *testing.T) {
 	orig := prMergeExec
 	t.Cleanup(func() { prMergeExec = orig })
 	cases := []struct {
@@ -186,12 +106,12 @@ func TestPRReviewMergeStrategies(t *testing.T) {
 			gotNumber, gotStrategy = number, strategy
 			return nil
 		}
-		m := prReviewOpen(t)
-		m.prAction = prActionMerge
+		m := browsePRFixture(t)
+		m, _ = m.beginMergeFor(42)
 		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{c.key}})
 		m = updated.(Model)
-		if !m.prReviewInFlight {
-			t.Errorf("%c: should arm prReviewInFlight", c.key)
+		if !m.mergeInFlight {
+			t.Errorf("%c: should arm mergeInFlight", c.key)
 		}
 		if cmd == nil {
 			t.Fatalf("%c: should dispatch mergePRCmd", c.key)
@@ -203,156 +123,127 @@ func TestPRReviewMergeStrategies(t *testing.T) {
 	}
 }
 
-func TestPRReviewInFlightSwallowsKeys(t *testing.T) {
-	m := prReviewOpen(t)
-	m.prReviewInFlight = true
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+// esc cancels the merge confirm back to the launching page.
+func TestMergeConfirmEscCancels(t *testing.T) {
+	m := browsePRFixture(t)
+	m, _ = m.beginMergeFor(42)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Errorf("esc should close the merge confirm to the graph; mode=%v", m.mode)
+	}
+	if m.mergeConfirm.number != 0 {
+		t.Errorf("esc should clear mergeConfirm, got %d", m.mergeConfirm.number)
+	}
+}
+
+func TestMergeConfirmInFlightSwallowsKeys(t *testing.T) {
+	m := browsePRFixture(t)
+	m, _ = m.beginMergeFor(42)
+	m.mergeInFlight = true
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	m = updated.(Model)
 	if cmd != nil {
-		t.Error("keys should be swallowed while a review action is in flight")
-	}
-	if m.prAction != prActionNone {
-		t.Errorf("in-flight 'a' must not arm approve; prAction=%v", m.prAction)
+		t.Error("keys should be swallowed while a merge is in flight")
 	}
 }
 
-func TestLoadPRDiffCmd(t *testing.T) {
-	prev := prDiffExec
-	t.Cleanup(func() { prDiffExec = prev })
-	prDiffExec = func(_ context.Context, _ string, _ int) (string, error) {
-		return "diff --git a/f b/f\n", nil
-	}
-	loaded, ok := loadPRDiffCmd("/x", 7, 3)().(diffPatchLoadedMsg)
-	if !ok {
-		t.Fatalf("want diffPatchLoadedMsg")
-	}
-	if loaded.reqID != 3 || loaded.hash != "pr/7" {
-		t.Errorf("got reqID=%d hash=%q, want 3/pr/7", loaded.reqID, loaded.hash)
-	}
-
-	prDiffExec = func(_ context.Context, _ string, _ int) (string, error) {
-		return "", errors.New("boom")
-	}
-	if _, ok := loadPRDiffCmd("/x", 7, 3)().(diffPatchFailedMsg); !ok {
-		t.Error("error path should return diffPatchFailedMsg")
+func TestOpenPRWebCmdErrors(t *testing.T) {
+	prev := prViewWebExec
+	t.Cleanup(func() { prViewWebExec = prev })
+	prViewWebExec = func(_ context.Context, _ string, _ int) error { return errors.New("no remote") }
+	if _, ok := openPRWebCmd("/x", 1)().(prWebFailedMsg); !ok {
+		t.Error("web open error should return prWebFailedMsg")
 	}
 }
 
-func TestApproveAndMergeCmdErrors(t *testing.T) {
-	origR := prReviewExec
-	origM := prMergeExec
-	t.Cleanup(func() { prReviewExec = origR; prMergeExec = origM })
-
-	prReviewExec = func(_ context.Context, _ string, _ int) error { return errors.New("nope") }
-	if _, ok := approvePRCmd("/x", 1)().(prApproveFailedMsg); !ok {
-		t.Error("approve error should return prApproveFailedMsg")
-	}
+func TestMergeCmdError(t *testing.T) {
+	orig := prMergeExec
+	t.Cleanup(func() { prMergeExec = orig })
 	prMergeExec = func(_ context.Context, _ string, _ int, _ string) error { return errors.New("nope") }
 	if _, ok := mergePRCmd("/x", 1, "squash")().(prMergeFailedMsg); !ok {
 		t.Error("merge error should return prMergeFailedMsg")
 	}
 }
 
-func TestUpdatePRReviewApproveDone(t *testing.T) {
-	m := prReviewOpen(t)
-	m.prsInFlight = false // so dispatchPRList returns a real cmd
-	m.prReviewInFlight = true
-	m.setBusyStatus("approving #42…")
-	updated, cmd := m.Update(prApproveDoneMsg{number: 42})
+func TestUpdateWebOpened(t *testing.T) {
+	m := browsePRFixture(t)
+	m.setBusyStatus("opening #42…")
+	updated, _ := m.Update(prWebOpenedMsg{number: 42})
 	m = updated.(Model)
-	if m.prReviewInFlight {
-		t.Error("approve done should clear prReviewInFlight")
-	}
-	if m.mode != viewModeDiffWindow {
-		t.Error("approve keeps the overlay open")
-	}
-	if m.reviewPRNumber != 42 {
-		t.Errorf("approve should not clear reviewPRNumber, got %d", m.reviewPRNumber)
-	}
-	if !strings.Contains(m.prReviewNotice, "approved") || m.prReviewNoticeErr {
-		t.Errorf("notice=%q err=%v, want approved/ok", m.prReviewNotice, m.prReviewNoticeErr)
-	}
 	if m.statusIsBusy() {
-		t.Error("busy status must clear so the spinner stops")
+		t.Error("web opened should clear the busy status so the spinner stops")
 	}
-	if cmd == nil {
-		t.Error("approve done should refresh the PR list")
+	if !strings.Contains(m.status, "opened #42") {
+		t.Errorf("status = %q, want 'opened #42'", m.status)
 	}
 }
 
-func TestUpdatePRReviewMergeDone(t *testing.T) {
-	m := prReviewOpen(t)
-	m.prReviewInFlight = true
+func TestUpdateWebFailedReports(t *testing.T) {
+	m := browsePRFixture(t)
+	m.setBusyStatus("opening #42…")
+	updated, _ := m.Update(prWebFailedMsg{err: errors.New("gh: no auth")})
+	m = updated.(Model)
+	if !strings.Contains(m.status, "no auth") {
+		t.Errorf("status = %q, want the gh error", m.status)
+	}
+}
+
+func TestUpdateMergeDone(t *testing.T) {
+	m := browsePRFixture(t)
+	m, _ = m.beginMergeFor(42)
+	m.mergeInFlight = true
 	updated, _ := m.Update(prMergeDoneMsg{number: 42, strategy: "squash"})
 	m = updated.(Model)
 	if m.mode != viewModeNormal {
-		t.Errorf("merge done should close the overlay; mode=%v", m.mode)
+		t.Errorf("merge done should close the confirm to the graph; mode=%v", m.mode)
 	}
-	if m.reviewPRNumber != 0 {
-		t.Errorf("merge done should clear reviewPRNumber, got %d", m.reviewPRNumber)
+	if m.mergeInFlight {
+		t.Error("merge done should clear mergeInFlight")
 	}
 	if !strings.Contains(m.status, "merged #42 (squash)") {
 		t.Errorf("status = %q, want merged #42 (squash)", m.status)
 	}
-	if m.prReviewInFlight {
-		t.Error("merge done should clear prReviewInFlight")
-	}
 }
 
-func TestUpdatePRReviewApproveFailed(t *testing.T) {
-	m := prReviewOpen(t)
-	m.prReviewInFlight = true
-	updated, _ := m.Update(prApproveFailedMsg{err: errors.New("can not approve your own pull request")})
+func TestUpdateMergeFailedReports(t *testing.T) {
+	m := browsePRFixture(t)
+	m, _ = m.beginMergeFor(42)
+	m.mergeInFlight = true
+	updated, _ := m.Update(prMergeFailedMsg{err: errors.New("not mergeable")})
 	m = updated.(Model)
-	if m.prReviewInFlight {
-		t.Error("failure should clear prReviewInFlight")
+	if m.mode != viewModeNormal {
+		t.Errorf("merge failed should close the confirm; mode=%v", m.mode)
 	}
-	if m.mode != viewModeDiffWindow {
-		t.Error("failure keeps the overlay open to read/retry")
+	if m.mergeInFlight {
+		t.Error("merge failed should clear mergeInFlight")
 	}
-	if !m.prReviewNoticeErr || !strings.Contains(m.prReviewNotice, "approve your own") {
-		t.Errorf("notice=%q err=%v, want error notice", m.prReviewNotice, m.prReviewNoticeErr)
+	if !strings.Contains(m.status, "not mergeable") {
+		t.Errorf("status = %q, want the gh error", m.status)
 	}
 }
 
-func TestRenderPRReviewHint(t *testing.T) {
-	m := prReviewOpen(t) // width 120, reviewPRNumber 42, prAction none
-	browse := m.renderPRReviewHint()
-	for _, want := range []string{"PR #42", "approve", "merge", "comment", "changes", "← close"} {
-		if !strings.Contains(browse, want) {
-			t.Errorf("browse hint missing %q: %q", want, browse)
+func TestRenderMergeConfirmInner(t *testing.T) {
+	m := browsePRFixture(t)
+	m, _ = m.beginMergeFor(42)
+	box := m.renderMergeConfirmInner()
+	for _, want := range []string{"merge PR #42?", "squash", "merge", "rebase"} {
+		if !strings.Contains(box, want) {
+			t.Errorf("merge dialog missing %q: %q", want, box)
 		}
 	}
-
-	m.prReviewNotice = "approved #42"
-	if notice := m.renderPRReviewHint(); !strings.Contains(notice, "approved #42") {
-		t.Errorf("notice hint = %q", notice)
+	// While merging, the dialog swaps to the busy line.
+	m.mergeInFlight = true
+	if busy := m.renderMergeConfirmInner(); !strings.Contains(busy, "merging") {
+		t.Errorf("in-flight dialog = %q, want a merging line", busy)
 	}
 }
 
-// The armed approve / merge confirms render as a centered dialog, not in the
-// hint line.
-func TestRenderPRActionConfirmInner(t *testing.T) {
-	m := prReviewOpen(t)
-	m.prAction = prActionApprove
-	app := m.renderPRActionConfirmInner()
-	if !strings.Contains(app, "approve PR #42?") || !strings.Contains(app, "[y] yes") {
-		t.Errorf("approve dialog = %q", app)
-	}
-	m.prAction = prActionMerge
-	mrg := m.renderPRActionConfirmInner()
-	for _, want := range []string{"merge PR #42?", "squash", "rebase"} {
-		if !strings.Contains(mrg, want) {
-			t.Errorf("merge dialog missing %q: %q", want, mrg)
-		}
-	}
-}
-
-// While a confirm is armed, View() composes the dialog over the diff base.
-func TestPRReviewArmedComposesDialog(t *testing.T) {
-	m := prReviewOpen(t)
-	m.prAction = prActionApprove
-	if !strings.Contains(m.View(), "approve PR #42?") {
-		t.Error("armed approve should render a centered dialog over the diff")
+// While armed, View() composes the merge dialog over the graph base.
+func TestMergeConfirmComposesDialog(t *testing.T) {
+	m := browsePRFixture(t)
+	m, _ = m.beginMergeFor(42)
+	if !strings.Contains(m.View(), "merge PR #42?") {
+		t.Error("armed merge should render a centered dialog over the page")
 	}
 }

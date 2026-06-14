@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -68,8 +67,11 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == viewModeWorktreesModal {
 		return m.handleWorktreesModalKey(msg)
 	}
-	if m.mode == viewModePRsModal {
-		return m.handlePRsModalKey(msg)
+	if m.mode == viewModePRsPage {
+		return m.handlePRsPageKey(msg)
+	}
+	if m.mode == viewModeMergeConfirm {
+		return m.handleMergeConfirmKey(msg)
 	}
 	if m.mode == viewModeZombieCleanupConfirm {
 		return m.handleZombieCleanupConfirmKey(msg)
@@ -84,93 +86,13 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// PR review sub-states gate the overlay's scroll keymap. Only reached
-	// when a PR review opened the overlay (reviewPRNumber != 0); a plain
-	// commit patch (reviewPRNumber == 0) falls straight through to scroll/close below.
-	if m.reviewPRNumber != 0 {
-		if m.prReviewInFlight {
-			// Mid approve/merge — swallow everything but quit so a second
-			// press can't fork a parallel gh call.
-			if msg.String() == "ctrl+c" {
-				return m.handleCtrlC()
-			}
-			return m, nil
-		}
-		// Any key dismisses a lingering result notice (approve ok / failed).
-		m.prReviewNotice = ""
-		switch m.prAction {
-		case prActionApprove:
-			switch msg.String() {
-			case "y":
-				return m.dispatchPRApprove()
-			case "q", "esc":
-				m.prAction = prActionNone
-				return m, nil
-			case "ctrl+c":
-				return m.handleCtrlC()
-			}
-			return m, nil
-		case prActionMerge:
-			switch msg.String() {
-			case "s":
-				return m.dispatchPRMerge("squash")
-			case "m":
-				return m.dispatchPRMerge("merge")
-			case "r":
-				return m.dispatchPRMerge("rebase")
-			case "q", "esc":
-				m.prAction = prActionNone
-				return m, nil
-			case "ctrl+c":
-				return m.handleCtrlC()
-			}
-			return m, nil
-		case prActionComment, prActionRequestChanges:
-			switch msg.String() {
-			case "ctrl+s":
-				return m.dispatchPRReviewBody()
-			case "esc":
-				m.prAction = prActionNone
-				m.prReviewBody = textarea.Model{}
-				m.prReviewBodyErr = ""
-				return m, nil
-			case "ctrl+c":
-				return m.handleCtrlC()
-			}
-			// Everything else is body text — forward to the editor (`a`/`m`/
-			// `c`/`r` etc. type literally, not re-arm actions).
-			var cmd tea.Cmd
-			m.prReviewBody, cmd = m.prReviewBody.Update(msg)
-			return m, cmd
-		}
-		// Browse state: arm the inline confirms; everything else (scroll,
-		// file jump, close) falls through to the shared keymap below.
-		switch msg.String() {
-		case "a":
-			m.prAction = prActionApprove
-			return m, nil
-		case "m":
-			m.prAction = prActionMerge
-			return m, nil
-		case "c":
-			return m.beginPRReviewBody(prActionComment)
-		case "r":
-			return m.beginPRReviewBody(prActionRequestChanges)
-		}
-	}
 	switch msg.String() {
 	case "left":
 		// `←` climbs back out of the diff, the mirror of the `→` that opened
 		// it. It is the sole exit now — q/esc no longer close, matching the
 		// arrow-only navigation the local-changes diff uses.
-		m.mode = m.reviewReturnMode
-		m.reviewReturnMode = viewModeNormal
+		m.mode = viewModeNormal
 		m.diff.ClosePatch()
-		m.reviewPRNumber = 0
-		m.prAction = prActionNone
-		m.prReviewNotice = ""
-		m.prReviewBody = textarea.Model{}
-		m.prReviewBodyErr = ""
 		// Resize the page we're returning to: if `?` is open its panel height
 		// differs from the diff's (Graph/Sync vs Diff columns), so the graph
 		// box must be recomputed or it overflows and clips the top rows.
@@ -178,7 +100,7 @@ func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "?":
 		// Inline help panel, same toggle every page uses. The diff bottom
-		// line expands into the Diff (+ PR Review) key columns.
+		// line expands into the Diff key columns.
 		return m.toggleHelp()
 	case "tab":
 		// Global page cycle, like every other page — close the diff and
@@ -208,29 +130,48 @@ func (m Model) handleDiffWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // cycleDiffPage closes the diff and lands on the next (or previous) top-level
 // page, so tab/shift+tab work from inside the diff the same as from any page.
-// The diff's own page index (commit → graph, PR review → worktree) is the
-// cycle origin.
+// The commit diff always sits on the graph page, so that's the cycle origin.
 func (m Model) cycleDiffPage(back bool) (tea.Model, tea.Cmd) {
 	idx := m.currentPageIndex()
 	m.diff.ClosePatch()
-	m.reviewReturnMode = viewModeNormal
-	m.reviewPRNumber = 0
-	m.prAction = prActionNone
-	m.prReviewNotice = ""
-	m.prReviewBody = textarea.Model{}
-	m.prReviewBodyErr = ""
+	return m.gotoPage(pageStep(idx, back))
+}
+
+// gotoPage enters the top-level page at the given cycle index (0 graph, 1
+// worktree, 2 local changes, 3 pull requests). Centralizes the tab/shift+tab
+// targets so the page handlers don't each hardcode their two neighbors.
+func (m Model) gotoPage(idx int) (tea.Model, tea.Cmd) {
+	switch idx {
+	case 1:
+		return m.beginWorktreesModal()
+	case 2:
+		cmd := m.enterLocalChangesMode()
+		return m, cmd
+	case 3:
+		return m.enterPRsPage()
+	default:
+		return m.enterGraphPage(), nil
+	}
+}
+
+// pageStep returns the cycle index reached from idx by one tab (back=false) or
+// shift+tab (back=true), wrapping across the len(pageTabLabels) pages.
+func pageStep(idx int, back bool) int {
+	n := len(pageTabLabels)
 	delta := 1
 	if back {
 		delta = -1
 	}
-	switch (idx + delta + 3) % 3 {
-	case 1:
-		return m.beginWorktreesModal()
-	case 2:
-		return m, m.enterLocalChangesMode()
-	default:
-		return m.enterGraphPage(), nil
+	return ((idx+delta)%n + n) % n
+}
+
+// cyclePage advances the top-level page from the current one (tab / shift+tab),
+// releasing the local-changes diff body before leaving that page.
+func (m Model) cyclePage(back bool) (tea.Model, tea.Cmd) {
+	if m.mode == viewModeLocalChanges {
+		m.localChanges.ClosePatch()
 	}
+	return m.gotoPage(pageStep(m.currentPageIndex(), back))
 }
 
 func (m Model) handleWorktreeAddInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -396,9 +337,9 @@ func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// page's space/enter split.
 		return m.worktreesModalEnter()
 	case "enter":
-		// `enter` opens the cursor worktree's open PR in the inline review
-		// overlay (was `O`), keeping graph and worktree key models aligned.
-		return m.worktreesModalReviewPR()
+		// `enter` opens the cursor worktree's open PR on GitHub in the browser,
+		// keeping graph and worktree key models aligned.
+		return m.worktreesModalOpenPRWeb()
 	case "a":
 		return m.beginWorktreeAdd()
 	case "d":
@@ -408,11 +349,10 @@ func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		// Page cycle: worktree → local changes. State is preserved (not
 		// zeroed) so the sort preference carries across the switch.
-		cmd := m.enterLocalChangesMode()
-		return m, cmd
+		return m.cyclePage(false)
 	case "shift+tab":
 		// Page cycle: worktree → graph (home).
-		return m.enterGraphPage(), nil
+		return m.cyclePage(true)
 	case "?":
 		// Inline help on the worktree page (Global + Worktree categories).
 		return m.toggleHelp()
@@ -422,18 +362,56 @@ func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handlePRsModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handlePRsPageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "j", "down":
-		return m.prsModalMoveCursor(1), nil
+		return m.prsPageMoveCursor(1), nil
 	case "k", "up":
-		return m.prsModalMoveCursor(-1), nil
+		return m.prsPageMoveCursor(-1), nil
 	case "enter":
-		return m.prsModalEnter()
-	case "l", "q", "esc":
-		// `l` toggles the modal closed, mirroring how it opens.
-		m.mode = viewModeNormal
-		m.prsModal = prsModalState{}
+		// Open the cursor PR on GitHub in the browser.
+		return m.prsPageOpenWeb()
+	case "m":
+		// Arm the merge confirm for the cursor PR.
+		return m.prsPageMerge()
+	case "r":
+		// Refresh the open-PR list (the page's data source).
+		return m, m.dispatchPRList()
+	case "tab":
+		// Page cycle: pull requests → graph (the wrap-around next).
+		return m.cyclePage(false)
+	case "shift+tab":
+		// Page cycle: pull requests → local changes.
+		return m.cyclePage(true)
+	case "?":
+		// Inline help on the PR page (Global + Pull Requests categories).
+		return m.toggleHelp()
+	case "ctrl+c":
+		return m.handleCtrlC()
+	}
+	return m, nil
+}
+
+func (m Model) handleMergeConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// While the merge runs, only ctrl+c (quit) is honored so a second strategy
+	// key can't fork a parallel `gh pr merge`.
+	if m.mergeInFlight {
+		if msg.String() == "ctrl+c" {
+			return m.handleCtrlC()
+		}
+		return m, nil
+	}
+	switch msg.String() {
+	case "s":
+		return m.dispatchPRMerge("squash")
+	case "m":
+		return m.dispatchPRMerge("merge")
+	case "r":
+		return m.dispatchPRMerge("rebase")
+	case "q", "esc":
+		m.closeMergeConfirm()
+		m.status = "merge: cancelled"
+		m.statusStyle = statusOkS
 		return m, nil
 	case "ctrl+c":
 		return m.handleCtrlC()
@@ -472,12 +450,11 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m.handleCtrlC()
 	case "tab":
-		// Page cycle: local changes → graph (home). Releases the diff body.
-		return m.enterGraphPage(), nil
+		// Page cycle: local changes → pull requests. Releases the diff body.
+		return m.cyclePage(false)
 	case "shift+tab":
 		// Page cycle: local changes → worktree.
-		m.localChanges.ClosePatch()
-		return m.beginWorktreesModal()
+		return m.cyclePage(true)
 	case "?":
 		// Inline help on the local changes page itself — no longer yanks to
 		// the graph. Shows the Global + Local Changes categories.
@@ -601,11 +578,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		// Page cycle: graph → worktree. `w` / `,` were retired in favor of
 		// the single tab/shift+tab cycle (see renderPageTabs breadcrumb).
-		return m.beginWorktreesModal()
+		return m.cyclePage(false)
 	case "shift+tab":
-		// Page cycle: graph → local changes (the reverse neighbor).
-		cmd := m.enterLocalChangesMode()
-		return m, cmd
+		// Page cycle: graph → pull requests (the wrap-around reverse neighbor).
+		return m.cyclePage(true)
 	case "y":
 		m = m.copyHashFromGraph()
 		return m, nil
@@ -629,11 +605,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "P":
 		// Push the current branch (first push auto-sets upstream).
 		return m.beginPush()
-	case "l":
-		// Open the PR list modal — every open PR, including ones whose head
-		// branch isn't checked out locally (which the graph cursor can't
-		// reach). enter opens the cursor PR in the same review overlay.
-		return m.beginPRsModal()
+	case "m":
+		// Merge the cursor row's open PR — arms the merge confirm dialog.
+		// Rows without a PR-bearing chip report on the status line.
+		return m.beginMergeForCursor()
 	case "Z":
 		// Zombie-branch cleanup is a global action now that the sidebar
 		// is gone — the previous paneRefs focus gate had no meaningful
@@ -680,12 +655,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			shortHash(c.Hash), len(locals), len(remotes))
 		return m, evaluateGraphActionCmd(m.workdir, c.Hash, locals, remotes)
 	case "enter":
-		// `enter` pulls the cursor row's open PR into the inline review
-		// overlay (the action `O` carried before). Graph stays the return
-		// mode so merging drops back here, not to the worktree page. Rows
-		// without a PR-bearing chip report on the status line.
-		m.reviewReturnMode = viewModeNormal
-		return m.beginPRReview()
+		// `enter` opens the cursor row's open PR on GitHub in the browser —
+		// reviewing happens on the web. Rows without a PR-bearing chip report
+		// on the status line.
+		return m.openPRWebForCursor()
 	case "right":
 		// `→` opens the patch overlay for the focused commit (`←` closes it
 		// from inside — see handleDiffWindowKey), mirroring the local-changes

@@ -34,19 +34,19 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | 동작 | 실행 |
 | --- | --- |
 | 커밋 그래프 (실행 시) | `git log --all --graph --oneline --decorate` |
-| `d` patch 오버레이 + `[` / `]` | `git show -p <commit>` 을 파일 단위로 |
+| `→` patch 오버레이 + `[` / `]` | `git show -p <commit>` 을 파일 단위로 |
 | `,` Local Changes + `space` | `git status` + `git diff` + `git add` / `git restore --staged` |
 | `[` / `]` + `space` (diff 패널) | hunk 단위 `git apply --cached` (`--reverse` 로 unstage) |
-| `enter` (체크아웃 / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
+| `space` (체크아웃 / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
 | `w` worktree (전환 / 추가 / 제거) | `git worktree list` / `add` / `remove` |
 | `b` → `d` (브랜치 삭제) | `git branch -d <branch>` |
 | `c` / `R` | `git cherry-pick <commit>` / `git rebase <onto>` |
 | `v` / `x` | `git revert <commit>` / `git reset --soft\|--mixed\|--hard <commit>` |
 | `n` | `git checkout -b <name> <commit>` |
 | `F` / `p` / `P` | `git fetch --all` / `git pull` / `git push` |
-| `o` (PR 웹에서 열기) | `gh pr view --web <number>` |
-| `O` → `a` / `m` / `c` / `r` (PR 리뷰) | `gh pr diff <n>` · `gh pr review --approve\|--comment\|--request-changes` · `gh pr merge --squash\|--merge\|--rebase` |
-| `l` PR 목록 모달 | `gh pr list` (재사용) → 행을 `O` 오버레이로 리뷰 |
+| `enter` (PR 웹에서 열기) | `gh pr view <n> --web` |
+| `m` (PR 머지) | `gh pr merge --squash\|--merge\|--rebase` |
+| Pull Requests 탭 | `gh pr list` (재사용) → `enter` 로 행을 웹에서 열고, `m` 으로 머지 |
 | 브랜치 칩의 PR 배지 | `gh pr list` + `gh pr checks <number>` |
 | `y` | `git rev-parse <commit>` → 클립보드 |
 
@@ -62,30 +62,30 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 
 ### diff 리뷰
 
-- `d` 는 focus 커밋의 전체 patch(`git show -p`)를 전체 화면 오버레이로 연다.
+- `→` 는 focus 커밋의 전체 patch(`git show -p`)를 전체 화면 오버레이로 연다.
 - `[` / `]` 는 패치 안에서 파일을 오가고, 하단에 `<path> [N/M]` 이 표시된다.
 - `,` 는 Local Changes 를 연다 — 워킹 트리 diff(파일 트리 + diff 패널)를 Conflicts / Unstaged / Staged 로 나눈다. `space` 로 focus 파일 stage/unstage, `tab` 으로 트리 ↔ diff focus 순환, `r` 로 reload.
 - hunk 단위 staging: `tab` 으로 diff 패널에 들어가 `[` / `]` 로 hunk 사이를 이동하고(선택된 `@@` 헤더가 강조됨), `space` 로 그 hunk 만 stage(`git apply --cached`) — staged 항목을 보고 있으면 unstage. untracked / conflict 파일은 트리에서 파일 전체로 stage.
 
-### PR 리뷰 (`O` / `l`)
+### Pull requests (`enter` / `m` / Pull Requests 탭)
 
-- 칩에 열린 PR 배지가 달린 커밋에서 `O` 는 그 PR 의 diff(`gh pr diff`)를 커밋 diff 가 쓰는 것과 같은 전체 화면 patch 오버레이로 가져온다 — `[` / `]` 파일 네비와 스크롤이 동일하게 동작한다.
-- `l` 은 PR 목록 모달을 연다 — 로컬에 체크아웃되지 않은 것(`O` 로는 닿지 못하는)까지 포함한 모든 열린 PR. 행은 `#N <CI 글리프> 제목 · 작성자` 로 읽히고, `enter` 는 커서 행을 같은 리뷰 오버레이로 열어 `a` / `m` 이 동일하게 동작한다.
-- `a` 는 approve(`gh pr review --approve`), `m` 은 merge — 전략을 고른다: `[s]` squash · `[m]` merge · `[r]` rebase(`gh pr merge`). 둘 다 diff 위에 띄워지는 중앙 confirm 다이얼로그로 확인하므로, 결정하는 동안 diff 가 dim 된 채 뒤에 남는다.
-- `c` 는 comment, `r` 은 request-changes — 둘 다 dim 된 diff 위에 multi-line 본문 에디터를 띄운다. `ctrl+s` 제출(`gh pr review --comment` / `--request-changes`), `esc` 취소. 제출 실패 시 에러를 인라인으로 보여주며 에디터를 유지한다.
-- approve 는 오버레이를 유지하고(계속 읽거나 이어서 merge), merge 는 그래프로 닫히며 PR 배지를 갱신한다. gh 에러(본인 PR approve, merge 불가, 로그아웃 상태)는 힌트 줄에 표시된다.
+리뷰는 GitHub 에서 일어난다; 코크핏은 거기로 점프시키고 PR 을 머지한다.
+
+- 칩에 열린 PR 배지가 달린 커밋에서 `enter` 는 그 PR 을 브라우저의 GitHub 에서 연다(`gh pr view --web`). 같은 웹 점프가 Worktree 와 Pull Requests 페이지의 `enter` 에도 연결되어 있다.
+- `m` 은 커서 행의 열린 PR 을 중앙 confirm 다이얼로그로 머지한다 — `[s]` squash · `[m]` merge · `[r]` rebase(`gh pr merge`). 머지하면 다이얼로그가 닫히며 PR 배지를 갱신하고, gh 에러(머지 불가, 로그아웃된 `gh`)는 상태 줄에 표시된다.
+- **Pull Requests 탭**(`tab` / `shift+tab` 순환의 마지막)은 모든 열린 PR 을 나열한다 — 로컬에 체크아웃되지 않아 그래프 커서가 닿지 못하는 head 브랜치의 PR 까지 포함한다. 행은 `#N <CI 글리프> 제목 · 작성자` 로 읽히고, `enter` 는 커서 행을 웹에서 열고, `m` 은 머지하며, `r` 은 목록을 갱신한다.
 
 ### worktree (`w`)
 
 - `w` 는 전체화면 대시보드를 연다 — worktree 당 3줄 카드(브랜치 + PR/CI + dirty/시각 · 경로 · 마지막 커밋) 로 모든 트리 상태를 한눈에 본다. `esc` 로 그래프로 돌아간다.
-- `enter` 는 UI 전체를 다른 worktree 로 프로세스 내부에서 전환한다. `O` 는 그 worktree 의 열린 PR 을 리뷰 오버레이로 열어(approve / merge / comment 인라인) 닫으면 대시보드로 복귀 — 떠나지 않고 각 에이전트의 PR 을 리뷰·랜드한다.
+- `space` 는 UI 전체를 다른 worktree 로 프로세스 내부에서 전환한다. `enter` 는 그 worktree 의 열린 PR 을 브라우저의 GitHub 에서 연다 — 각 에이전트의 PR 을 웹에서 리뷰하고, 그래프 / Pull Requests 탭에서 `m` 으로 머지한다.
 - `a` 로 worktree 추가(형제 경로 자동 도출), `d` 로 제거(dirty/locked 는 force 확인), `s` 로 마지막 커밋 시각순 정렬.
 - 각 카드에 열린 PR `#N` + CI 배지(있을 때), upstream 대비 `↑a↓b`(ahead/behind), `●N` dirty 마커(`N` = 변경 파일 수), worktree HEAD 의 마지막 커밋 제목·상대 시각이 표시된다.
 - `.git/HEAD` 와 `.git/index` 를 fsnotify 로 감시해 외부 커밋·rebase 가 목록을 갱신하고, `r` 은 항상 수동 폴백이다.
 
 ### 브랜치 & 체크아웃
 
-- 그래프에서 `enter` 는 커서의 칩 상태와 HEAD 관계로 체크아웃 / fast-forward / detach 를 고른다. 모호한 행은 브랜치 피커를 열고, 리모트-칩 행은 `git pull` 을 이어 붙인다.
+- 그래프에서 `space` 는 커서의 칩 상태와 HEAD 관계로 체크아웃 / fast-forward / detach 를 고른다. 모호한 행은 브랜치 피커를 열고, 리모트-칩 행은 `git pull` 을 이어 붙인다.
 - 체크아웃이 깨끗한 트리를 요구하면 `s` 로 stash 후 계속, `a` / `esc` 로 중단한다.
 - `n` 은 커서에 브랜치를 만들고 전환한다.
 - `b` 는 로컬 브랜치를 나열하고 `d` 로 커서 브랜치를 삭제한다(HEAD 보호).
@@ -100,21 +100,20 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 ### 네트워크 & 그 외 키
 
 - `F` fetch(`git fetch --all`) · `p` pull(strategy 해석) · `P` push(첫 push 는 upstream 설정; 절대 force 안 함).
-- `o` 는 focus 커밋의 PR 을 GitHub 에서 열고 · `y` 는 커밋 해시 복사 · `r` 은 refs + log reload.
+- `y` 는 커밋 해시 복사 · `r` 은 refs + log reload.
 - `?` 는 인라인 help 패널을 토글한다(Global / Graph / Local Changes 컬럼).
 
 ## 키 바인딩
 
 | 키 | 위치 | 동작 |
 | --- | --- | --- |
-| `j` / `k` · `g` / `G` | 그래프 | 이동 · 맨 위 / 맨 아래로 |
-| `enter` | 그래프 | 체크아웃 / fast-forward / detach |
-| `d` | 그래프 | 전체 화면 patch 오버레이 열기 |
-| `O` | 그래프 | 커서 PR 의 diff 를 리뷰 오버레이로 열기 |
-| `l` | 전역 | PR 목록 모달 열기 (열린 PR 아무거나 리뷰) |
+| `↑` / `↓` · `g` / `G` | 그래프 | 이동 · 맨 위 / 맨 아래로 |
+| `space` | 그래프 | 체크아웃 / fast-forward / detach |
+| `→` | 그래프 | 전체 화면 patch 오버레이 열기 |
+| `enter` | 그래프 | 커서 행의 열린 PR 을 웹에서 열기 |
+| `m` | 그래프 | 커서 행의 열린 PR 머지 (`s`/`m`/`r` 전략) |
 | `[` / `]` | 패치 | 이전 / 다음 파일로 점프 |
-| `a` / `m` | PR 리뷰 | 열린 PR approve / merge (`m` → s/m/r) |
-| `c` / `r` | PR 리뷰 | comment / request changes (본문 에디터 → `ctrl+s`) |
+| `enter` / `m` | pull requests | 웹에서 열기 / 커서 PR 머지 |
 | `,` | 전역 | Local Changes 뷰 |
 | `space` | local changes | focus 파일 stage / unstage (diff 패널에선 hunk) |
 | `[` / `]` | local changes diff | 이전 / 다음 hunk |
@@ -122,7 +121,7 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | `c` / `R` / `v` / `x` | 그래프 | cherry-pick / rebase / revert / reset |
 | `n` | 그래프 | 커서에 브랜치 생성 + 전환 |
 | `F` / `p` / `P` | 전역 | fetch / pull / push |
-| `o` / `y` | 그래프 | GitHub 에서 PR 열기 / 해시 복사 |
+| `y` | 그래프 | 해시 복사 |
 | `r` | 전역 | reload |
 | `?` | 전역 | help 패널 토글 |
 | `ctrl+c` `ctrl+c` | 전역 | 종료(두 번 누르기) |
@@ -138,7 +137,7 @@ XDG 규격 경로(`internal/config` 가 해석 담당):
   strategy = "rebase"   # "ff-only" | "merge" | "rebase"
   ```
 
-  pull strategy 해석 순서: 환경설정 `[pull] strategy` → git config `pull.rebase` → `pull.ff` → 폴백 `--ff-only`.
+  pull strategy 해석 순서: 환경설정 `[pull] strategy` → git config `pull.rebase` → 폴백 `--ff-only`.
 - 로그 — `$XDG_STATE_HOME/gh-orbit/log`(TUI 가 stdout 을 소유하므로 런타임 로깅이 여기로 간다).
 
 ## 개발

@@ -199,7 +199,7 @@ func TestRenderWorktreesViewWindowsToCursor(t *testing.T) {
 }
 
 func TestWorktreePageStatusRidesBottomLine(t *testing.T) {
-	// Feedback set while the worktree page owns the screen (e.g. `O` with no
+	// Feedback set while the worktree page owns the screen (e.g. `enter` with no
 	// PR) now rides the shared bottom line (renderHelpStatus), not an in-box
 	// row — same as the graph / local-changes pages.
 	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/a"}}, "/wt/a")

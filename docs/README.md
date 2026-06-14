@@ -12,8 +12,11 @@ Reading order for a new contributor:
 3. [config.md](config.md) — where logs and prefs go.
 4. [checkout.md](checkout.md) — the largest behavioral surface
    (graph `space`, `p`, dirty-tree, fast-forward).
-5. [branches.md](branches.md) — `n` / `d` / `m` branch lifecycle
-   modals.
+5. [branches.md](branches.md) — `b` / `d` delete-branch modal.
+6. [worktrees.md](worktrees.md) — the `tab`-cycle Worktree page for
+   list / switch / add / remove.
+7. [pull-requests.md](pull-requests.md) — the Pull Requests tab:
+   `enter` opens a PR on the web, `m` merges it.
 
 [index.md](index.md) is the same map in one-line form, optimized for
 skimming the repo before a change.

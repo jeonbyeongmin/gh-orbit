@@ -154,7 +154,7 @@ func (m Model) updateWorktreeMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateCommitsMsg handles commit-data loads: the streamed git log,
-// HEAD ancestry, refs, and the `d` patch overlay body.
+// HEAD ancestry, refs, and the `→` patch overlay body.
 func (m Model) updateCommitsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case commitsStreamStartedMsg:

@@ -266,11 +266,19 @@ func (m Model) handleBranchPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		branch := m.branchPicker.candidates[m.branchPicker.cursor]
+		hash := m.branchPicker.hash
 		m.branchPicker = branchPickerState{}
 		m.mode = viewModeNormal
-		var cmd tea.Cmd
-		m, cmd = m.beginCheckout(branch, false)
-		return m, cmd
+		if m.ffInFlight || m.checkoutInFlight {
+			return m, nil
+		}
+		// Checkout the chosen branch and fast-forward it up to the cursor
+		// row — same "land synced" semantics as a single remote-chip Enter.
+		// A candidate already on the row fast-forwards as a no-op (advance 0),
+		// surfacing as a plain checkout in the success handler.
+		m.ffInFlight = true
+		m.setBusyStatus("fast-forward: " + branch + " (checkout + ff) …")
+		return m, checkoutThenFFCmd(m.workdir, branch, hash)
 	case "q", "esc":
 		m.mode = viewModeNormal
 		m.branchPicker = branchPickerState{}
@@ -519,10 +527,6 @@ func (m Model) handleCheckoutConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, stashThenRetryCmd(m.workdir, p)
 	case "a", "q", "esc":
 		m.mode = viewModeNormal
-		// Abort is where the pull-after chain dies — the needs-clean-tree
-		// handlers keep it armed so `s` can carry the remote-chip Enter's
-		// "synced with network" promise through the stash retry.
-		m.pullAfterAction = false
 		p := m.pendingCheckout
 		m.pendingCheckout = pendingCheckout{}
 		switch {
@@ -648,7 +652,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusErrS
 			return m, nil
 		}
-		remotes := m.refs.RemoteRefs()
+		remotes := m.refs.AllRemoteRefs()
 		m.actionInFlight = true
 		m.setBusyStatus("→ resolving…")
 		log.Printf("graph space: dispatch evaluator (cursor=%s, locals=%d, remotes=%d)",

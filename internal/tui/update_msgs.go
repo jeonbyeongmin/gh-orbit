@@ -253,19 +253,12 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status += " · stashed changes here — git stash pop"
 		}
 		m.pendingHEADHash = pendingHEADSentinel
-		var pull tea.Cmd
-		var chained bool
-		m, pull, chained = m.chainPullAfterAction(m.status)
-		if chained {
-			return m, pull
-		}
 		return m, m.reloadCmd()
 
 	case checkoutNeedsCleanTreeMsg:
 		// Modal owns the next decision; release the in-flight gate.
 		// pendingCheckout stays intact so the modal hint can name the
-		// chain that was about to run. pullAfterAction also stays armed —
-		// the modal's `s` continues the chain, abort clears it.
+		// chain that was about to run.
 		m.checkoutInFlight = false
 		m.mode = viewModeCheckoutConfirm
 		m.status = "checkout: " + msg.ref + " — uncommitted changes"
@@ -273,7 +266,6 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case checkoutFailedMsg:
-		m.pullAfterAction = false
 		m.checkoutInFlight = false
 		m.pendingCheckout = pendingCheckout{}
 		m.status = "checkout failed: " + firstLine(msg.err.Error())
@@ -285,9 +277,7 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case stashFailedMsg:
 		// The stash step itself failed: nothing was stashed, nothing was
-		// retried. Kill the whole chain — including the pull-after arm
-		// the modal carried through.
-		m.pullAfterAction = false
+		// retried. Kill the whole chain.
 		m.checkoutInFlight = false
 		m.ffInFlight = false
 		m.pendingCheckout = pendingCheckout{}
@@ -298,9 +288,6 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case graphActionMsg:
 		m.actionInFlight = false
-		// Every evaluation re-arms or clears the pull-after chain; a stale
-		// flag from a dropped earlier dispatch must not leak into this one.
-		m.pullAfterAction = false
 		// Stale-drop: cursor moved between Enter dispatch and this reply.
 		// Drop silently — the user can re-press Enter on the new row.
 		if c, ok := m.graph.Selected(); !ok || c.Hash != msg.hash {
@@ -313,7 +300,6 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusOkS
 			return m, nil
 		case graphActionCheckout:
-			m.pullAfterAction = msg.pullAfter
 			var cmd tea.Cmd
 			m, cmd = m.beginCheckout(msg.branch, false)
 			return m, cmd
@@ -327,12 +313,10 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusBusyS
 			return m, nil
 		case graphActionFF:
-			m.pullAfterAction = msg.pullAfter
 			m.ffInFlight = true
 			m.setBusyStatus(ffLabel(msg.branch, msg.advance) + " …")
 			return m, ffOnlyCmd(m.workdir, msg.branch, msg.hash)
 		case graphActionCheckoutAndFF:
-			m.pullAfterAction = msg.pullAfter
 			m.ffInFlight = true
 			m.setBusyStatus("fast-forward: " + msg.branch + " (checkout + ff) …")
 			return m, checkoutThenFFCmd(m.workdir, msg.branch, msg.hash)
@@ -352,16 +336,9 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusOkS
 		m = m.consumeStashNotice()
 		m.pendingHEADHash = pendingHEADSentinel
-		var pull tea.Cmd
-		var chained bool
-		m, pull, chained = m.chainPullAfterAction(m.status)
-		if chained {
-			return m, pull
-		}
 		return m, m.reloadCmd()
 
 	case ffFailedMsg:
-		m.pullAfterAction = false
 		m.ffInFlight = false
 		m.pendingCheckout = pendingCheckout{}
 		log.Printf("graph space: ff failed: %v", msg.err)
@@ -385,19 +362,19 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case checkoutThenFFSucceededMsg:
 		m.ffInFlight = false
 		m.pendingCheckout = pendingCheckout{}
-		m.status = ffLabel(msg.branch, msg.advance) + " (after checkout)"
+		// advance 0 means the branch already sat on the cursor (the FF was a
+		// no-op) — surface it as the plain checkout it effectively was.
+		if msg.advance == 0 {
+			m.status = checkoutLabel(msg.branch, false)
+		} else {
+			m.status = ffLabel(msg.branch, msg.advance) + " (after checkout)"
+		}
 		m.statusStyle = statusOkS
 		m = m.consumeStashNotice()
 		if m.stashedRefs[msg.branch] {
 			m.status += " · stashed changes here — git stash pop"
 		}
 		m.pendingHEADHash = pendingHEADSentinel
-		var pull tea.Cmd
-		var chained bool
-		m, pull, chained = m.chainPullAfterAction(m.status)
-		if chained {
-			return m, pull
-		}
 		return m, m.reloadCmd()
 
 	case ffCheckoutNeedsCleanTreeMsg:

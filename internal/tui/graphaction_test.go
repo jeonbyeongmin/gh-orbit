@@ -261,11 +261,10 @@ func TestGraphEvaluatorRemoteChipWithoutTrackerCreatesLocal(t *testing.T) {
 	}
 }
 
-func TestGraphEvaluatorRemoteChipWithTrackerPrefersCrossBranchOverNewLocal(t *testing.T) {
-	// Two remote chips on cursor: origin/develop has a tracker (local
-	// develop), origin/feat doesn't. Cross-branch should win — its
-	// candidate is the tracked one, even though new-local has its own
-	// candidate.
+func TestGraphEvaluatorTwoDistinctRemotesDispatchPicker(t *testing.T) {
+	// Two remote chips on the cursor: origin/develop (tracked by local
+	// develop) and origin/feat (no tracker → dwim name "feat"). They map to
+	// two distinct candidates, so the user picks — not an arbitrary single.
 	cursor := "nnnn"
 	locals := []git.Ref{
 		{ShortName: "develop", Kind: git.RefKindLocal, ObjectName: "behind", Upstream: "origin/develop"},
@@ -276,11 +275,12 @@ func TestGraphEvaluatorRemoteChipWithTrackerPrefersCrossBranchOverNewLocal(t *te
 		{ShortName: "origin/feat", Kind: git.RefKindRemote, ObjectName: cursor},
 	}
 	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
-	if got.kind != graphActionCheckoutAndFF {
-		t.Errorf("kind = %v, want CheckoutAndFF (cross-branch precedes new-local)", got.kind)
+	if got.kind != graphActionPicker {
+		t.Fatalf("kind = %v, want Picker (two distinct remote branches)", got.kind)
 	}
-	if got.branch != "develop" {
-		t.Errorf("branch = %q, want develop", got.branch)
+	want := []string{"develop", "feat"}
+	if !reflect.DeepEqual(got.candidates, want) {
+		t.Errorf("candidates = %v, want %v", got.candidates, want)
 	}
 }
 
@@ -381,71 +381,48 @@ func TestBranchPickerInnerScroll(t *testing.T) {
 	}
 }
 
-// --- pullAfter tagging (enter on origin/xx → checkout + pull chain) ---
+// --- remote chip resolves to a synced local (no network pull) ---
 
-func TestGraphEvaluatorTagsPullAfterOnCrossBranch(t *testing.T) {
-	cursor := "jjjj"
+func TestGraphEvaluatorRemoteAndLocalCoexistDispatchesPicker(t *testing.T) {
+	// Cursor row carries local `foo` (a chip) and origin/develop, whose
+	// tracking local `develop` sits off the row. Two distinct candidates →
+	// picker offering both (local + the remote's tracking local), deduped.
+	cursor := "rrrr"
 	locals := []git.Ref{
 		{ShortName: "develop", Kind: git.RefKindLocal, ObjectName: "behind", Upstream: "origin/develop"},
-		{ShortName: "feat/foo", Kind: git.RefKindLocal, ObjectName: "feattip", IsHead: true},
+		{ShortName: "foo", Kind: git.RefKindLocal, ObjectName: cursor},
+		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: "mtip", IsHead: true},
 	}
 	remotes := []git.Ref{
 		{ShortName: "origin/develop", Kind: git.RefKindRemote, ObjectName: cursor},
 	}
 	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
-	if got.kind != graphActionCheckoutAndFF || !got.pullAfter {
-		t.Errorf("cross-branch from remote chip should tag pullAfter: kind=%v pullAfter=%v", got.kind, got.pullAfter)
+	if got.kind != graphActionPicker {
+		t.Fatalf("kind = %v, want Picker (local foo + remote-derived develop)", got.kind)
+	}
+	want := []string{"develop", "foo"}
+	if !reflect.DeepEqual(got.candidates, want) {
+		t.Errorf("candidates = %v, want %v", got.candidates, want)
 	}
 }
 
-func TestGraphEvaluatorTagsPullAfterOnDwimCheckout(t *testing.T) {
-	cursor := "kkkk"
+func TestGraphEvaluatorRemoteAndSameNameLocalDedupToCheckout(t *testing.T) {
+	// origin/develop and local develop sit on the SAME commit (synced). The
+	// remote maps onto "develop", which the local chip already supplies —
+	// deduped to one candidate, so no picker: a plain checkout of develop.
+	cursor := "ssss"
 	locals := []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: "maintip", IsHead: true},
+		{ShortName: "develop", Kind: git.RefKindLocal, ObjectName: cursor, Upstream: "origin/develop"},
+		{ShortName: "feat/foo", Kind: git.RefKindLocal, ObjectName: "ftip", IsHead: true},
 	}
 	remotes := []git.Ref{
-		{ShortName: "origin/feat/new", Kind: git.RefKindRemote, ObjectName: cursor},
+		{ShortName: "origin/develop", Kind: git.RefKindRemote, ObjectName: cursor},
 	}
 	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
-	if got.kind != graphActionCheckout || !got.pullAfter {
-		t.Errorf("dwim checkout from remote chip should tag pullAfter: kind=%v pullAfter=%v", got.kind, got.pullAfter)
+	if got.kind != graphActionCheckout {
+		t.Errorf("kind = %v, want Checkout (origin/develop + local develop dedup)", got.kind)
 	}
-}
-
-func TestGraphEvaluatorTagsPullAfterOnFFWhenRemoteChip(t *testing.T) {
-	cursor := "iiii"
-	headTip := "aaaa"
-	locals := []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true, Upstream: "origin/main"},
-	}
-	remotes := []git.Ref{
-		{ShortName: "origin/main", Kind: git.RefKindRemote, ObjectName: cursor},
-	}
-	stubAdvances(t, map[string]int{headTip + "->" + cursor: 5})
-	got := runGraphEvaluatorWithRemotes(t, cursor, locals, remotes)
-	if got.kind != graphActionFF || !got.pullAfter {
-		t.Errorf("FF reached via remote chip should tag pullAfter: kind=%v pullAfter=%v", got.kind, got.pullAfter)
-	}
-}
-
-func TestGraphEvaluatorNoPullAfterOnPlainFFOrLocalChip(t *testing.T) {
-	// Plain commit ahead of HEAD, no remote chip → FF without pull.
-	headTip := "aaaa"
-	locals := []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: headTip, IsHead: true},
-	}
-	stubAdvances(t, map[string]int{headTip + "->" + "eeee": 3})
-	got := runGraphEvaluator(t, "eeee", locals)
-	if got.kind != graphActionFF || got.pullAfter {
-		t.Errorf("plain FF should not tag pullAfter: kind=%v pullAfter=%v", got.kind, got.pullAfter)
-	}
-	// Local chip checkout → no pull.
-	locals = []git.Ref{
-		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: "aaaa", IsHead: true},
-		{ShortName: "feat", Kind: git.RefKindLocal, ObjectName: "ffff"},
-	}
-	got = runGraphEvaluator(t, "ffff", locals)
-	if got.kind != graphActionCheckout || got.pullAfter {
-		t.Errorf("local-chip checkout should not tag pullAfter: kind=%v pullAfter=%v", got.kind, got.pullAfter)
+	if got.branch != "develop" {
+		t.Errorf("branch = %q, want develop", got.branch)
 	}
 }

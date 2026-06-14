@@ -115,16 +115,12 @@ func TestModelCheckoutConfirmStashDispatchesChain(t *testing.T) {
 			})
 			m.mode = viewModeCheckoutConfirm
 			m.pendingCheckout = variant.p
-			m.pullAfterAction = true
 
 			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 			m = updated.(Model)
 
 			if m.mode != viewModeNormal {
 				t.Errorf("mode = %v, want viewModeNormal", m.mode)
-			}
-			if !m.pullAfterAction {
-				t.Error("[s] must not clear pullAfterAction — the retry carries the pull chain")
 			}
 			if cmd == nil {
 				t.Fatal("[s] should dispatch the stash retry cmd")
@@ -224,7 +220,6 @@ func TestModelStashFailedMsgKillsChain(t *testing.T) {
 	m = updated.(Model)
 	m.checkoutInFlight = true
 	m.ffInFlight = true
-	m.pullAfterAction = true
 	m.pendingCheckout = pendingCheckout{ref: "feat"}
 	m.stashNotice = "develop"
 
@@ -234,9 +229,9 @@ func TestModelStashFailedMsgKillsChain(t *testing.T) {
 	if cmd != nil {
 		t.Error("stash failure should not dispatch a follow-up cmd")
 	}
-	if m.checkoutInFlight || m.ffInFlight || m.pullAfterAction {
-		t.Errorf("gates should clear (checkout=%v ff=%v pullAfter=%v)",
-			m.checkoutInFlight, m.ffInFlight, m.pullAfterAction)
+	if m.checkoutInFlight || m.ffInFlight {
+		t.Errorf("gates should clear (checkout=%v ff=%v)",
+			m.checkoutInFlight, m.ffInFlight)
 	}
 	if (m.pendingCheckout != pendingCheckout{}) {
 		t.Errorf("pendingCheckout = %+v, want zero", m.pendingCheckout)
@@ -249,21 +244,20 @@ func TestModelStashFailedMsgKillsChain(t *testing.T) {
 	}
 }
 
-// TestModelStashCarriesPullAfterChain asserts the remote-chip Enter's
-// pull-after arm survives the dirty-tree detour when the user picks `s`:
-// the retried checkout's success must still chain the pull.
-func TestModelStashCarriesPullAfterChain(t *testing.T) {
+// TestModelStashRetriesCheckoutOnContinue asserts the dirty-tree detour's
+// `s` (stash & continue) replays the interrupted checkout: the retry runs
+// and lands on the target branch.
+func TestModelStashRetriesCheckoutOnContinue(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
-	m.pullAfterAction = true
 	m.checkoutInFlight = true
 	m.pendingCheckout = pendingCheckout{ref: "develop"}
 
 	updated, _ = m.Update(checkoutNeedsCleanTreeMsg{ref: "develop"})
 	m = updated.(Model)
-	if !m.pullAfterAction {
-		t.Fatal("detour should keep pullAfterAction armed")
+	if m.mode != viewModeCheckoutConfirm {
+		t.Fatal("needs-clean-tree should open the confirm modal")
 	}
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
@@ -271,19 +265,16 @@ func TestModelStashCarriesPullAfterChain(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("[s] should dispatch the stash retry cmd")
 	}
-	if !m.pullAfterAction {
-		t.Fatal("[s] should carry pullAfterAction into the retry")
+	if m.pendingCheckout != (pendingCheckout{ref: "develop"}) {
+		t.Errorf("pendingCheckout = %+v, want retained for the retry", m.pendingCheckout)
 	}
 
 	updated, cmd = m.Update(checkoutSucceededMsg{ref: "develop"})
 	m = updated.(Model)
-	if !m.pullInFlight {
-		t.Error("retry success should chain the pull")
-	}
-	if !strings.Contains(m.status, "pulling…") {
-		t.Errorf("status = %q, want the chained pull surfaced", m.status)
+	if !strings.Contains(m.status, "checkout: develop") {
+		t.Errorf("status = %q, want the checkout outcome", m.status)
 	}
 	if cmd == nil {
-		t.Fatal("retry success should return reload+pull batch")
+		t.Fatal("retry success should dispatch reload")
 	}
 }

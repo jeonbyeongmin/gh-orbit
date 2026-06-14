@@ -15,8 +15,8 @@ func TestPRDiffID(t *testing.T) {
 	}
 }
 
-// prReviewOpen presses `O` on browsePRFixture's PR-bearing cursor row so the
-// overlay is in PR-review mode (reviewPRNumber=42, prAction=none) for the
+// prReviewOpen presses `enter` on browsePRFixture's PR-bearing cursor row so
+// the overlay is in PR-review mode (reviewPRNumber=42, prAction=none) for the
 // sub-state tests. The diff load is stubbed but never executed here.
 func prReviewOpen(t *testing.T) Model {
 	t.Helper()
@@ -24,11 +24,11 @@ func prReviewOpen(t *testing.T) Model {
 	t.Cleanup(func() { prDiffExec = prev })
 	prDiffExec = func(_ context.Context, _ string, _ int) (string, error) { return "", nil }
 	m := browsePRFixture(t)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	return updated.(Model)
 }
 
-// O on a PR-badged cursor row opens the patch overlay in PR-review mode and
+// enter on a PR-badged cursor row opens the patch overlay in PR-review mode and
 // dispatches the PR diff under the synthetic pr/<n> id.
 func TestPRReviewOpenFromCursorRow(t *testing.T) {
 	prev := prDiffExec
@@ -40,7 +40,7 @@ func TestPRReviewOpenFromCursorRow(t *testing.T) {
 	}
 
 	m := browsePRFixture(t)
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if m.mode != viewModeDiffWindow {
 		t.Fatalf("mode = %v, want viewModeDiffWindow", m.mode)
@@ -52,7 +52,7 @@ func TestPRReviewOpenFromCursorRow(t *testing.T) {
 		t.Errorf("prAction = %v, want none on open", m.prAction)
 	}
 	if cmd == nil {
-		t.Fatal("O should dispatch loadPRDiffCmd")
+		t.Fatal("enter should dispatch loadPRDiffCmd")
 	}
 	msg := cmd()
 	if gotNumber != 42 {
@@ -67,13 +67,33 @@ func TestPRReviewOpenFromCursorRow(t *testing.T) {
 	}
 }
 
-// O without a PR-bearing chip reports instead of opening an empty overlay.
+// A PR review launched from the graph (`enter`) must keep the Graph tab
+// active — the breadcrumb reads reviewReturnMode, not just reviewPRNumber.
+// Regression: currentPageIndex used to return Worktree for any PR overlay,
+// so graph `enter` lit the wrong tab.
+func TestPRReviewFromGraphKeepsGraphTab(t *testing.T) {
+	prev := prDiffExec
+	t.Cleanup(func() { prDiffExec = prev })
+	prDiffExec = func(_ context.Context, _ string, _ int) (string, error) { return "", nil }
+
+	m := browsePRFixture(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.mode != viewModeDiffWindow || m.reviewPRNumber == 0 {
+		t.Fatalf("enter should open the PR review overlay; mode=%v pr=%d", m.mode, m.reviewPRNumber)
+	}
+	if got := m.currentPageIndex(); got != 0 {
+		t.Errorf("graph-launched PR review should keep the Graph tab active, got page %d", got)
+	}
+}
+
+// enter without a PR-bearing chip reports instead of opening an empty overlay.
 func TestPRReviewOpenWithoutPRReports(t *testing.T) {
 	m := rebaseFixture(t)
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if cmd != nil {
-		t.Fatal("O without a PR-bearing chip should not dispatch")
+		t.Fatal("enter without a PR-bearing chip should not dispatch")
 	}
 	if m.mode == viewModeDiffWindow {
 		t.Error("mode should stay out of the overlay when no PR is on the cursor row")

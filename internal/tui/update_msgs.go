@@ -364,7 +364,7 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pullAfterAction = false
 		m.ffInFlight = false
 		m.pendingCheckout = pendingCheckout{}
-		log.Printf("graph enter: ff failed: %v", msg.err)
+		log.Printf("graph space: ff failed: %v", msg.err)
 		m.status = "fast-forward failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		m = m.consumeStashNotice()
@@ -544,16 +544,6 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pushInFlight = false
 		m.status = "push failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
-		return m, nil
-
-	case browseFailedMsg:
-		m.status = "browse failed: " + firstLine(msg.err.Error())
-		m.statusStyle = statusErrS
-		return m, nil
-
-	case prBrowseOpenedMsg:
-		m.status = fmt.Sprintf("opened PR #%d on GitHub", msg.number)
-		m.statusStyle = statusOkS
 		return m, nil
 	}
 	return m, nil

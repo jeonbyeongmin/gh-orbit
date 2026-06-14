@@ -39,7 +39,7 @@ func seedRefs(t *testing.T, m Model, refs []git.Ref) Model {
 	return updated.(Model)
 }
 
-func TestGraphEnterDispatchesEvaluator(t *testing.T) {
+func TestGraphSpaceDispatchesEvaluator(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -48,21 +48,21 @@ func TestGraphEnterDispatchesEvaluator(t *testing.T) {
 		{ShortName: "main", Kind: git.RefKindLocal, ObjectName: "abc1234", IsHead: true},
 	})
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	m = updated.(Model)
 
 	if !m.actionInFlight {
-		t.Error("graph Enter should latch actionInFlight")
+		t.Error("graph space should latch actionInFlight")
 	}
 	if !strings.Contains(m.status, "resolving") {
 		t.Errorf("status = %q, want it to mention resolving", m.status)
 	}
 	if cmd == nil {
-		t.Error("graph Enter should return a cmd (the evaluator)")
+		t.Error("graph space should return a cmd (the evaluator)")
 	}
 }
 
-func TestGraphEnterSwallowedWhileActionInFlight(t *testing.T) {
+func TestGraphSpaceSwallowedWhileActionInFlight(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -73,29 +73,29 @@ func TestGraphEnterSwallowedWhileActionInFlight(t *testing.T) {
 	m.actionInFlight = true
 	m.status = "→ resolving…"
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	if cmd != nil {
-		t.Error("second Enter while resolving should return nil cmd")
+		t.Error("second space while resolving should return nil cmd")
 	}
 }
 
-func TestGraphEnterRefusesWithoutRefsLoaded(t *testing.T) {
+func TestGraphSpaceRefusesWithoutRefsLoaded(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	m = seedGraphCursor(t, m, "abc1234")
 	// No seedRefs — refs.byKind[0] is empty.
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	m = updated.(Model)
 	if m.actionInFlight {
-		t.Error("Enter should not latch actionInFlight without refs")
+		t.Error("space should not latch actionInFlight without refs")
 	}
 	if !strings.Contains(m.status, "refs not loaded") {
 		t.Errorf("status = %q, want 'refs not loaded'", m.status)
 	}
 	if cmd != nil {
-		t.Error("Enter should return nil cmd without refs")
+		t.Error("space should return nil cmd without refs")
 	}
 }
 

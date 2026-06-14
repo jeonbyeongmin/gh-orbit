@@ -41,13 +41,13 @@ var (
 		entries: []helpEntry{
 			{"j/k", "nav"},
 			{"g/G", "top/bot"},
-			{"enter", "checkout / ff / detach"},
+			{"space", "checkout / ff / detach"},
+			{"enter", "review PR"},
 			{"R", "rebase onto cursor"},
 			{"c", "cherry-pick cursor"},
 			{"v", "revert cursor"},
 			{"x", "reset to cursor"},
 			{"n", "new branch @ cursor"},
-			{"o", "open PR on GitHub"},
 			{"→", "open diff"},
 			{"[/]", "prev/next page"},
 			{"y", "copy hash"},
@@ -74,8 +74,8 @@ var (
 		title: "Worktree",
 		entries: []helpEntry{
 			{"j/k", "nav"},
-			{"enter", "switch"},
-			{"O", "review PR"},
+			{"space", "switch"},
+			{"enter", "review PR"},
 			{"a", "add"},
 			{"d", "remove"},
 			{"s", "sort"},
@@ -112,7 +112,7 @@ var (
 			{"←", "close"},
 		},
 	}
-	// helpPRReview — extra actions while the diff page shows a PR (opened with O).
+	// helpPRReview — extra actions while the diff page shows a PR (opened with enter).
 	helpPRReview = helpCategory{
 		title: "PR Review",
 		entries: []helpEntry{

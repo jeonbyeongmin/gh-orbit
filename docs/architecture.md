@@ -22,7 +22,7 @@ Graph dot vocabulary: `●` regular commit · `○` merge commit (2+ parents —
 └──────────────────────────────────────────────────────────┘
 ```
 
-The Worktree page is one step away in the cycle (`tab` from Graph) — j/k/enter/a/d/s route to its cursor while it owns the screen (see [worktrees.md](worktrees.md)); `tab` / `shift+tab` move on to the next / previous page rather than closing it. Local Changes is the other neighbor (`shift+tab` from Graph). Fetch is throttled by terminal focus events (60s) so an alt-tab burst can't saturate `git fetch`.
+The Worktree page is one step away in the cycle (`tab` from Graph) — j/k/space/enter/a/d/s route to its cursor while it owns the screen (see [worktrees.md](worktrees.md)); `tab` / `shift+tab` move on to the next / previous page rather than closing it. Local Changes is the other neighbor (`shift+tab` from Graph). Fetch is throttled by terminal focus events (60s) so an alt-tab burst can't saturate `git fetch`.
 
 The full-screen `d` patch overlay is where commit diffs live (entire `git show -p` body), opened on top of the base layout and closed with `esc`. Inside the overlay, `[` / `]` jump to the previous / next `diff --git` header so a 20-file patch reads as 20 ordered chapters instead of one long scroll. The bottom hint surfaces `<path> [N/M]` so the reviewer always knows which file the cursor is in.
 
@@ -38,7 +38,7 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `j` / `k`      | graph  | navigate the commit list                                                            |
 | `g` / `G`      | graph  | jump to top / bottom                                                                |
 | `b`            | global | open branches modal (delete-branch entry) — see [branches.md](branches.md)          |
-| `enter`        | graph  | context-aware: checkout / FF / detach — see [checkout.md](checkout.md)              |
+| `space`        | graph  | context-aware: checkout / FF / detach — see [checkout.md](checkout.md)              |
 | `y`            | graph  | copy the focused commit's full hash to clipboard                                    |
 | `d`            | graph  | open the focused commit's full patch overlay                                        |
 | `F`            | global | `git fetch --all` in background                                                     |
@@ -53,10 +53,9 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `v`            | graph  | revert cursor commit (confirm-first; history-preserving; conflicts → terminal)      |
 | `x`            | graph  | reset current branch to cursor (soft/mixed/hard; pushed-history → revert)           |
 | `n`            | graph  | create branch at cursor + switch (name input modal)                                |
-| `o`            | graph  | open the cursor row's open PR on GitHub (`gh pr view --web`; badge rows only)       |
-| `O`            | graph  | pull the cursor row's open PR diff into the patch overlay to review — see [pr-review.md](pr-review.md) |
+| `enter`        | graph  | pull the cursor row's open PR diff into the patch overlay to review — see [pr-review.md](pr-review.md) |
 
-Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `[` / `]` / `esc`. `[` jumps to the previous file header, `]` to the next; both are no-ops past the first / last file (no wrap — surprise jumps make the cockpit harder to read, not easier). When the overlay was opened with `O` to review a PR (`reviewPRNumber != 0`), `a` (approve) / `m` (merge) open a centered confirm dialog composed over the dimmed diff — see [pr-review.md](pr-review.md). The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md).
+Patch overlay (`d`) accepts only `j` / `k` / `pgup` / `pgdn` / `[` / `]` / `esc`. `[` jumps to the previous file header, `]` to the next; both are no-ops past the first / last file (no wrap — surprise jumps make the cockpit harder to read, not easier). When the overlay was opened with `enter` to review a PR (`reviewPRNumber != 0`), `a` (approve) / `m` (merge) open a centered confirm dialog composed over the dimmed diff — see [pr-review.md](pr-review.md). The dirty-tree checkout-confirm prompt has its own gated keymap (see [checkout.md](checkout.md)). The worktree add-input and remove-confirm sub-modals gate their own keymaps — see [worktrees.md](worktrees.md).
 
 `?` toggles an inline help reference panel that grows out of the footer of **whichever page is showing** (it's a `helpOpen` flag orthogonal to the page mode, not a `viewMode` — `showsHelp()` gates it to the bare page modes). The panel lays the keys into side-by-side columns, scoped to the current page (`helpCategoriesFor`): the graph page shows `Global` / `Graph` / `Sync`, the worktree page `Global` / `Worktree`, the local-changes page `Global` / `Local Changes`. Only `Global` (`?` / `^C ^C` / `tab` cycle) is cross-page; everything else is reachable only from its own page, so the panel never advertises a key that does nothing where you are. Reference, not modal — every shortcut keeps working while it is open, and a second `?` collapses it. The panel reserves `helpReservedRows()` rows (the tallest column's height for that page, clamped to ≤ half the screen and never starving the page below 3 rows), so the page shrinks by that much while it's open. Narrow terminals that can't fit the columns fall back to the stacked one-row-per-category layout.
 

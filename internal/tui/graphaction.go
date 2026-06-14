@@ -193,7 +193,7 @@ func evaluateGraphActionCmd(dir, hash string, locals, remotes []git.Ref) tea.Cmd
 		// alphabetically first matching local — picker for cross-branch is
 		// out of scope (rare; refs panel `p` still works for explicit choice).
 		if crossBranch := findCrossBranchTarget(hash, locals, remotes, headBranch); crossBranch != "" {
-			log.Printf("graph enter: checkout+ff (%s → %s)", crossBranch, shortHash(hash))
+			log.Printf("graph space: checkout+ff (%s → %s)", crossBranch, shortHash(hash))
 			return graphActionMsg{hash: hash, kind: graphActionCheckoutAndFF, branch: crossBranch, pullAfter: true}
 		}
 
@@ -203,27 +203,27 @@ func evaluateGraphActionCmd(dir, hash string, locals, remotes []git.Ref) tea.Cmd
 		// at the remote's tip, which equals the cursor commit, so no FF is
 		// needed afterward.
 		if newLocal := findRemoteCheckoutTarget(hash, locals, remotes); newLocal != "" {
-			log.Printf("graph enter: checkout (dwim from remote → %s)", newLocal)
+			log.Printf("graph space: checkout (dwim from remote → %s)", newLocal)
 			return graphActionMsg{hash: hash, kind: graphActionCheckout, branch: newLocal, pullAfter: true}
 		}
 
 		if headBranch == "" || headHash == "" {
-			log.Printf("graph enter: detach (no HEAD branch in locals; HEAD likely detached)")
+			log.Printf("graph space: detach (no HEAD branch in locals; HEAD likely detached)")
 			return graphActionMsg{hash: hash, kind: graphActionDetach}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), checkoutTimeout)
 		defer cancel()
 		advance, err := countAheadExec(ctx, dir, headHash, hash)
 		if err != nil {
-			log.Printf("graph enter: detach (rev-list --count %s..%s failed: %v)", shortHash(headHash), shortHash(hash), err)
+			log.Printf("graph space: detach (rev-list --count %s..%s failed: %v)", shortHash(headHash), shortHash(hash), err)
 			return graphActionMsg{hash: hash, kind: graphActionDetach}
 		}
 		if advance == 0 {
-			log.Printf("graph enter: detach (advance=0; %s..%s — cursor not strictly ahead of HEAD %s)",
+			log.Printf("graph space: detach (advance=0; %s..%s — cursor not strictly ahead of HEAD %s)",
 				shortHash(headHash), shortHash(hash), headBranch)
 			return graphActionMsg{hash: hash, kind: graphActionDetach}
 		}
-		log.Printf("graph enter: ff (%s +%d, %s..%s)",
+		log.Printf("graph space: ff (%s +%d, %s..%s)",
 			headBranch, advance, shortHash(headHash), shortHash(hash))
 		return graphActionMsg{hash: hash, kind: graphActionFF, branch: headBranch, advance: advance, pullAfter: hasRemoteChip}
 	}

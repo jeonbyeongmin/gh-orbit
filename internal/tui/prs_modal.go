@@ -1,8 +1,8 @@
 // PR list modal: viewModePRsModal hosts a centered overlay listing every open
 // PR `gh pr list` returned — including PRs whose head branch isn't checked out
-// locally, which the `O` cursor path can't reach. `l` opens it from
+// locally, which the cursor `enter` path can't reach. `l` opens it from
 // viewModeNormal; `enter` pulls the cursor PR's diff into the same review
-// overlay `O` uses (beginPRReviewFor), so approve / merge work identically.
+// overlay (beginPRReviewFor), so approve / merge work identically.
 // The data is m.prList — prs.go's prListCmd already loads it for the chip
 // badges; this surface only owns its own cursor.
 package tui
@@ -55,7 +55,7 @@ func (m Model) prsModalMoveCursor(delta int) Model {
 }
 
 // prsModalEnter closes the modal and opens the cursor PR in the review
-// overlay — the same overlay `O` uses, via the shared beginPRReviewFor.
+// overlay — the same overlay graph `enter` uses, via the shared beginPRReviewFor.
 func (m Model) prsModalEnter() (Model, tea.Cmd) {
 	if m.prsModal.cursor < 0 || m.prsModal.cursor >= len(m.prList) {
 		return m, nil

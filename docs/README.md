@@ -11,7 +11,7 @@ Reading order for a new contributor:
 2. [git-wrappers.md](git-wrappers.md) — how the TUI talks to git.
 3. [config.md](config.md) — where logs and prefs go.
 4. [checkout.md](checkout.md) — the largest behavioral surface
-   (refs/graph `enter`, `p`, dirty-tree, fast-forward).
+   (graph `space`, `p`, dirty-tree, fast-forward).
 5. [branches.md](branches.md) — `n` / `d` / `m` branch lifecycle
    modals.
 

@@ -1,4 +1,4 @@
-// PR review pane: `O` on a PR-badged graph row pulls that PR's diff into the
+// PR review pane: `enter` on a PR-badged graph row pulls that PR's diff into the
 // same full-screen patch overlay the commit diff uses (viewModeDiffWindow),
 // then approve / merge run inline without leaving the cockpit. The cockpit is
 // a gh extension, so the gh CLI is guaranteed present; non-GitHub remotes /
@@ -19,11 +19,17 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
+
+// browseTimeout bounds the gh review subprocesses (approve / merge / comment).
+const browseTimeout = 15 * time.Second
 
 // prAction is the inline confirm sub-state inside the PR diff overlay. None is
 // the plain "reading the diff" state; approve / merge arm the matching confirm
@@ -191,6 +197,23 @@ func mergePRCmd(dir string, number int, strategy string) tea.Cmd {
 	}
 }
 
+// prForCursorRow resolves the cursor row's chips against the open-PR map
+// — the same matching chipDisplay uses, so `enter` works exactly where a
+// badge is visible.
+func (m Model) prForCursorRow() (prInfo, bool) {
+	c, ok := m.graph.Selected()
+	if !ok {
+		return prInfo{}, false
+	}
+	refs, _ := git.ParseDecoration(c.RefNames)
+	for _, chip := range git.MergeLocalRemotePairs(refs) {
+		if pr, ok := prForChip(chip, m.prs); ok {
+			return pr, true
+		}
+	}
+	return prInfo{}, false
+}
+
 // beginPRReview opens the PR diff overlay for the cursor row's open PR — the
 // same PR the row's `#N` badge names, resolved by the shared prForCursorRow.
 // Mirrors the `d` commit-overlay handler (update_keys.go): bump diffReqID,
@@ -207,7 +230,7 @@ func (m Model) beginPRReview() (Model, tea.Cmd) {
 }
 
 // beginPRReviewFor opens the PR diff overlay for an explicit PR number — the
-// shared core behind both `O` (cursor row, via beginPRReview) and the `l` PR
+// shared core behind both `enter` (cursor row, via beginPRReview) and the `l` PR
 // list modal (prsModalEnter). Bumps diffReqID, arms the synthetic patch load,
 // sizes the viewport, dispatches the diff fetch.
 func (m Model) beginPRReviewFor(number int) (Model, tea.Cmd) {

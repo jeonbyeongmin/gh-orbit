@@ -575,7 +575,7 @@ func (m Model) worktreesModalRemove() (Model, tea.Cmd) {
 }
 
 // worktreesModalReviewPR opens the cursor worktree's open PR in the review
-// overlay — the same beginPRReviewFor path graph `O` and the `l` modal use.
+// overlay — the same beginPRReviewFor path graph `enter` and the `l` modal use.
 // reviewFromWorktrees is armed so the overlay returns to the dashboard on
 // close / merge (the review-and-compare loop). A worktree whose branch has no
 // open PR reports on the status line instead of opening an empty overlay.

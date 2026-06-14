@@ -28,6 +28,20 @@ func pressRune(t *testing.T, m Model, r rune) (Model, tea.Cmd) {
 	return updated.(Model), cmd
 }
 
+// pressTab / pressShiftTab dispatch the page-cycle keys. From the graph,
+// tab advances to the Worktree page and shift+tab to Local Changes.
+func pressTab(t *testing.T, m Model) (Model, tea.Cmd) {
+	t.Helper()
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	return updated.(Model), cmd
+}
+
+func pressShiftTab(t *testing.T, m Model) (Model, tea.Cmd) {
+	t.Helper()
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	return updated.(Model), cmd
+}
+
 // TestDKeyOnGraphFocusOpensPatchOverlay locks in the graph-focus `d`
 // override: instead of triggering a delete, it loads the patch overlay
 // for the commit under the graph cursor. The branches modal's `d` is a

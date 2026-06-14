@@ -11,18 +11,19 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
-// TestLocalChangesQExits — q exits the local changes view like `,` / esc do.
-// Quitting is still ctrl+c twice, so q must not arm quit.
-func TestLocalChangesQExits(t *testing.T) {
+// TestLocalChangesQIsNoOp — q no longer exits the local changes page (page
+// nav is the tab cycle only); it stays put and must not arm quit (quitting is
+// still ctrl+c twice).
+func TestLocalChangesQIsNoOp(t *testing.T) {
 	m := initSized(t)
-	m, _ = pressRune(t, m, ',')
+	m, _ = pressShiftTab(t, m)
 	if m.mode != viewModeLocalChanges {
 		t.Fatalf("setup: mode = %v, want viewModeLocalChanges", m.mode)
 	}
 
 	m, _ = pressRune(t, m, 'q')
-	if m.mode != viewModeNormal {
-		t.Errorf("q should exit local changes, got mode %v", m.mode)
+	if m.mode != viewModeLocalChanges {
+		t.Errorf("q should be a no-op on local changes, got mode %v", m.mode)
 	}
 	if m.quitArmed {
 		t.Errorf("q must not arm quit")
@@ -258,7 +259,7 @@ func TestLocalChangesDrillDownEnterEsc(t *testing.T) {
 	// Single-pane drill-down (tab toggle retired): enter descends tree →
 	// diff, esc climbs back to the tree without exiting the mode.
 	m := initSized(t)
-	m, _ = pressRune(t, m, ',')
+	m, _ = pressShiftTab(t, m)
 	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "f.txt", WorktreeState: 'M'}})
 	if m.localChanges.Focused() != paneLCTree {
 		t.Fatalf("setup: want tree focus, got %d", m.localChanges.Focused())
@@ -280,19 +281,20 @@ func TestLocalChangesDrillDownEnterEsc(t *testing.T) {
 	}
 }
 
-func TestLocalChangesEscFromTreeExits(t *testing.T) {
-	// esc is back-stack: from the tree (the top of the stack) it exits the
-	// mode entirely, mirroring q / `,`.
+func TestLocalChangesEscFromTreeIsNoOp(t *testing.T) {
+	// esc only climbs the diff → tree sub-stack; from the tree (the top of the
+	// stack) it is inert. There is no esc/q page exit — the tab cycle owns
+	// leaving the page.
 	m := initSized(t)
-	m, _ = pressRune(t, m, ',')
+	m, _ = pressShiftTab(t, m)
 	if m.mode != viewModeLocalChanges {
 		t.Fatalf("setup: mode = %v, want viewModeLocalChanges", m.mode)
 	}
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Fatalf("esc from tree should exit, got mode %v", m.mode)
+	if m.mode != viewModeLocalChanges {
+		t.Fatalf("esc from tree should be a no-op, got mode %v", m.mode)
 	}
 }
 
@@ -312,7 +314,7 @@ func TestLocalChangesDiffAutoReturnsWhenSideGone(t *testing.T) {
 	// side; the next status reload carries no unstaged entry for it, so focus
 	// drops back to the tree (the chosen auto-return behavior).
 	m := initSized(t)
-	m, _ = pressRune(t, m, ',')
+	m, _ = pressShiftTab(t, m)
 	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "f.txt", WorktreeState: 'M'}})
 	m = enterDiff(t, m)
 
@@ -330,7 +332,7 @@ func TestLocalChangesDiffReloadPinsViewedFileOnDrift(t *testing.T) {
 	// order shifts — otherwise the index-only clamp drifts the cursor onto a
 	// different file and the pane loads the wrong diff.
 	m := initSized(t)
-	m, _ = pressRune(t, m, ',')
+	m, _ = pressShiftTab(t, m)
 	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{
 		{Path: "a.txt", WorktreeState: 'M'},
 		{Path: "b.txt", WorktreeState: 'M'},
@@ -358,7 +360,7 @@ func TestLocalChangesDiffStaysWhenSideRemains(t *testing.T) {
 	// Partial stage: the unstaged side still has changes, so the diff pane
 	// stays open across the reload.
 	m := initSized(t)
-	m, _ = pressRune(t, m, ',')
+	m, _ = pressShiftTab(t, m)
 	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "f.txt", WorktreeState: 'M'}})
 	m = enterDiff(t, m)
 

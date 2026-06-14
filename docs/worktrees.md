@@ -1,16 +1,18 @@
 # worktrees
 
 Multi-worktree is a first-class cockpit concept. The shape it's built
-for: work is in flight on worktree A; the user presses `w` to open the
-full-screen worktree dashboard, picks worktree B, hits `enter` to
+for: work is in flight on worktree A; the user presses `tab` to reach the
+full-screen Worktree page, picks worktree B, hits `enter` to
 switch — all in-process, no second terminal, no disturbance to whatever
 is running on the other tree.
 
-`w` replaces the graph with the dashboard — the same graph-swapping seam
+The Worktree page replaces the graph — the same graph-swapping seam
 Local Changes uses (`isWorktreesSurface()` routes `main` in `View()`),
 not a centered overlay. It renders one **3-line card** per worktree from
 `git worktree list --porcelain`, so every tree's branch, PR/CI state, and
-last activity read at once. `esc` (or `w` again) returns to the graph.
+last activity read at once. It is a sibling page in the `tab` / `shift+tab`
+cycle (Graph → Worktree → Local Changes); there is no esc/q exit — `tab`
+moves on to Local Changes, `shift+tab` back to the graph.
 
 ## Card layout
 
@@ -28,7 +30,7 @@ Layout (N=2 example, full terminal width; the card renderer lives in
      ~/project/gh-orbit/.claude/worktrees/feat+sort-by-last-commit
      docs(worktrees): re-anchor the keep-priority list
 
-[j/k] navigate · [enter] switch · [O] review PR · [a] add · [d] remove · [s] sort · [esc] close
+[j/k] navigate · [enter] switch · [O] review PR · [a] add · [d] remove · [s] sort · [tab] page
 ```
 
 The 2-col gutter carries two independent signals: the cursor bar `▌`
@@ -69,20 +71,21 @@ each row's `worktreeDirty` / `worktreeTimedOut` / `worktreeLastCommit`.
 
 ## Worktrees dashboard (`viewModeWorktreesModal`)
 
-The cursor surface for worktree actions. Opened by the global `w`
-keybind from `viewModeNormal`; `w` again or `esc` returns to the graph.
+The cursor surface for worktree actions. Reached as a page in the
+`tab` / `shift+tab` cycle (`tab` from the graph); `tab` advances to Local
+Changes and `shift+tab` returns to the graph — there is no esc/q exit.
 (The `Modal` in `viewModeWorktreesModal` is a historical artifact from
-when it was a centered overlay — it's a full-screen view now.)
+when it was a centered overlay — it's a full-screen page now.)
 
-| Key       | Action                                                              |
-| --------- | ------------------------------------------------------------------- |
-| `j` / `k` | move cursor within the list (bounded; no wrap)                      |
-| `enter`   | switch to the worktree under the cursor (returns to the graph)      |
-| `O`       | review the cursor worktree's open PR (no-op + status if none)       |
-| `a`       | open the add-worktree input sub-modal                               |
-| `d`       | open the remove-worktree confirm sub-modal (refuses main + current entry) |
-| `s`       | toggle last-commit sort (main pinned, rest newest-first)            |
-| `esc` / `w` | close (cursor + sort reset)                                       |
+| Key         | Action                                                            |
+| ----------- | ----------------------------------------------------------------- |
+| `j` / `k`   | move cursor within the list (bounded; no wrap)                    |
+| `enter`     | switch to the worktree under the cursor (returns to the graph)    |
+| `O`         | review the cursor worktree's open PR (no-op + status if none)     |
+| `a`         | open the add-worktree input sub-modal                             |
+| `d`         | open the remove-worktree confirm sub-modal (refuses main + current entry) |
+| `s`         | toggle last-commit sort (main pinned, rest newest-first)          |
+| `tab` / `⇧tab` | cycle to the next / previous page                              |
 
 Visual cues:
 
@@ -105,15 +108,18 @@ the same worktree across the reorder, so the highlight doesn't jump.
 
 The sort is a **snapshot** of the cache at keypress: rows don't re-jump
 as the dirty fan-out trickles in. A later `r` reload (or re-toggle)
-picks up fresh times. It's **session-local** — closing the modal
-(`esc` / `w`) zeroes `worktreesModalState`, so the next open starts in
-natural order again (no config persistence). While the sort is on, a
-`↓time` tag rides next to the `[Worktrees]` header label.
+picks up fresh times. It's **session-local** — the preference persists
+across page switches (the cycle no longer zeroes `worktreesModalState`)
+but is not written to config, so a fresh session starts in natural order
+again. While the sort is on, a `↓time` tag rides next to the
+`[Worktrees]` header label.
 
-Opening lands the cursor on the current worktree row if found, else
-on row 0. Empty inventory rejects entry with a status line and stays
-in `viewModeNormal`. While the dashboard is open it owns every key (the
-standard modal contract) — global shortcuts resume on close.
+Entering lands the cursor on the current worktree row if found, else
+on row 0. An empty inventory still lands on the page — it renders a
+`(no worktrees loaded yet)` body rather than refusing entry, so the
+cycle never gets stuck. While the page owns the screen it owns every key
+(the global shortcuts route to its cursor); only the `tab` / `shift+tab`
+cycle and `^C` quit pass through.
 
 ### Review a PR from a card (`O`)
 

@@ -320,10 +320,10 @@ func TestWorktreesModalEnterDispatchesSwitch(t *testing.T) {
 		{Path: "/r/feat", Branch: "feat"},
 	}, "/r/main")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	if m.mode != viewModeWorktreesModal {
-		t.Fatalf("w should open the worktrees modal, mode = %v", m.mode)
+		t.Fatalf("tab should open the worktree page, mode = %v", m.mode)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m = updated.(Model)
@@ -357,7 +357,7 @@ func TestWorktreesModalDOpensRemoveConfirm(t *testing.T) {
 		{Path: "/r/feat", Branch: "feat"},
 	}, "/r/main")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m = updated.(Model)
@@ -386,7 +386,7 @@ func TestWorktreesModalDOnCurrentRejects(t *testing.T) {
 		{Path: "/r/feat", Branch: "feat"},
 	}, "/r/feat")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)
@@ -411,7 +411,7 @@ func TestWorktreesModalDOnMainRejects(t *testing.T) {
 		{Path: "/r/main", Branch: "main", IsMain: true},
 	}, "/r/main")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)
@@ -439,7 +439,7 @@ func TestWorktreesModalDOnMainFromLinkedRejects(t *testing.T) {
 		{Path: "/r/feat", Branch: "feat"},
 	}, "/r/feat")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	m = updated.(Model)
@@ -464,7 +464,7 @@ func TestWorktreesModalAOpensAddInput(t *testing.T) {
 		{Path: "/r/main", Branch: "main", IsMain: true},
 	}, "/r/main")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	m = updated.(Model)
@@ -473,9 +473,10 @@ func TestWorktreesModalAOpensAddInput(t *testing.T) {
 	}
 }
 
-// TestWorktreesModalToggleOnOff — `w` opens the modal; a second
-// `w` closes it and resets the cursor.
-func TestWorktreesModalToggleOnOff(t *testing.T) {
+// TestWorktreesTabCycle — tab cycles graph → worktree → local changes →
+// graph. The worktree page no longer toggles closed on its own key; tab
+// just advances, and the cursor/sort state carries across (no reset).
+func TestWorktreesTabCycle(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -485,30 +486,34 @@ func TestWorktreesModalToggleOnOff(t *testing.T) {
 		{Path: "/r/feat", Branch: "feat"},
 	}, "/r/main")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
-	m = updated.(Model)
+	m, _ = pressTab(t, m)
 	if m.mode != viewModeWorktreesModal {
-		t.Fatalf("first w should open the worktrees modal, mode = %v", m.mode)
+		t.Fatalf("tab from graph should open the worktree page, mode = %v", m.mode)
 	}
-	// Move cursor so we can check the reset on toggle off.
+	// Move the cursor; tab to the next page must not reset it.
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m = updated.(Model)
 	if m.worktreesModal.cursor != 1 {
 		t.Fatalf("j should move cursor to 1, cursor = %d", m.worktreesModal.cursor)
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
-	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("second w should close the modal, mode = %v", m.mode)
+
+	m, _ = pressTab(t, m)
+	if m.mode != viewModeLocalChanges {
+		t.Fatalf("tab from worktree should advance to local changes, mode = %v", m.mode)
 	}
-	if m.worktreesModal != (worktreesModalState{}) {
-		t.Errorf("toggle off should reset worktreesModal, got %+v", m.worktreesModal)
+	if m.worktreesModal.cursor != 1 {
+		t.Errorf("page switch must not reset worktreesModal cursor, got %d", m.worktreesModal.cursor)
+	}
+
+	m, _ = pressTab(t, m)
+	if m.mode != viewModeNormal {
+		t.Errorf("tab from local changes should return to the graph, mode = %v", m.mode)
 	}
 }
 
-// TestWorktreesModalEscCloses — `esc` closes the modal with the
-// cursor reset.
-func TestWorktreesModalEscCloses(t *testing.T) {
+// TestWorktreesEscIsNoOp — esc no longer exits the worktree page (page nav is
+// the tab cycle only); it stays put. q is likewise inert.
+func TestWorktreesEscIsNoOp(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
@@ -518,17 +523,18 @@ func TestWorktreesModalEscCloses(t *testing.T) {
 		{Path: "/r/feat", Branch: "feat"},
 	}, "/r/main")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
-	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	m = updated.(Model)
+	m, _ = pressTab(t, m)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("esc should close the modal, mode = %v", m.mode)
+	if m.mode != viewModeWorktreesModal {
+		t.Errorf("esc should be a no-op on the worktree page, mode = %v", m.mode)
 	}
-	if m.worktreesModal != (worktreesModalState{}) {
-		t.Errorf("esc should reset worktreesModal, got %+v", m.worktreesModal)
+	m, _ = pressRune(t, m, 'q')
+	if m.mode != viewModeWorktreesModal {
+		t.Errorf("q should be a no-op on the worktree page, mode = %v", m.mode)
+	}
+	if m.quitArmed {
+		t.Errorf("q must not arm quit")
 	}
 }
 
@@ -545,7 +551,7 @@ func TestWorktreesModalCursorStartsOnCurrent(t *testing.T) {
 		{Path: "/r/qa", Branch: "qa"},
 	}, "/r/feat")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	if m.worktreesModal.cursor != 1 {
 		t.Errorf("cursor should start on /r/feat (index 1), got %d", m.worktreesModal.cursor)
@@ -564,7 +570,7 @@ func TestWorktreesModalJKBoundedClamp(t *testing.T) {
 		{Path: "/r/feat", Branch: "feat"},
 	}, "/r/main")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(Model)
 	// j j j → still 1 (last row), no wrap.
 	for i := 0; i < 3; i++ {

@@ -17,7 +17,7 @@ import (
 
 // TestPaneSizesShrinkWhenHelpExpanded: the `?` reference is an inline panel
 // that grows out of the footer, so it reserves helpReservedRows() bottom rows
-// and the graph shrinks by that much (minus the 1 row normal mode already
+// and the page shrinks by that much (minus the 1 row normal mode already
 // reserves for the collapsed hint).
 func TestPaneSizesShrinkWhenHelpExpanded(t *testing.T) {
 	m := New()
@@ -25,42 +25,45 @@ func TestPaneSizesShrinkWhenHelpExpanded(t *testing.T) {
 	m = updated.(Model)
 
 	normal := m.paneSizes()
-	m.mode = viewModeHelp
+	m.helpOpen = true
 	expanded := m.paneSizes()
 
 	wantDelta := m.helpReservedRows() - 1
 	if gotDelta := normal.graphH - expanded.graphH; gotDelta != wantDelta {
-		t.Errorf("graph delta on viewModeHelp = %d, want %d (helpReservedRows - 1)",
+		t.Errorf("graph delta with help open = %d, want %d (helpReservedRows - 1)",
 			gotDelta, wantDelta)
 	}
 }
 
-func TestHelpToggleEntersAndExitsMode(t *testing.T) {
+func TestHelpToggleEntersAndExits(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	m = updated.(Model)
-	if m.mode != viewModeHelp {
-		t.Fatalf("? should enter viewModeHelp, got %v", m.mode)
+	if !m.helpOpen {
+		t.Fatalf("? should open the help panel")
+	}
+	if m.mode != viewModeNormal {
+		t.Fatalf("? must stay on the current page (graph), got mode %v", m.mode)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("second ? should exit viewModeHelp, got %v", m.mode)
+	if m.helpOpen {
+		t.Errorf("second ? should close the help panel")
 	}
 }
 
-func TestHelpModeKeysPassThrough(t *testing.T) {
+func TestHelpKeysPassThrough(t *testing.T) {
 	// The inline panel is a reference, not a modal — shortcuts keep working
 	// while it is open so the user can act on what they read. F dispatches a
 	// fetch; a second `?` toggles the panel closed.
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
-	m.mode = viewModeHelp
+	m.helpOpen = true
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
 	m = updated.(Model)
@@ -73,8 +76,8 @@ func TestHelpModeKeysPassThrough(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("second ? should toggle the panel closed to viewModeNormal, got %v", m.mode)
+	if m.helpOpen {
+		t.Errorf("second ? should toggle the panel closed")
 	}
 }
 
@@ -111,12 +114,12 @@ func TestHelpToggleClosesViaSecondQuestionMark(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
-	m.mode = viewModeHelp
+	m.helpOpen = true
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	m = updated.(Model)
-	if m.mode != viewModeNormal {
-		t.Errorf("? in help mode should close panel, got mode=%v", m.mode)
+	if m.helpOpen {
+		t.Errorf("? with the panel open should close it")
 	}
 }
 
@@ -137,15 +140,19 @@ func TestHelpExpandedShowsColumns(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
-	m.mode = viewModeHelp
+	m.helpOpen = true
 
-	// In help mode the bottom region IS the column reference (inline, not a
-	// modal), so renderHelpStatus itself carries all three category titles.
+	// With help open the bottom region IS the column reference (inline, not a
+	// modal), so renderHelpStatus carries the graph page's category titles
+	// (Global + Graph + Sync) — and not the unrelated Local Changes one.
 	got := m.renderHelpStatus()
-	for _, want := range []string{"Global", "Graph", "Local Changes"} {
+	for _, want := range []string{"Global", "Graph", "Sync"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("help-mode bottom panel missing category title %q\n--- panel ---\n%s", want, got)
+			t.Errorf("graph help panel missing category title %q\n--- panel ---\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "Local Changes") {
+		t.Errorf("graph help panel should not show the Local Changes category\n--- panel ---\n%s", got)
 	}
 }
 

@@ -35,10 +35,10 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | --- | --- |
 | 커밋 그래프 (실행 시) | `git log --all --graph --oneline --decorate` |
 | `→` patch 오버레이 + `[` / `]` | `git show -p <commit>` 을 파일 단위로 |
-| `,` Local Changes + `space` | `git status` + `git diff` + `git add` / `git restore --staged` |
+| Local Changes (`tab` cycle) + `space` | `git status` + `git diff` + `git add` / `git restore --staged` |
 | `[` / `]` + `space` (diff 패널) | hunk 단위 `git apply --cached` (`--reverse` 로 unstage) |
 | `space` (체크아웃 / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
-| `w` worktree (전환 / 추가 / 제거) | `git worktree list` / `add` / `remove` |
+| `tab` → Worktrees (전환 / 추가 / 제거) | `git worktree list` / `add` / `remove` |
 | `b` → `d` (브랜치 삭제) | `git branch -d <branch>` |
 | `c` / `R` | `git cherry-pick <commit>` / `git rebase <onto>` |
 | `v` / `x` | `git revert <commit>` / `git reset --soft\|--mixed\|--hard <commit>` |
@@ -54,6 +54,8 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 
 ### 커밋 그래프
 
+<img src="./docs/assets/commit-graph.gif" alt="commit graph" width="800">
+
 - 실행 시 모든 로컬 브랜치·리모트·태그를 하나로 묶은 통합 그래프 (`--all`).
 - 점 어휘: `●` 커밋 · `○` 머지 · `◉` HEAD. 레인 색상은 8색 팔레트를 순환한다.
 - 각 행은 `그래프 │ 메시지(칩 + 제목) │ 작성자 │ 작성 시각` 으로 읽힌다. 시각은 오른쪽 끝에 고정되어 항상 보이고, 메시지 열이 truncation 을 흡수하며 제목이 1 cell 밑으로 줄기 전에 칩·작성자가 그 순서로 빠진다.
@@ -62,12 +64,16 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 
 ### diff 리뷰
 
+<img src="./docs/assets/diff-review.gif" alt="diff review" width="800">
+
 - `→` 는 focus 커밋의 전체 patch(`git show -p`)를 전체 화면 오버레이로 연다.
 - `[` / `]` 는 패치 안에서 파일을 오가고, 하단에 `<path> [N/M]` 이 표시된다.
-- `,` 는 Local Changes 를 연다 — 워킹 트리 diff(파일 트리 + diff 패널)를 Conflicts / Unstaged / Staged 로 나눈다. `space` 로 focus 파일 stage/unstage, `tab` 으로 트리 ↔ diff focus 순환, `r` 로 reload.
+- **Local Changes** 페이지(`tab` / `shift+tab` 순환에 포함)는 워킹 트리 diff(파일 트리 + diff 패널)를 Conflicts / Unstaged / Staged 로 나눈다. `→` 로 diff 패널에 들어가고, `←` 로 트리로 돌아가며, `space` 로 focus 파일 stage/unstage, `r` 로 reload.
 - hunk 단위 staging: `tab` 으로 diff 패널에 들어가 `[` / `]` 로 hunk 사이를 이동하고(선택된 `@@` 헤더가 강조됨), `space` 로 그 hunk 만 stage(`git apply --cached`) — staged 항목을 보고 있으면 unstage. untracked / conflict 파일은 트리에서 파일 전체로 stage.
 
 ### Pull requests (`enter` / `m` / Pull Requests 탭)
+
+<img src="./docs/assets/pull-requests.gif" alt="pull requests" width="800">
 
 리뷰는 GitHub 에서 일어난다; 코크핏은 거기로 점프시키고 PR 을 머지한다.
 
@@ -75,9 +81,11 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 - `m` 은 커서 행의 열린 PR 을 중앙 confirm 다이얼로그로 머지한다 — `[s]` squash · `[m]` merge · `[r]` rebase(`gh pr merge`). 머지하면 다이얼로그가 닫히며 PR 배지를 갱신하고, gh 에러(머지 불가, 로그아웃된 `gh`)는 상태 줄에 표시된다.
 - **Pull Requests 탭**(`tab` / `shift+tab` 순환의 마지막)은 모든 열린 PR 을 나열한다 — 로컬에 체크아웃되지 않아 그래프 커서가 닿지 못하는 head 브랜치의 PR 까지 포함한다. 행은 `#N <CI 글리프> 제목 · 작성자` 로 읽히고, `enter` 는 커서 행을 웹에서 열고, `m` 은 머지하며, `r` 은 목록을 갱신한다.
 
-### worktree (`w`)
+### worktree (`tab`)
 
-- `w` 는 전체화면 대시보드를 연다 — worktree 당 3줄 카드(브랜치 + PR/CI + dirty/시각 · 경로 · 마지막 커밋) 로 모든 트리 상태를 한눈에 본다. `esc` 로 그래프로 돌아간다.
+<img src="./docs/assets/worktrees.gif" alt="worktrees dashboard" width="800">
+
+- `tab` 은 전체화면 대시보드로 순환 이동한다 — worktree 당 3줄 카드(브랜치 + PR/CI + dirty/시각 · 경로 · 마지막 커밋) 로 모든 트리 상태를 한눈에 본다. `tab` / `shift+tab` 으로 다음 / 이전 페이지로 이동한다.
 - `space` 는 UI 전체를 다른 worktree 로 프로세스 내부에서 전환한다. `enter` 는 그 worktree 의 열린 PR 을 브라우저의 GitHub 에서 연다 — 각 에이전트의 PR 을 웹에서 리뷰하고, 그래프 / Pull Requests 탭에서 `m` 으로 머지한다.
 - `a` 로 worktree 추가(형제 경로 자동 도출), `d` 로 제거(dirty/locked 는 force 확인), `s` 로 마지막 커밋 시각순 정렬.
 - 각 카드에 열린 PR `#N` + CI 배지(있을 때), upstream 대비 `↑a↓b`(ahead/behind), `●N` dirty 마커(`N` = 변경 파일 수), worktree HEAD 의 마지막 커밋 제목·상대 시각이 표시된다.
@@ -85,7 +93,9 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 
 ### 브랜치 & 체크아웃
 
-- 그래프에서 `space` 는 커서의 칩 상태와 HEAD 관계로 체크아웃 / fast-forward / detach 를 고른다. 모호한 행은 브랜치 피커를 열고, 리모트-칩 행은 `git pull` 을 이어 붙인다.
+<img src="./docs/assets/branches.gif" alt="branches and checkout" width="800">
+
+- 그래프에서 `space` 는 커서의 칩 상태와 HEAD 관계로 체크아웃 / fast-forward / detach 를 고른다. 모호한 행은 브랜치 피커를 연다.
 - 체크아웃이 깨끗한 트리를 요구하면 `s` 로 stash 후 계속, `a` / `esc` 로 중단한다.
 - `n` 은 커서에 브랜치를 만들고 전환한다.
 - `b` 는 로컬 브랜치를 나열하고 `d` 로 커서 브랜치를 삭제한다(HEAD 보호).
@@ -101,7 +111,7 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 
 - `F` fetch(`git fetch --all`) · `p` pull(strategy 해석) · `P` push(첫 push 는 upstream 설정; 절대 force 안 함).
 - `y` 는 커밋 해시 복사 · `r` 은 refs + log reload.
-- `?` 는 인라인 help 패널을 토글한다(Global / Graph / Local Changes 컬럼).
+- `?` 는 현재 페이지 기준의 인라인 help 패널을 토글한다(Global + 그 페이지 키 컬럼).
 
 ## 키 바인딩
 
@@ -114,10 +124,10 @@ git 저장소 안에서 `gh orbit` 을 실행한다.
 | `m` | 그래프 | 커서 행의 열린 PR 머지 (`s`/`m`/`r` 전략) |
 | `[` / `]` | 패치 | 이전 / 다음 파일로 점프 |
 | `enter` / `m` | pull requests | 웹에서 열기 / 커서 PR 머지 |
-| `,` | 전역 | Local Changes 뷰 |
+| `tab` / `⇧tab` | 전역 | 페이지 순환 (그래프 · worktree · local changes · pull requests) |
 | `space` | local changes | focus 파일 stage / unstage (diff 패널에선 hunk) |
 | `[` / `]` | local changes diff | 이전 / 다음 hunk |
-| `w` / `b` | 전역 | worktree 대시보드 / 브랜치 모달 |
+| `b` | 전역 | 브랜치 모달 |
 | `c` / `R` / `v` / `x` | 그래프 | cherry-pick / rebase / revert / reset |
 | `n` | 그래프 | 커서에 브랜치 생성 + 전환 |
 | `F` / `p` / `P` | 전역 | fetch / pull / push |

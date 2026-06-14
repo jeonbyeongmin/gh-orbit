@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -416,6 +417,12 @@ func newGraphModel() graphModel {
 	l.SetFilteringEnabled(false)
 	l.DisableQuitKeybindings()
 	l.SetShowFilter(false)
+	// Page paging moves off the arrow keys onto `[`/`]` (pgup/pgdn kept):
+	// the arrows now drive the patch overlay (→ open, ← close), mirroring the
+	// local-changes tree↔diff arrows. Dropping left/h/right/l/d from the page
+	// bindings also frees `d` so its handleNormalKey case can retire.
+	l.KeyMap.PrevPage = key.NewBinding(key.WithKeys("[", "pgup"))
+	l.KeyMap.NextPage = key.NewBinding(key.WithKeys("]", "pgdown"))
 	return graphModel{list: l, delegate: d, headRowIndex: -1}
 }
 

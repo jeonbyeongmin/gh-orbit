@@ -1,6 +1,6 @@
 // Package tui hosts the Bubble Tea models, panes, and key bindings for the
-// full-screen commit graph plus its overlay modals. The
-// per-commit diff lives in the full-screen `d` patch overlay.
+// full-screen commit graph plus its overlay modals. The per-commit diff
+// lives in the in-page diff view opened with `→`.
 package tui
 
 import (
@@ -50,9 +50,10 @@ const refsAllSentinel = "--all"
 // refsLoadedMsg can never accidentally collide.
 const pendingHEADSentinel = "<pending>"
 
-// viewMode toggles between the 3-pane layout and the full-screen patch overlay
-// that `d` opens. graph cursor state is preserved across the toggle so esc
-// returns the user to exactly where they were.
+// viewMode selects which page owns the screen — the graph, the worktree /
+// local-changes pages, or the in-page diff view that `→` opens. graph cursor
+// state is preserved across the diff toggle so `←` returns the user to exactly
+// where they were.
 type viewMode int
 
 const (
@@ -549,9 +550,6 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.width, m.height = msg.Width, msg.Height
 		m.applyPaneSizes()
-		if m.mode == viewModeDiffWindow {
-			m.diff.SetPatchViewportSize(m.width, m.height-1)
-		}
 		return m, nil
 
 	case statusClearTickMsg:
@@ -702,6 +700,11 @@ func (m *Model) applyPaneSizes() {
 	m.graph.SetSize(s.graphW, s.graphH)
 	if m.mode == viewModeLocalChanges {
 		m.localChanges.SetSize(s.lcTreeW, s.lcTreeH, s.lcDiffW, s.lcDiffH)
+	}
+	if m.mode == viewModeDiffWindow {
+		// The patch shares the graph's content box; -1 height leaves a row for
+		// the in-box file header (PatchView prepends it, like the LC diff).
+		m.diff.SetPatchViewportSize(s.graphW, s.graphH-1)
 	}
 }
 
@@ -1042,8 +1045,9 @@ func (m Model) paneSizes() paneSizes {
 	if m.showsHelp() {
 		helpReserved = m.helpReservedRows()
 	}
-	// pageTabsRows reserves the top breadcrumb row; it shows on every page
-	// (the diff overlay returns before paneSizes, so it isn't affected).
+	// pageTabsRows reserves the top breadcrumb row; it shows on every page,
+	// including the diff page (which now renders inside the page chrome
+	// rather than returning early as a full-screen overlay).
 	mainH := m.height - helpReserved - pageTabsRows
 	if mainH < 1 {
 		mainH = 1
@@ -1084,7 +1088,7 @@ func (m Model) paneSizes() paneSizes {
 // header), clamped so the graph keeps priority: never more than half the
 // screen, and never so tall that the main area drops below 3 rows. Floor: 1.
 func (m Model) helpReservedRows() int {
-	want := lipgloss.Height(renderHelpColumns(helpCategoriesFor(m.currentPageIndex())))
+	want := lipgloss.Height(renderHelpColumns(m.currentHelpCategories()))
 	want = max(min(want, m.height/2), 3)
 	// Keep ≥3 main rows after BOTH the help panel and the breadcrumb row are
 	// carved off (paneSizes subtracts pageTabsRows too) — without the
@@ -1201,43 +1205,6 @@ func renderModalBox(inner string) string {
 	return modalBoxStyle.Render(inner)
 }
 
-// diffOverlayHintBase is the keymap half of the bottom hint shown inside
-// the patch overlay. The current-file half (path + N/M) is prepended at
-// render time by renderDiffOverlayHint when files() is non-empty.
-const diffOverlayHintBase = "j/k scroll · pgup/pgdn page · [ ] file · esc close"
-
-// renderDiffOverlayHint builds the patch-overlay bottom line. For commits
-// with at least one file boundary it leads with `<path> [N/M] · `; for
-// empty diffs (merge commits) it falls back to the bare keymap so the
-// line doesn't read as " [0/0]". When the path makes the line overflow
-// the terminal width, the path is truncated from its left so the file
-// name (the discriminating tail) survives.
-func (m Model) renderDiffOverlayHint() string {
-	path, idx, total := m.diff.CurrentFile()
-	if total == 0 || path == "" {
-		return fitHelpLine(diffOverlayHintBase, m.width)
-	}
-	prefix := fmt.Sprintf("%s [%d/%d] · ", path, idx, total)
-	full := prefix + diffOverlayHintBase
-	if lipgloss.Width(full) <= m.width {
-		return help.Render(full)
-	}
-	// Path overflows. Reserve room for the suffix + `…[N/M] · ` ellipsis
-	// pad, then truncate the path from the left so the basename survives.
-	tail := fmt.Sprintf(" [%d/%d] · ", idx, total) + diffOverlayHintBase
-	budget := m.width - lipgloss.Width(tail) - 1
-	if budget < 4 {
-		return fitHelpLine(diffOverlayHintBase, m.width)
-	}
-	for i := 0; i < len(path); i++ {
-		candidate := "…" + path[i:]
-		if lipgloss.Width(candidate) <= budget {
-			return help.Render(candidate + tail)
-		}
-	}
-	return fitHelpLine(diffOverlayHintBase, m.width)
-}
-
 // confirmPromptS reuses the busy color and adds bold so the modal prompt
 // reads as "active dialog" rather than "an error just landed".
 var confirmPromptS = statusBusyS.Bold(true)
@@ -1246,24 +1213,15 @@ func (m Model) View() string {
 	if m.width == 0 {
 		return "starting…"
 	}
-	if m.mode == viewModeDiffWindow {
-		hint := m.renderDiffOverlayHint()
-		if m.reviewPRNumber != 0 {
-			hint = m.renderPRReviewHint()
-		}
-		diffBase := lipgloss.JoinVertical(lipgloss.Left, m.diff.PatchView(), hint)
-		// An armed approve / merge confirm is a centered dialog composed over
-		// the diff itself (not the graph) — the diff dims behind the box so
-		// the reviewer keeps it in view while deciding.
-		if m.reviewPRNumber != 0 && m.prAction != prActionNone {
-			return composeOverlay(diffBase, renderModalBox(m.renderPRActionConfirmInner()), m.width, m.height)
-		}
-		return diffBase
-	}
 	s := m.paneSizes()
 
 	var main string
 	switch {
+	case m.mode == viewModeDiffWindow:
+		// The commit / PR-review patch now lives inside the page box — tabs
+		// above, keymap hint below — instead of a chrome-less full-screen
+		// overlay, mirroring the local-changes diff pane.
+		main = boxStyle(true).Width(s.graphW).Height(s.graphH).Render(m.diff.PatchView())
 	case m.mode == viewModeLocalChanges:
 		// Drill-down: render only the focused pane, full-screen. `enter`
 		// descends tree → diff; `esc` climbs back (see handleLocalChangesKey).
@@ -1281,7 +1239,16 @@ func (m Model) View() string {
 	default:
 		main = boxStyle(m.focused == paneGraph).Width(s.graphW).Height(s.graphH).Render(m.graph.View())
 	}
-	base := lipgloss.JoinVertical(lipgloss.Left, m.renderPageTabs(), main, m.renderHelpStatus())
+	// The diff page swaps the help/status line for its own keymap hint
+	// (scroll · file · close); PR review shows its action keymap instead.
+	// The commit diff page shares the local-changes diff's footer — `? help`,
+	// expanding into the panel — with the file/hunk position carried by the
+	// in-box header instead. A PR-review diff keeps its action keymap there.
+	bottom := m.renderHelpStatus()
+	if m.mode == viewModeDiffWindow && m.reviewPRNumber != 0 && !m.showsHelp() {
+		bottom = m.renderPRReviewHint()
+	}
+	base := lipgloss.JoinVertical(lipgloss.Left, m.renderPageTabs(), main, bottom)
 
 	switch m.mode {
 	case viewModeBranchPicker:
@@ -1310,6 +1277,11 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderRevertConfirmInner()), m.width, m.height)
 	case viewModeResetConfirm:
 		return composeOverlay(base, renderModalBox(m.renderResetConfirmInner()), m.width, m.height)
+	}
+	// A PR-review approve/merge/comment confirm composes over the diff page,
+	// the same centered-box seam the graph-page modals use above.
+	if m.mode == viewModeDiffWindow && m.reviewPRNumber != 0 && m.prAction != prActionNone {
+		return composeOverlay(base, renderModalBox(m.renderPRActionConfirmInner()), m.width, m.height)
 	}
 	return base
 }
@@ -1353,6 +1325,10 @@ func (m Model) currentPageIndex() int {
 		return 2
 	case m.isWorktreesSurface():
 		return 1
+	case m.mode == viewModeDiffWindow && m.reviewPRNumber != 0:
+		// The PR-review patch opens from the worktree page; the plain commit
+		// patch (reviewPRNumber == 0) belongs to the graph page (default).
+		return 1
 	default:
 		return 0
 	}
@@ -1363,10 +1339,25 @@ func (m Model) currentPageIndex() int {
 // The inline help panel only shows on these.
 func (m Model) isPageMode() bool {
 	switch m.mode {
-	case viewModeNormal, viewModeWorktreesModal, viewModeLocalChanges:
+	case viewModeNormal, viewModeWorktreesModal, viewModeLocalChanges, viewModeDiffWindow:
 		return true
 	}
 	return false
+}
+
+// currentHelpCategories returns the `?` panel's columns for the current
+// screen. The diff page carries its own key set (scroll / file nav / close,
+// plus the PR-review actions) that the page-index categories don't cover, so
+// it short-circuits before helpCategoriesFor.
+func (m Model) currentHelpCategories() []helpCategory {
+	if m.mode == viewModeDiffWindow {
+		cats := []helpCategory{helpGlobal, helpDiff}
+		if m.reviewPRNumber != 0 {
+			cats = append(cats, helpPRReview)
+		}
+		return cats
+	}
+	return helpCategoriesFor(m.currentPageIndex())
 }
 
 // showsHelp reports whether the inline `?` panel is currently painted: it is
@@ -1413,7 +1404,7 @@ func (m Model) renderHelpStatus() string {
 		// Inline column reference panel, grown out of the footer over the rows
 		// helpReservedRows() carved from the current page. Shows only that
 		// page's categories (helpCategoriesFor).
-		return renderHelpExpanded(helpCategoriesFor(m.currentPageIndex()), m.width, m.helpReservedRows())
+		return renderHelpExpanded(m.currentHelpCategories(), m.width, m.helpReservedRows())
 	}
 	switch m.mode {
 	case viewModeBranchPicker, viewModeBranchesModal, viewModePRsModal,

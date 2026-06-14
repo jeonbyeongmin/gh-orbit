@@ -236,15 +236,15 @@ func TestReviewReturnModeDefaultsToGraph(t *testing.T) {
 	}
 }
 
-func TestReviewEscReturnsToDashboard(t *testing.T) {
+func TestReviewLeftReturnsToDashboard(t *testing.T) {
 	m := withModel(t, []git.Worktree{{Path: "/wt/a", Branch: "feat/x"}}, "/wt/a")
 	m.prs = map[string]prInfo{"feat/x": {Number: 42, HeadRef: "feat/x"}}
 	m.worktreesModal.cursor = 0
 	opened, _ := m.worktreesModalReviewPR()
-	updated, _ := opened.handleDiffWindowKey(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := opened.handleDiffWindowKey(tea.KeyMsg{Type: tea.KeyLeft})
 	got := updated.(Model)
 	if got.mode != viewModeWorktreesModal {
-		t.Errorf("esc from a dashboard-opened review should return to the dashboard, mode=%v", got.mode)
+		t.Errorf("← from a dashboard-opened review should return to the dashboard, mode=%v", got.mode)
 	}
 	if got.reviewReturnMode != viewModeNormal {
 		t.Error("reviewReturnMode should reset to graph on close")

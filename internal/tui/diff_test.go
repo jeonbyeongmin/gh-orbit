@@ -165,10 +165,52 @@ func TestDiffJumpToNextFileAdvancesActiveAndViewport(t *testing.T) {
 	if d.activeFile != 2 || d.viewport.YOffset != 14 {
 		t.Errorf("after ]×2, active=%d YOffset=%d, want 2 / 14 (gamma)", d.activeFile, d.viewport.YOffset)
 	}
-	// At last file — ] is a no-op (no wrap).
+	// At last file — } is a no-op (no wrap).
 	d.JumpToNextFile()
 	if d.activeFile != 2 || d.viewport.YOffset != 14 {
-		t.Errorf("] at last file leaked: active=%d YOffset=%d, want stay 2 / 14", d.activeFile, d.viewport.YOffset)
+		t.Errorf("} at last file leaked: active=%d YOffset=%d, want stay 2 / 14", d.activeFile, d.viewport.YOffset)
+	}
+}
+
+func TestPatchHeaderCarriesPathAndHunk(t *testing.T) {
+	d := newDiffModel()
+	d.SetPatchViewportSize(120, 10)
+	d.BeginPatchLoad("h", 1)
+	d.ApplyPatchLoaded(1, "h", threeFilePatch)
+
+	if h := d.patchHeader(); !strings.Contains(h, "alpha.go") || !strings.Contains(h, "[hunk 1/3]") {
+		t.Errorf("header = %q, want alpha.go + [hunk 1/3]", h)
+	}
+	// ] moves to beta's hunk; the header follows both the file and the hunk
+	// index (the file/N-M role the bottom hint used to carry).
+	d.MoveHunk(1)
+	if h := d.patchHeader(); !strings.Contains(h, "beta.go") || !strings.Contains(h, "[hunk 2/3]") {
+		t.Errorf("after MoveHunk, header = %q, want beta.go + [hunk 2/3]", h)
+	}
+}
+
+func TestMoveHunkWalksAllHunks(t *testing.T) {
+	d := newDiffModel()
+	// Viewport smaller than the patch so SetYOffset isn't clamped.
+	d.SetPatchViewportSize(80, 5)
+	d.BeginPatchLoad("h", 1)
+	d.ApplyPatchLoaded(1, "h", threeFilePatch)
+
+	// hunks sit at lines 4 (alpha), 11 (beta), 18 (gamma) — crossing file
+	// boundaries, unlike {/} which stops at each diff --git header.
+	d.MoveHunk(1)
+	if d.viewport.YOffset != 11 {
+		t.Errorf("MoveHunk(1) YOffset = %d, want 11 (beta hunk)", d.viewport.YOffset)
+	}
+	// No wrap past the last hunk.
+	d.MoveHunk(1)
+	d.MoveHunk(1)
+	if i, n := d.CurrentHunk(); i != 3 || n != 3 {
+		t.Errorf("MoveHunk past end = hunk %d/%d, want 3/3", i, n)
+	}
+	d.MoveHunk(-2)
+	if d.viewport.YOffset != 4 {
+		t.Errorf("MoveHunk(-2) YOffset = %d, want 4 (alpha hunk)", d.viewport.YOffset)
 	}
 }
 

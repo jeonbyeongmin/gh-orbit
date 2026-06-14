@@ -255,9 +255,9 @@ func TestLocalChangesSelectByPathPrefersStaged(t *testing.T) {
 	}
 }
 
-func TestLocalChangesDrillDownEnterEsc(t *testing.T) {
-	// Single-pane drill-down (tab toggle retired): enter descends tree →
-	// diff, esc climbs back to the tree without exiting the mode.
+func TestLocalChangesDrillDownArrows(t *testing.T) {
+	// Single-pane drill-down (tab toggle retired): → descends tree →
+	// diff, ← climbs back to the tree without exiting the mode.
 	m := initSized(t)
 	m, _ = pressShiftTab(t, m)
 	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "f.txt", WorktreeState: 'M'}})
@@ -265,26 +265,26 @@ func TestLocalChangesDrillDownEnterEsc(t *testing.T) {
 		t.Fatalf("setup: want tree focus, got %d", m.localChanges.Focused())
 	}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	m = updated.(Model)
 	if m.localChanges.Focused() != paneLCDiff {
-		t.Fatalf("after enter want diff, got %d", m.localChanges.Focused())
+		t.Fatalf("after → want diff, got %d", m.localChanges.Focused())
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	m = updated.(Model)
 	if m.localChanges.Focused() != paneLCTree {
-		t.Fatalf("after esc want tree, got %d", m.localChanges.Focused())
+		t.Fatalf("after ← want tree, got %d", m.localChanges.Focused())
 	}
 	if m.mode != viewModeLocalChanges {
-		t.Fatalf("esc from diff must not exit the mode, got %v", m.mode)
+		t.Fatalf("← from diff must not exit the mode, got %v", m.mode)
 	}
 }
 
-func TestLocalChangesEscFromTreeIsNoOp(t *testing.T) {
-	// esc only climbs the diff → tree sub-stack; from the tree (the top of the
-	// stack) it is inert. There is no esc/q page exit — the tab cycle owns
-	// leaving the page.
+func TestLocalChangesEscIsNoOp(t *testing.T) {
+	// esc has no binding on the local changes page: the diff → tree climb is
+	// `←`, and there is no esc/q page exit. The tab cycle owns leaving the
+	// page, so esc anywhere is inert.
 	m := initSized(t)
 	m, _ = pressShiftTab(t, m)
 	if m.mode != viewModeLocalChanges {
@@ -301,10 +301,10 @@ func TestLocalChangesEscFromTreeIsNoOp(t *testing.T) {
 // enterLocalChangesDiff helper: drill into the diff for the cursor entry.
 func enterDiff(t *testing.T, m Model) Model {
 	t.Helper()
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	m = updated.(Model)
 	if m.localChanges.Focused() != paneLCDiff {
-		t.Fatalf("setup: want diff focus after enter, got %d", m.localChanges.Focused())
+		t.Fatalf("setup: want diff focus after →, got %d", m.localChanges.Focused())
 	}
 	return m
 }

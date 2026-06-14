@@ -2,12 +2,14 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
@@ -15,15 +17,15 @@ import (
 const diffPatchTimeout = 60 * time.Second
 
 // fileBoundary pairs a 0-indexed line within patchText with the destination
-// path parsed from that `diff --git` header — the index lets `[ ` / `]`
-// jump the viewport without re-scanning, the path feeds the bottom-hint
-// "<path> [N/M]" indicator so the reviewer always knows where they are.
+// path parsed from that `diff --git` header — the index lets `{` / `}`
+// jump the viewport whole-file without re-scanning, the path feeds the
+// in-box header so the reviewer always knows which file they are reading.
 type fileBoundary struct {
 	line int
 	path string
 }
 
-// diffModel hosts the full-screen patch overlay opened with `d`.
+// diffModel hosts the in-page commit / PR diff opened with `→`.
 type diffModel struct {
 	viewport     viewport.Model
 	currentHash  string
@@ -46,6 +48,12 @@ type diffModel struct {
 	// still expects `]` / `[` to move the "current file" indicator. -1
 	// means no file is active (empty / failed / not-yet-loaded patch).
 	activeFile int
+	// hunkStarts holds the line index of every `@@` hunk header in patchText,
+	// across all files; hunkCursor indexes into it. `[`/`]` move the cursor
+	// (MoveHunk), `{`/`}` jump whole files. Mirrors localChangesModel's hunk
+	// model so the graph diff navigates like the local-changes diff.
+	hunkStarts []int
+	hunkCursor int
 	// spinnerFrame is pushed in by Model on every spinnerTickMsg so the
 	// loading placeholder animates. Only read while loadingPatch.
 	spinnerFrame int
@@ -71,7 +79,7 @@ func (d *diffModel) SetPatchViewportSize(w, h int) {
 	d.viewport.Height = h
 	d.patchViewportInit = true
 	if d.patchText != "" {
-		d.viewport.SetContent(d.patchText)
+		d.refreshPatchViewport()
 	}
 }
 
@@ -83,6 +91,8 @@ func (d *diffModel) BeginPatchLoad(hash string, reqID uint64) {
 	d.reqID = reqID
 	d.files = nil
 	d.activeFile = -1
+	d.hunkStarts = nil
+	d.hunkCursor = 0
 	d.viewport.SetContent("")
 	d.viewport.GotoTop()
 }
@@ -93,6 +103,8 @@ func (d *diffModel) ClosePatch() {
 	d.patchText = ""
 	d.files = nil
 	d.activeFile = -1
+	d.hunkStarts = nil
+	d.hunkCursor = 0
 	d.viewport.SetContent("")
 }
 
@@ -110,10 +122,12 @@ func (d *diffModel) ApplyPatchLoaded(reqID uint64, hash, text string) {
 	d.loadingPatch = false
 	d.patchText = text
 	d.files = parseFileBoundaries(text)
+	d.hunkStarts = parseHunkStarts(text)
+	d.hunkCursor = 0
 	d.resetActiveFile()
 	d.err = nil
 	if d.patchViewportInit {
-		d.viewport.SetContent(text)
+		d.refreshPatchViewport()
 		d.viewport.GotoTop()
 	}
 }
@@ -136,7 +150,76 @@ func (d *diffModel) ScrollPatch(msg tea.KeyMsg) tea.Cmd {
 	var cmd tea.Cmd
 	d.viewport, cmd = d.viewport.Update(msg)
 	d.syncActiveFileFromYOffset()
+	d.syncHunkFromYOffset()
 	return cmd
+}
+
+// MoveHunk advances the hunk cursor by delta (clamped, no wrap) and scrolls
+// the viewport to that `@@` header. The `[`/`]` counterpart to `{`/`}`'s
+// whole-file jump — mirrors localChangesModel.MoveHunk.
+func (d *diffModel) MoveHunk(delta int) {
+	if len(d.hunkStarts) == 0 {
+		return
+	}
+	d.hunkCursor += delta
+	if d.hunkCursor < 0 {
+		d.hunkCursor = 0
+	}
+	if d.hunkCursor >= len(d.hunkStarts) {
+		d.hunkCursor = len(d.hunkStarts) - 1
+	}
+	d.refreshPatchViewport()
+	d.viewport.SetYOffset(d.hunkStarts[d.hunkCursor])
+	d.syncActiveFileFromYOffset()
+}
+
+// syncHunkFromYOffset parks hunkCursor on the largest hunk header at or below
+// the current YOffset, so manual scroll / file jumps keep the `[hunk K/N]`
+// header in sync. Empty hunk list leaves the cursor at 0.
+func (d *diffModel) syncHunkFromYOffset() {
+	if len(d.hunkStarts) == 0 {
+		d.hunkCursor = 0
+		return
+	}
+	cur := d.viewport.YOffset
+	idx := 0
+	for i, s := range d.hunkStarts {
+		if s <= cur {
+			idx = i
+		} else {
+			break
+		}
+	}
+	d.hunkCursor = idx
+}
+
+// CurrentHunk returns the 1-based hunk index and total hunk count, or (0, 0)
+// when the patch has no hunks (empty / failed / merge commit).
+func (d diffModel) CurrentHunk() (index, total int) {
+	if len(d.hunkStarts) == 0 {
+		return 0, 0
+	}
+	return d.hunkCursor + 1, len(d.hunkStarts)
+}
+
+// refreshPatchViewport repaints the viewport, accenting the selected hunk's
+// `@@` header so `[`/`]` navigation is visible. Mirrors
+// localChangesModel.refreshDiffViewport.
+func (d *diffModel) refreshPatchViewport() {
+	if d.patchText == "" {
+		d.viewport.SetContent("")
+		return
+	}
+	if len(d.hunkStarts) == 0 {
+		d.viewport.SetContent(d.patchText)
+		return
+	}
+	lines := strings.Split(d.patchText, "\n")
+	sel := d.hunkStarts[d.hunkCursor]
+	if sel >= 0 && sel < len(lines) {
+		lines[sel] = lcSelectedStyle.Render(ansi.Strip(lines[sel]))
+	}
+	d.viewport.SetContent(strings.Join(lines, "\n"))
 }
 
 // JumpToNextFile advances activeFile by one and slides the viewport down
@@ -152,6 +235,8 @@ func (d *diffModel) JumpToNextFile() {
 	}
 	d.activeFile++
 	d.viewport.SetYOffset(d.files[d.activeFile].line)
+	d.syncHunkFromYOffset()
+	d.refreshPatchViewport()
 }
 
 // JumpToPrevFile retreats activeFile by one and slides the viewport up
@@ -164,6 +249,8 @@ func (d *diffModel) JumpToPrevFile() {
 	}
 	d.activeFile--
 	d.viewport.SetYOffset(d.files[d.activeFile].line)
+	d.syncHunkFromYOffset()
+	d.refreshPatchViewport()
 }
 
 // syncActiveFileFromYOffset finds the largest file boundary at or below
@@ -201,17 +288,47 @@ func (d diffModel) CurrentFile() (path string, index, total int) {
 	return d.files[d.activeFile].path, d.activeFile + 1, len(d.files)
 }
 
+// PatchView renders the in-box diff: a one-row file header (path + hunk
+// position) over the patch body. Mirrors localChangesModel.DiffView so the
+// graph diff and the local-changes diff read identically. The header is always
+// present so error / loading / empty bodies still name what's (not) shown.
 func (d diffModel) PatchView() string {
-	if d.err != nil {
-		return "error: " + firstLine(d.err.Error())
+	bodyH := d.viewport.Height
+	if bodyH < 1 {
+		bodyH = 1
 	}
-	if d.loadingPatch {
-		return loadingPane(d.viewport.Width, d.viewport.Height, d.spinnerFrame)
+	var body string
+	switch {
+	case d.err != nil:
+		body = "error: " + firstLine(d.err.Error())
+	case d.loadingPatch:
+		body = loadingPane(d.viewport.Width, bodyH, d.spinnerFrame)
+	case strings.TrimSpace(d.patchText) == "":
+		body = "(no changes)"
+	default:
+		body = d.viewport.View()
 	}
-	if strings.TrimSpace(d.patchText) == "" {
-		return "(no changes)"
+	return d.patchHeader() + "\n" + body
+}
+
+// patchHeader is the one-row title above the diff body: the current file and,
+// when the patch has hunks, the cursor's hunk position. The local-changes
+// header carries the staged/unstaged side here instead — a commit patch has no
+// side, so this shows hunk progress.
+func (d diffModel) patchHeader() string {
+	w := d.viewport.Width
+	if w < 1 {
+		w = 1
 	}
-	return d.viewport.View()
+	path, _, _ := d.CurrentFile()
+	if path == "" {
+		return lcHeaderStyle.Render(runewidth.Truncate("Diff", w, "…"))
+	}
+	label := path
+	if k, n := d.CurrentHunk(); n > 0 {
+		label = fmt.Sprintf("%s  [hunk %d/%d]", path, k, n)
+	}
+	return lcHeaderStyle.Render(runewidth.Truncate(label, w, "…"))
 }
 
 func firstLine(s string) string {

@@ -19,6 +19,11 @@ const (
 	RefKindLocal
 	RefKindRemote
 	RefKindTag
+	// RefKindStash classifies the synthetic "stash@{N}" tokens the graph
+	// injects for `git stash list` entries (`git for-each-ref` never emits
+	// these — see loadCommitsCmd). The chip renderer styles them distinctly
+	// and the graph key handler routes space / d to the stash actions.
+	RefKindStash
 )
 
 func (k RefKind) String() string {
@@ -29,6 +34,8 @@ func (k RefKind) String() string {
 		return "remote"
 	case RefKindTag:
 		return "tag"
+	case RefKindStash:
+		return "stash"
 	default:
 		return "unknown"
 	}

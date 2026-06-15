@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -488,6 +489,15 @@ type streamState struct {
 	cancel         context.CancelFunc
 	alloc          *lanes.Allocator
 	firstBatchSent bool
+	// stashByHash maps a stash commit hash → its "stash@{N}" label. Matching
+	// rows get the label appended to RefNames (git log's %D is silent on
+	// refs/stash) and their parents truncated to the first (base) parent so
+	// the index / untracked plumbing arms don't draw an octopus merge.
+	stashByHash map[string]string
+	// stashInternal holds the index / untracked-files commits (a stash's 2nd
+	// and 3rd parents). They're walked because the stash commit is a tip but
+	// dropped from the row stream — they're git's internals, not history.
+	stashInternal map[string]bool
 }
 
 // loadCommitsCmd kicks off a streaming `git log`. The first message is
@@ -503,17 +513,30 @@ type streamState struct {
 func loadCommitsCmd(dir string, refs []string, reqID uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(context.Background())
-		ch, err := git.LogStream(ctx, git.LogOptions{Dir: dir, Refs: refs})
+		// Resolve stashes first so the log walk can include the older entries
+		// (stash@{1}+) that `--all` misses — refs/stash is a single ref tip,
+		// the rest live only in its reflog. Best-effort: a stash-list failure
+		// just leaves the graph stash-free.
+		stashHashes, stashByHash, stashInternal := loadStashOverlay(ctx, dir)
+		walkRefs := refs
+		if len(stashHashes) > 0 {
+			walkRefs = make([]string, 0, len(refs)+len(stashHashes))
+			walkRefs = append(walkRefs, refs...)
+			walkRefs = append(walkRefs, stashHashes...)
+		}
+		ch, err := git.LogStream(ctx, git.LogOptions{Dir: dir, Refs: walkRefs})
 		if err != nil {
 			cancel()
 			return commitsStreamDoneMsg{reqID: reqID, err: err}
 		}
 		state := &streamState{
-			reqID:  reqID,
-			ctx:    ctx,
-			ch:     ch,
-			cancel: cancel,
-			alloc:  lanes.New(),
+			reqID:         reqID,
+			ctx:           ctx,
+			ch:            ch,
+			cancel:        cancel,
+			alloc:         lanes.New(),
+			stashByHash:   stashByHash,
+			stashInternal: stashInternal,
 		}
 		return commitsStreamStartedMsg{
 			reqID:  reqID,
@@ -521,6 +544,56 @@ func loadCommitsCmd(dir string, refs []string, reqID uint64) tea.Cmd {
 			next:   collectBatchCmd(state),
 		}
 	}
+}
+
+// stashSubject trims the conventional "On <branch>: " / "WIP on <branch>: "
+// prefix git puts on a stash reflog subject — the stash@{N} chip already
+// names the entry and the graph lane shows the base branch, so the prefix is
+// noise. Non-conventional subjects pass through untouched.
+func stashSubject(gs string) string {
+	for _, prefix := range []string{"WIP on ", "On "} {
+		if strings.HasPrefix(gs, prefix) {
+			if i := strings.Index(gs, ": "); i >= 0 {
+				return gs[i+2:]
+			}
+		}
+	}
+	return gs
+}
+
+// loadStashOverlay turns `git stash list` into the three lookups the stream
+// needs: the stash commit hashes (appended to the log walk so every entry is
+// reachable), hash → "stash@{N}" labels, and the set of index / untracked
+// plumbing commits to hide. Returns all-nil on error or an empty stash.
+func loadStashOverlay(ctx context.Context, dir string) (hashes []string, byHash map[string]string, internal map[string]bool) {
+	entries, err := git.StashList(ctx, dir)
+	if err != nil {
+		log.Printf("stash list: %v", err)
+		return nil, nil, nil
+	}
+	if len(entries) == 0 {
+		return nil, nil, nil
+	}
+	byHash = make(map[string]string, len(entries))
+	internal = make(map[string]bool, len(entries)*2)
+	for _, e := range entries {
+		if e.Hash == "" {
+			continue
+		}
+		hashes = append(hashes, e.Hash)
+		byHash[e.Hash] = e.Ref
+		// parent[0] is the base commit (real history, shared); parent[1:]
+		// are the index / untracked-files commits — git internals to hide.
+		if len(e.Parents) > 1 {
+			for _, p := range e.Parents[1:] {
+				internal[p] = true
+			}
+		}
+	}
+	if len(hashes) == 0 {
+		return nil, nil, nil
+	}
+	return hashes, byHash, internal
 }
 
 // collectBatchCmd accumulates commits from the LogStream channel until either
@@ -555,6 +628,22 @@ func collectBatchCmd(state *streamState) tea.Cmd {
 						}
 					}
 					return commitsStreamDoneMsg{reqID: state.reqID, err: ev.Err}
+				}
+				// A stash's index / untracked-files commits are walked (the
+				// stash commit is a log tip) but never shown — they're git's
+				// plumbing, not history.
+				if state.stashInternal[ev.Commit.Hash] {
+					continue
+				}
+				// Tag the stash commit with its slot label and collapse it to a
+				// single-parent node so the index / untracked arms don't draw
+				// an octopus merge.
+				if label, ok := state.stashByHash[ev.Commit.Hash]; ok {
+					ev.Commit.RefNames = append(ev.Commit.RefNames, label)
+					ev.Commit.Subject = stashSubject(ev.Commit.Subject)
+					if len(ev.Commit.Parents) > 1 {
+						ev.Commit.Parents = ev.Commit.Parents[:1]
+					}
 				}
 				pair := state.alloc.Push(ev.Commit)
 				connectorText, connectorW := renderGraphRow(pair.Connector, false)

@@ -26,6 +26,8 @@ The Worktree page is one step away in the cycle (`tab` from Graph) — ↑/↓/s
 
 The full-screen `→` patch overlay is where commit diffs live (entire `git show -p` body), opened on top of the base layout and closed with `←`. Inside the overlay, `{` / `}` jump to the previous / next `diff --git` header so a 20-file patch reads as 20 ordered chapters instead of one long scroll. The bottom hint surfaces `<path> [N/M]` so the reviewer always knows which file the cursor is in.
 
+Stashes ride in the graph too. Each `git stash list` entry renders as one `stash@{N}` row (distinct chip color) hanging off the commit it was taken on; git's internal index / untracked-files commits are walked but hidden, so a stash reads as a single node rather than an octopus merge. `space` on the row opens a pop / apply dialog, `d` a drop confirm — both reload the graph on success.
+
 ## Pane composition
 
 One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/View` trio composed in.
@@ -38,7 +40,8 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `↑` / `↓`      | graph  | navigate the commit list                                                            |
 | `g` / `G`      | graph  | jump to top / bottom                                                                |
 | `b`            | global | open branches modal (delete-branch entry) — see [branches.md](branches.md)          |
-| `space`        | graph  | context-aware: checkout / FF / detach — see [checkout.md](checkout.md)              |
+| `space`        | graph  | context-aware: checkout / FF / detach — on a stash row, opens the pop / apply dialog — see [checkout.md](checkout.md) |
+| `d`            | graph  | on a stash row, drop the stash (confirm dialog) — no-op on other rows               |
 | `y`            | graph  | copy the focused commit's full hash to clipboard                                    |
 | `→`            | graph  | open the focused commit's full patch overlay                                        |
 | `F`            | global | `git fetch --all` in background                                                     |

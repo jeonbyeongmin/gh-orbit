@@ -63,6 +63,11 @@ func ParseDecoration(tokens []string) (refs []DecoratedRef, headDetached bool) {
 			if isSymbolicRemoteHead(t) {
 				continue
 			}
+			// The graph injects a clean "stash@{N}" label for the stash tip,
+			// so drop git's raw "refs/stash" decoration to avoid a double chip.
+			if t == "refs/stash" {
+				continue
+			}
 			refs = append(refs, DecoratedRef{
 				Kind:      classifyRefName(t),
 				ShortName: t,
@@ -136,6 +141,12 @@ func MergeLocalRemotePairs(refs []DecoratedRef) []ChipRef {
 }
 
 func classifyRefName(name string) RefKind {
+	// "stash@{N}" is a synthetic token the graph injects for stash entries.
+	// Git refnames can't contain "@{", so this never collides with a real
+	// branch / remote name.
+	if strings.HasPrefix(name, "stash@{") {
+		return RefKindStash
+	}
 	if _, ok := StripRemotePrefix(name); ok {
 		return RefKindRemote
 	}

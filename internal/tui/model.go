@@ -128,6 +128,13 @@ const (
 	// mergeReturnMode records the launching page so the dialog composes over
 	// — and closes back to — the graph or the PR page.
 	viewModeMergeConfirm
+	// viewModeStashAction is the "stash@{N}: pop / apply" dialog armed by
+	// `space` on a graph stash row. It offers p (pop) / a (apply) — see
+	// handleStashActionKey.
+	viewModeStashAction
+	// viewModeStashDropConfirm is the destructive "drop stash@{N}?" confirm
+	// armed by `d` on a graph stash row.
+	viewModeStashDropConfirm
 )
 
 // pendingCheckout remembers what the user was trying to check out so the
@@ -219,6 +226,13 @@ type Model struct {
 	// runs so a second strategy key can't fork a parallel call. The busy
 	// status it sets drives the spinner via statusIsBusy.
 	mergeInFlight bool
+	// stashTarget is the "stash@{N}" slot the stash action / drop dialogs act
+	// on, captured from the graph cursor when the dialog is armed (the entry
+	// it labels can shift as other stashes pop, so the dialog pins the slot).
+	stashTarget string
+	// stashInFlight gates the stash dialogs to ctrl+c only while a pop / apply
+	// / drop runs, and joins gitMutationInFlight so no other writer races it.
+	stashInFlight bool
 	// pullInFlight gates the p key. Tracked separately from fetchInFlight so
 	// F + P can run in parallel; git's own .git/index.lock is the real
 	// serialization point.
@@ -573,6 +587,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		prMergeFailedMsg:
 		return m.updatePRActionMsg(msg)
 
+	case stashActionDoneMsg,
+		stashActionConflictMsg,
+		stashActionFailedMsg:
+		return m.updateStashMsg(msg)
+
 	case tea.FocusMsg,
 		fetchSucceededMsg,
 		fetchFailedMsg,
@@ -611,7 +630,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) gitMutationInFlight() bool {
 	return m.actionInFlight || m.checkoutInFlight || m.ffInFlight ||
 		m.rebaseInFlight || m.cherryPickInFlight || m.branchCreate.inFlight ||
-		m.pushInFlight || m.revertInFlight || m.resetInFlight
+		m.pushInFlight || m.revertInFlight || m.resetInFlight || m.stashInFlight
 }
 
 // quitArmHint is the status line shown after the first ctrl+c. Kept as a
@@ -1225,6 +1244,10 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderRevertConfirmInner()), m.width, m.height)
 	case viewModeResetConfirm:
 		return composeOverlay(base, renderModalBox(m.renderResetConfirmInner()), m.width, m.height)
+	case viewModeStashAction:
+		return composeOverlay(base, renderModalBox(m.renderStashActionInner()), m.width, m.height)
+	case viewModeStashDropConfirm:
+		return composeOverlay(base, renderModalBox(m.renderStashDropConfirmInner()), m.width, m.height)
 	}
 	return base
 }

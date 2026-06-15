@@ -60,6 +60,10 @@ var (
 				{"→", "open diff"},
 				{"y", "copy hash"},
 			},
+			{
+				{"space", "stash: pop / apply"},
+				{"d", "stash: drop"},
+			},
 		},
 	}
 	// helpSync — repo sync + the branch-list modal, reachable only from the

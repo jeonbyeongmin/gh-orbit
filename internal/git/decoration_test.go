@@ -69,6 +69,22 @@ func TestParseDecorationDropsSymbolicRemoteHead(t *testing.T) {
 	}
 }
 
+func TestParseDecorationDropsRawRefsStash(t *testing.T) {
+	// The graph injects a clean "stash@{N}" label, so git's raw "refs/stash"
+	// decoration must be dropped to avoid a double chip.
+	refs, _ := ParseDecoration([]string{"refs/stash"})
+	if len(refs) != 0 {
+		t.Errorf("refs/stash should be dropped, got %+v", refs)
+	}
+}
+
+func TestParseDecorationClassifiesStashLabel(t *testing.T) {
+	refs, _ := ParseDecoration([]string{"stash@{0}"})
+	if len(refs) != 1 || refs[0].Kind != RefKindStash || refs[0].ShortName != "stash@{0}" {
+		t.Errorf("refs = %+v, want one RefKindStash stash@{0}", refs)
+	}
+}
+
 func TestMergeLocalRemotePairsCollapses(t *testing.T) {
 	in := []DecoratedRef{
 		{Kind: RefKindLocal, ShortName: "main", IsHead: true},

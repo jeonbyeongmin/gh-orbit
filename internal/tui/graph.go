@@ -406,6 +406,14 @@ type graphModel struct {
 	// spinnerFrame is pushed in by Model on every spinnerTickMsg so the
 	// loading placeholder animates. Only read while !loaded.
 	spinnerFrame int
+
+	// restoreCursorHash pins the reviewer's place across a soft reload:
+	// MarkStaleForReload records the selected commit, and the swap/append
+	// batches re-select that row once it streams back in (it may land in a
+	// later batch than the swap). Cleared on match or stream end. Without it,
+	// fetch/reload snaps the cursor to the top. HEAD-jump reloads (checkout/
+	// pull/reset/worktree) disarm it in reloadCmd so it can't fight the jump.
+	restoreCursorHash string
 }
 
 func newGraphModel() graphModel {
@@ -705,6 +713,10 @@ func (g graphModel) Update(msg tea.Msg) (graphModel, tea.Cmd) {
 	case commitsStreamDoneMsg:
 		g.streaming = false
 		g.loaded = true
+		// Batch-less / empty / superseded stream end (a non-empty reload ends
+		// via commitsAppendedMsg{done:true} instead, cleared there). Drop the
+		// arm so it can't leak into a later load.
+		g.restoreCursorHash = ""
 		var cmd tea.Cmd
 		if g.pendingSwap {
 			// The reload finished without a single batch — the new window
@@ -768,10 +780,19 @@ func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 		g.applyGraphCap()
 		g.applyHeadDim()
 		setCmd := g.list.SetItems(items)
-		// Same cursor semantics as the hard reset: start at the top (a
-		// no-op on the fresh-load path, where the list was empty);
-		// tryHEADJump may still move it afterwards.
+		// Default to the top — correct on the fresh-load path (the list was
+		// empty) and the fallback when a reload's old cursor row hasn't
+		// streamed back in yet. restoreCursor re-pins it to the pre-reload
+		// commit when that row is already in this batch; otherwise it stays
+		// armed for a later batch. tryHEADJump may still override afterwards.
 		g.list.Select(0)
+		g.restoreCursor()
+		if m.done {
+			// Last batch of this reload — the pre-reload row never came back
+			// (e.g. rebased away). Drop the arm so it can't bleed into a later
+			// load.
+			g.restoreCursorHash = ""
+		}
 		g.loaded = true
 		g.streaming = !m.done
 		cmds := []tea.Cmd{setCmd}
@@ -798,8 +819,17 @@ func (g graphModel) handleAppended(m commitsAppendedMsg) (graphModel, tea.Cmd) {
 	g.streaming = !m.done
 
 	cmds := []tea.Cmd{setCmd}
-	if atTail {
+	switch {
+	case g.restoreCursor():
+		// The pre-reload row arrived in this later batch — pin the cursor
+		// back onto it rather than following the tail.
+	case atTail:
 		g.list.Select(len(items) - 1)
+	}
+	if m.done {
+		// Stream over; if the pre-reload row never streamed back in, drop the
+		// arm so it can't bleed into a later load.
+		g.restoreCursorHash = ""
 	}
 	if !m.done && m.next != nil {
 		cmds = append(cmds, m.next)
@@ -913,6 +943,15 @@ func (g *graphModel) MarkStaleForReload() {
 	}
 	g.pendingSwap = true
 	g.userHasMoved = false
+	// Record where the cursor sits now so the swap can put it back on the
+	// same commit — fetch/reload should keep the reviewer's place, not snap
+	// to the top. Set unconditionally: an empty stale window (loaded but no
+	// selection) must clear a prior arm, not leave it dangling.
+	if c, ok := g.Selected(); ok {
+		g.restoreCursorHash = c.Hash
+	} else {
+		g.restoreCursorHash = ""
+	}
 	// Mirror ResetForReload's dispatch-time ancestors clear: the stored
 	// set describes the old HEAD. Clearing here instead of at swap time
 	// lets the new stream's rev-list reply land before its first log
@@ -948,6 +987,7 @@ func (g *graphModel) ResetForReload() tea.Cmd {
 	g.pendingSwap = false
 	g.streaming = false
 	g.userHasMoved = false
+	g.restoreCursorHash = ""
 	g.err = nil
 	g.graphWidth = 0
 	g.delegate.graphWidth = 0
@@ -983,6 +1023,21 @@ func (g *graphModel) JumpToHash(hash string) bool {
 			g.list.Select(i)
 			return true
 		}
+	}
+	return false
+}
+
+// restoreCursor re-applies the cursor position captured at reload time. It
+// returns true once the target row exists and the cursor lands on it, after
+// which restoreCursorHash is cleared. Until the row streams in it stays armed
+// so a later batch can retry; a no-op when nothing was captured.
+func (g *graphModel) restoreCursor() bool {
+	if g.restoreCursorHash == "" {
+		return false
+	}
+	if g.JumpToHash(g.restoreCursorHash) {
+		g.restoreCursorHash = ""
+		return true
 	}
 	return false
 }

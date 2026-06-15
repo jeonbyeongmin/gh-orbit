@@ -453,6 +453,56 @@ func TestHEADJumpDefersUntilSwap(t *testing.T) {
 	}
 }
 
+// TestHEADJumpNotStolenByLateCursorRestore guards the multi-batch race: a
+// checkout arms a HEAD-jump, but the reviewer's pre-checkout cursor row streams
+// in a batch AFTER tryHEADJump already landed on HEAD. The cursor-restore must
+// be disarmed for HEAD-jump reloads, or that later batch steals the cursor back.
+func TestHEADJumpNotStolenByLateCursorRestore(t *testing.T) {
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	updated, _ = m.Update(commitsAppendedMsg{reqID: m.streamReqID, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "top0000", Subject: "old-top", AuthorTime: time.Now()}},
+		{commit: git.Commit{Hash: "xcursor", Subject: "old-cursor", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+	// Reviewer parks the cursor on xcursor (a historical row, not HEAD).
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(Model)
+	if c, _ := m.graph.Selected(); c.Hash != "xcursor" {
+		t.Fatalf("cursor before checkout = %q, want xcursor", c.Hash)
+	}
+
+	// Post-checkout shape: HEAD jump armed, soft reload in flight.
+	m.pendingHEADHash = pendingHEADSentinel
+	_ = m.reloadCmd()
+	updated, _ = m.Update(refsLoadedMsg{refs: []git.Ref{
+		{FullName: "refs/heads/feat", ShortName: "feat", Kind: git.RefKindLocal,
+			ObjectName: "headnew", IsHead: true},
+	}})
+	m = updated.(Model)
+
+	// Swap batch carries the new HEAD but not the old cursor row — the jump
+	// lands on HEAD here.
+	updated, _ = m.Update(commitsAppendedMsg{reqID: m.streamReqID, done: false, rows: []graphRow{
+		{commit: git.Commit{Hash: "headnew", Subject: "new-head", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+	if c, ok := m.graph.Selected(); !ok || c.Hash != "headnew" {
+		t.Fatalf("after swap batch cursor = %+v ok=%v, want headnew", c, ok)
+	}
+
+	// A later batch streams in the old cursor row. With the restore disarmed
+	// for the HEAD-jump reload, the cursor must stay on HEAD.
+	updated, _ = m.Update(commitsAppendedMsg{reqID: m.streamReqID, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "xcursor", Subject: "old-cursor", AuthorTime: time.Now()}},
+	}})
+	m = updated.(Model)
+	if c, _ := m.graph.Selected(); c.Hash != "headnew" {
+		t.Errorf("late batch stole the cursor to %q, want headnew (HEAD-jump must win)", c.Hash)
+	}
+}
+
 func TestSpinnerTickGatedByLoading(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

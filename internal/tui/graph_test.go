@@ -697,6 +697,97 @@ func TestGraphModelSwapClearsUserHasMovedFromStaleWindow(t *testing.T) {
 	}
 }
 
+// TestGraphModelReloadSwapPreservesCursor is the fetch/reload bug: pressing
+// F or r used to snap the cursor back to the top. The pre-reload commit must
+// stay selected when the same window streams back in within the swap batch.
+func TestGraphModelReloadSwapPreservesCursor(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	now := time.Now()
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "aaa1111", Subject: "1", AuthorTime: now}},
+		{commit: git.Commit{Hash: "bbb2222", Subject: "2", AuthorTime: now}},
+		{commit: git.Commit{Hash: "ccc3333", Subject: "3", AuthorTime: now}},
+	}})
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyDown})
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if g.list.Index() != 2 {
+		t.Fatalf("cursor before reload = %d, want 2", g.list.Index())
+	}
+
+	// Soft reload: the same window streams back in (one swap batch).
+	g.MarkStaleForReload()
+	g, _ = g.Update(commitsAppendedMsg{reqID: 2, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "aaa1111", Subject: "1", AuthorTime: now}},
+		{commit: git.Commit{Hash: "bbb2222", Subject: "2", AuthorTime: now}},
+		{commit: git.Commit{Hash: "ccc3333", Subject: "3", AuthorTime: now}},
+	}})
+
+	if c, _ := g.Selected(); c.Hash != "ccc3333" {
+		t.Errorf("reload moved cursor to %q, want ccc3333 (preserve pre-reload row)", c.Hash)
+	}
+}
+
+// TestGraphModelReloadSwapRestoresCursorFromLaterBatch mirrors the real
+// producer: the swap batch is a single-commit flush, so the cursor's row often
+// lands in a later append batch. The restore must survive across batches.
+func TestGraphModelReloadSwapRestoresCursorFromLaterBatch(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	now := time.Now()
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "aaa1111", Subject: "1", AuthorTime: now}},
+		{commit: git.Commit{Hash: "bbb2222", Subject: "2", AuthorTime: now}},
+		{commit: git.Commit{Hash: "ccc3333", Subject: "3", AuthorTime: now}},
+	}})
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyDown})
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyDown}) // cursor on ccc3333
+
+	g.MarkStaleForReload()
+	// Swap batch lacks ccc3333 — cursor falls back to the top, arm stays set.
+	g, _ = g.Update(commitsAppendedMsg{reqID: 2, done: false, rows: []graphRow{
+		{commit: git.Commit{Hash: "aaa1111", Subject: "1", AuthorTime: now}},
+	}})
+	if c, _ := g.Selected(); c.Hash != "aaa1111" {
+		t.Fatalf("swap batch cursor = %q, want aaa1111 (top fallback)", c.Hash)
+	}
+	// Later batch brings ccc3333 — restore pins the cursor back onto it.
+	g, _ = g.Update(commitsAppendedMsg{reqID: 2, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "bbb2222", Subject: "2", AuthorTime: now}},
+		{commit: git.Commit{Hash: "ccc3333", Subject: "3", AuthorTime: now}},
+	}})
+	if c, _ := g.Selected(); c.Hash != "ccc3333" {
+		t.Errorf("cursor on %q, want ccc3333 restored from later batch", c.Hash)
+	}
+}
+
+// TestGraphModelReloadFollowsCommitWhenNewRowsArriveAtTop covers fetch: newer
+// origin commits land above the cursor's row, shifting its index. The cursor
+// follows the commit, not the old index.
+func TestGraphModelReloadFollowsCommitWhenNewRowsArriveAtTop(t *testing.T) {
+	g := newGraphModel()
+	g.SetSize(80, 10)
+	now := time.Now()
+	g, _ = g.Update(commitsAppendedMsg{reqID: 1, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "bbb2222", Subject: "2", AuthorTime: now}},
+		{commit: git.Commit{Hash: "ccc3333", Subject: "3", AuthorTime: now}},
+	}})
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyDown}) // cursor on ccc3333 (index 1)
+
+	g.MarkStaleForReload()
+	g, _ = g.Update(commitsAppendedMsg{reqID: 2, done: true, rows: []graphRow{
+		{commit: git.Commit{Hash: "new0000", Subject: "0", AuthorTime: now}}, // fetched
+		{commit: git.Commit{Hash: "bbb2222", Subject: "2", AuthorTime: now}},
+		{commit: git.Commit{Hash: "ccc3333", Subject: "3", AuthorTime: now}},
+	}})
+	if c, _ := g.Selected(); c.Hash != "ccc3333" {
+		t.Errorf("cursor on %q, want ccc3333 (follow the commit past the fetched row)", c.Hash)
+	}
+	if got := g.list.Index(); got != 2 {
+		t.Errorf("cursor index = %d, want 2 (ccc3333 pushed down by fetched row)", got)
+	}
+}
+
 func TestGraphModelSwapKeepsFreshHeadAncestors(t *testing.T) {
 	g := newGraphModel()
 	g.SetSize(80, 10)

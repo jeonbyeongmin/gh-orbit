@@ -961,6 +961,14 @@ func (m *Model) reloadCmd() tea.Cmd {
 	m.streamReqID++
 	m.sidebarWorktreesReqID++
 	m.graph.MarkStaleForReload()
+	// A HEAD-jump owns the cursor for this reload — checkout/pull/reset/
+	// worktree-switch all arm pendingHEADHash before calling. Disarm the
+	// cursor-restore so the two don't fight: in a multi-batch stream the
+	// restore could otherwise steal the cursor back from the HEAD-jump in a
+	// batch that lands after tryHEADJump already consumed pendingHEADHash.
+	if m.pendingHEADHash != "" {
+		m.graph.restoreCursorHash = ""
+	}
 	m.refs.ResetForReload()
 	return tea.Batch(
 		loadCommitsCmd(m.workdir, m.currentRefs, m.streamReqID),

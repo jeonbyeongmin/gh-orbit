@@ -520,7 +520,9 @@ func loadCommitsCmd(dir string, refs []string, reqID uint64) tea.Cmd {
 		stashHashes, stashByHash, stashInternal := loadStashOverlay(ctx, dir)
 		walkRefs := refs
 		if len(stashHashes) > 0 {
-			walkRefs = append(append([]string{}, refs...), stashHashes...)
+			walkRefs = make([]string, 0, len(refs)+len(stashHashes))
+			walkRefs = append(walkRefs, refs...)
+			walkRefs = append(walkRefs, stashHashes...)
 		}
 		ch, err := git.LogStream(ctx, git.LogOptions{Dir: dir, Refs: walkRefs})
 		if err != nil {

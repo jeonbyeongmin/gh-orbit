@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -50,6 +51,17 @@ func (s PullStrategy) args() []string {
 // the "CONFLICT" marker. Callers `errors.Is(err, ErrPullConflict)` to surface
 // the resolve-in-your-terminal message instead of a raw failure string.
 var ErrPullConflict = errors.New("pull conflict")
+
+// ErrStashPopConflict marks a `git stash pop` failure where the popped
+// changes collided with the working tree. The TUI surfaces this so the user
+// knows conflict markers are present and the stash entry is preserved (git
+// keeps the slot on conflict so nothing is lost).
+var ErrStashPopConflict = errors.New("stash pop conflict")
+
+// ErrStashApplyConflict mirrors ErrStashPopConflict for `git stash apply` —
+// apply never drops, so the slot survives regardless; the sentinel only
+// signals that conflict markers landed in the tree.
+var ErrStashApplyConflict = errors.New("stash apply conflict")
 
 // ErrCheckoutNeedsCleanTree marks a `git checkout` rejection caused by a
 // dirty working tree. The TUI uses this signal to prompt the user for a
@@ -225,6 +237,119 @@ func runCheckout(ctx context.Context, dir string, args []string) error {
 // again. The entry stays in the stash — nothing pops it automatically.
 func StashPush(ctx context.Context, dir string) error {
 	return runGitWrite(ctx, dir, "git stash push", nil, "stash", "push", "--include-untracked")
+}
+
+// StashPop runs `git stash pop <ref>` — apply the entry, then drop it on
+// success. On conflict git keeps the slot and writes markers into the tree;
+// the error chain includes ErrStashPopConflict so the TUI can say "markers
+// in tree, stash kept". Other failures (no such entry, lock) wrap stderr.
+func StashPop(ctx context.Context, dir, ref string) error {
+	cmd := exec.CommandContext(ctx, "git", "stash", "pop", ref)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	return wrapMergeLikeErr("git stash pop", cmd.Run(), stdout.String(), stderr.String(), ErrStashPopConflict)
+}
+
+// StashApply runs `git stash apply <ref>` — apply without dropping. On
+// conflict the error chain includes ErrStashApplyConflict; the entry is
+// preserved either way (apply never drops).
+func StashApply(ctx context.Context, dir, ref string) error {
+	cmd := exec.CommandContext(ctx, "git", "stash", "apply", ref)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	return wrapMergeLikeErr("git stash apply", cmd.Run(), stdout.String(), stderr.String(), ErrStashApplyConflict)
+}
+
+// StashDrop runs `git stash drop <ref>` — destructive remove of a single
+// entry. No conflict mode: it either removes the slot or errors with "is not
+// a valid reference" / a lock failure.
+func StashDrop(ctx context.Context, dir, ref string) error {
+	return runGitWrite(ctx, dir, "git stash drop", nil, "stash", "drop", ref)
+}
+
+// StashEntry is one row from `git stash list`. Ref is git's slot selector
+// (e.g. "stash@{0}"); Hash is the stash commit object; Parents are its
+// parents from %P (parent[0] is the base commit the stash was taken on,
+// parent[1] is the index commit, parent[2] — when present — is the
+// untracked-files commit); Subject is the reflog subject (%gs).
+type StashEntry struct {
+	Ref     string
+	Hash    string
+	Parents []string
+	Subject string
+}
+
+// stashListFormat: %gd = reflog selector ("stash@{N}"), %H = commit hash,
+// %P = parent hashes (space-separated), %gs = reflog subject. NUL field
+// separators keep the parser stable against subjects with spaces / colons.
+const stashListFormat = "%gd%x00%H%x00%P%x00%gs"
+
+// StashList runs `git stash list --format=...` and returns one StashEntry
+// per slot, newest first (stash@{0} ahead of stash@{1}, ...). An empty stash
+// returns (nil, nil). `--format` (vs. `git for-each-ref refs/stash`, which
+// returns only the top entry) lists the full reflog history of refs/stash.
+func StashList(ctx context.Context, dir string) ([]StashEntry, error) {
+	cmd := exec.CommandContext(ctx, "git", "stash", "list", "--format="+stashListFormat)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("git stash list: start: %w", err)
+	}
+	entries, parseErr := parseStashList(stdout)
+	waitErr := cmd.Wait()
+	if waitErr != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			return nil, fmt.Errorf("git stash list: %w", waitErr)
+		}
+		return nil, fmt.Errorf("git stash list: %w: %s", waitErr, msg)
+	}
+	if parseErr != nil {
+		return nil, fmt.Errorf("git stash list: parse: %w", parseErr)
+	}
+	return entries, nil
+}
+
+func parseStashList(r io.Reader) ([]StashEntry, error) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	var out []StashEntry
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\x00")
+		if len(fields) != 4 {
+			return nil, fmt.Errorf("unexpected field count %d in %q", len(fields), line)
+		}
+		var parents []string
+		if fields[2] != "" {
+			parents = strings.Split(fields[2], " ")
+		}
+		out = append(out, StashEntry{
+			Ref:     fields[0],
+			Hash:    fields[1],
+			Parents: parents,
+			Subject: fields[3],
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // MergeFFOnly runs `git merge --ff-only <hash>`. On success the current

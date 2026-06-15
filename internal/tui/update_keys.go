@@ -72,6 +72,12 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == viewModeMergeConfirm {
 		return m.handleMergeConfirmKey(msg)
 	}
+	if m.mode == viewModeStashAction {
+		return m.handleStashActionKey(msg)
+	}
+	if m.mode == viewModeStashDropConfirm {
+		return m.handleStashDropConfirmKey(msg)
+	}
 	if m.mode == viewModeLocalChanges {
 		return m.handleLocalChangesKey(msg)
 	}
@@ -601,6 +607,12 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.graph.pendingSwap {
 			return m, nil
 		}
+		// A stash row carries no checkout target — `space` opens the pop /
+		// apply dialog instead of the checkout / FF evaluator. Checked after
+		// pendingSwap so a reload window can't arm it against a stale label.
+		if label, ok := m.cursorStashLabel(); ok {
+			return m.beginStashAction(label)
+		}
 		c, ok := m.graph.Selected()
 		if !ok {
 			return m, nil
@@ -639,6 +651,12 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Branches modal — local-branch list with cursor + `d` delete
 		// entry. Global, independent of focused pane.
 		return m.beginBranchesModal()
+	case "d":
+		// `d` drops the cursor stash (confirm-first). Non-stash rows have no
+		// `d` action — fall through to the list so default keys still work.
+		if label, ok := m.cursorStashLabel(); ok {
+			return m.beginStashDrop(label)
+		}
 	}
 	var cmd tea.Cmd
 	m.graph, cmd = m.graph.Update(msg)

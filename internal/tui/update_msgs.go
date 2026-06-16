@@ -536,6 +536,7 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// window was inactive. fetchInFlight gate avoids piling on a manual
 		// `F`; the throttle gate keeps an alt-tab burst from saturating the
 		// network.
+		m.windowFocused = true // re-enable the PR poll's gh round-trip
 		if m.fetchInFlight {
 			return m, nil
 		}

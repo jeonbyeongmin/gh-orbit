@@ -4,16 +4,18 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/mattn/go-runewidth"
 )
 
 func samplePRs() []prInfo {
 	return []prInfo{
-		{Number: 42, HeadRef: "feat-a", Title: "Add the thing", Author: "alice", Checks: prChecksPassing},
-		{Number: 41, HeadRef: "feat-b", Title: "Fix the bug", Author: "bob", Checks: prChecksFailing},
-		{Number: 40, HeadRef: "feat-c", Title: "Tidy up", Author: "carol", Checks: prChecksNone},
+		{Number: 42, HeadRef: "feat-a", BaseRef: "develop", Title: "Add the thing", Author: "alice", Checks: prChecksPassing, Review: prReviewApproved, Additions: 120, Deletions: 8, Files: 3},
+		{Number: 41, HeadRef: "feat-b", BaseRef: "develop", Title: "Fix the bug", Author: "bob", Checks: prChecksFailing, Review: prReviewChangesRequested, Conflicting: true, Additions: 4, Deletions: 2, Files: 1},
+		{Number: 40, HeadRef: "feat-c", BaseRef: "develop", Title: "Tidy up", Author: "carol", Checks: prChecksNone},
 	}
 }
 
@@ -203,33 +205,125 @@ func TestRenderPRsViewOverflowMarker(t *testing.T) {
 	}
 }
 
-func TestRenderPRRow(t *testing.T) {
-	pr := samplePRs()[0] // #42, passing, alice
-
-	plain := ansi.Strip(renderPRRow(pr, false, 76))
-	for _, want := range []string{"#42", "✓", "Add the thing", "alice"} {
-		if !strings.Contains(plain, want) {
-			t.Errorf("row %q missing %q", plain, want)
+// The ↓ marker must survive the final height clamp at heights where the card
+// math leaves no slack — (height-2) ≡ 3 (mod 4), e.g. 9 — otherwise an
+// overflowing list shows no "more below" affordance. Regresses against the
+// single-line layout that reserved marker rows.
+func TestRenderPRsViewOverflowMarkerSurvivesClamp(t *testing.T) {
+	m := initSized(t)
+	many := make([]prInfo, 0, 20)
+	for i := 0; i < 20; i++ {
+		many = append(many, prInfo{Number: 100 + i, Title: "PR", Checks: prChecksNone})
+	}
+	m.prList = many
+	m, _ = m.enterPRsPage() // cursor at 0 → only a ↓ marker, never a ↑ one
+	for _, h := range []int{9, 13} {
+		out := m.renderPRsView(60, h)
+		if lines := strings.Split(out, "\n"); len(lines) != h {
+			t.Errorf("height %d: view = %d lines, want %d", h, len(lines), h)
+		}
+		if !strings.Contains(ansi.Strip(out), "↓") {
+			t.Errorf("height %d: clipped list lost its ↓ overflow marker: %q", h, ansi.Strip(out))
 		}
 	}
-	if !strings.HasPrefix(plain, "  ") {
-		t.Errorf("unselected row should start with two spaces: %q", plain)
+}
+
+func TestBuildPRCard(t *testing.T) {
+	now := time.Now()
+	pr := samplePRs()[0] // #42, passing, approved, alice, feat-a → develop, +120 -8, 3 files
+
+	card := buildPRCard(pr, false, 76, now)
+	if len(card) != prCardLines {
+		t.Fatalf("card = %d lines, want %d", len(card), prCardLines)
+	}
+	plain := ansi.Strip(strings.Join(card, "\n"))
+	for _, want := range []string{"#42", "✓", "Add the thing", "@alice", "feat-a → develop", "● approved", "+120 -8", "3 files"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("card %q missing %q", plain, want)
+		}
+	}
+	// Unselected card carries no cursor glyphs.
+	if strings.ContainsAny(plain, "▌▶") {
+		t.Errorf("unselected card should have no cursor bar/marker: %q", plain)
 	}
 
-	if sel := ansi.Strip(renderPRRow(pr, true, 76)); !strings.HasPrefix(sel, "> ") {
-		t.Errorf("selected row should start with %q: %q", "> ", sel)
+	// Selected card shows the cursor bar + marker.
+	sel := ansi.Strip(strings.Join(buildPRCard(pr, true, 76, now), "\n"))
+	if !strings.Contains(sel, "▌") || !strings.Contains(sel, "▶") {
+		t.Errorf("selected card should show the cursor bar + marker: %q", sel)
 	}
 
-	narrow := ansi.Strip(renderPRRow(pr, false, 16))
-	if !strings.Contains(narrow, "…") {
-		t.Errorf("narrow row should be truncated with …: %q", narrow)
+	// A conflicting PR surfaces the ⚠ mark; a singular file count reads "file".
+	conflict := ansi.Strip(strings.Join(buildPRCard(samplePRs()[1], false, 76, now), "\n"))
+	if !strings.Contains(conflict, "⚠") {
+		t.Errorf("conflicting PR should show the ⚠ mark: %q", conflict)
 	}
-	if w := runewidth.StringWidth(narrow); w > 16 {
-		t.Errorf("narrow row width = %d, want <= 16: %q", w, narrow)
+	if !strings.Contains(conflict, "1 file") || strings.Contains(conflict, "1 files") {
+		t.Errorf("single changed file should read \"1 file\": %q", conflict)
 	}
 
-	noAuthor := ansi.Strip(renderPRRow(prInfo{Number: 7, Title: "Solo", Checks: prChecksNone}, false, 76))
-	if strings.Contains(noAuthor, "·") {
-		t.Errorf("row with no author should omit the separator: %q", noAuthor)
+	// Every line stays padded to exactly width — the box frame must never wrap,
+	// even at a narrow width that truncates the title.
+	for _, line := range buildPRCard(pr, true, 36, now) {
+		if w := lipgloss.Width(line); w != 36 {
+			t.Errorf("line width = %d, want 36 (padded, no overflow): %q", w, ansi.Strip(line))
+		}
+	}
+	if !strings.Contains(ansi.Strip(strings.Join(buildPRCard(pr, false, 24, now), "\n")), "…") {
+		t.Error("a narrow card should truncate the title with …")
+	}
+}
+
+// The PR page poll re-pulls the list on a 30s tick, but only while on the page
+// and focused — blurred or off-page it makes no gh round-trip.
+func TestPRsPagePollFocusGated(t *testing.T) {
+	m := initSized(t)
+	m.prList = samplePRs()
+	m, _ = m.enterPRsPage()
+	m.prsPollArmed = true // steady state: page already entered, tick already armed
+
+	// Focused poll on the page dispatches a refresh (dispatchPRList arms the gate).
+	m.windowFocused = true
+	m.prsInFlight = false
+	updated, _ := m.Update(prsPollMsg{})
+	m = updated.(Model)
+	if !m.prsInFlight {
+		t.Error("focused poll on the PR page should dispatch a PR-list refresh")
+	}
+
+	// Blurred poll keeps the tick alive but makes no gh call.
+	m.windowFocused = false
+	m.prsInFlight = false
+	updated, _ = m.Update(prsPollMsg{})
+	m = updated.(Model)
+	if m.prsInFlight {
+		t.Error("blurred poll must not dispatch a gh round-trip")
+	}
+	if !m.prsPollArmed {
+		t.Error("blurred poll should keep the tick armed")
+	}
+
+	// Leaving the page lets the tick die (no re-arm).
+	m.mode = viewModeNormal
+	updated, _ = m.Update(prsPollMsg{})
+	m = updated.(Model)
+	if m.prsPollArmed {
+		t.Error("poll off the PR page should clear prsPollArmed")
+	}
+}
+
+// Blur/Focus events toggle windowFocused, which gates the PR poll's gh call.
+func TestWindowFocusToggle(t *testing.T) {
+	m := initSized(t)
+	if !m.windowFocused {
+		t.Fatal("model should start focused")
+	}
+	updated, _ := m.Update(tea.BlurMsg{})
+	if updated.(Model).windowFocused {
+		t.Error("BlurMsg should clear windowFocused")
+	}
+	updated, _ = updated.(Model).Update(tea.FocusMsg{})
+	if !updated.(Model).windowFocused {
+		t.Error("FocusMsg should set windowFocused")
 	}
 }

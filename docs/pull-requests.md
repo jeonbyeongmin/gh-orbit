@@ -41,15 +41,46 @@ only owns its own cursor (`prsPage.cursor`).
 | `tab` / `⇧tab` | cycle to the next / previous page                            |
 | `?`            | toggle the inline help (Global + Pull Requests)             |
 
-Rows read `#N <glyph> title · author`, where `<glyph>` is the shared CI
-rollup (`prCheckGlyph`); the title then the author absorb truncation so
-`#N` and the glyph always survive. The view always fills exactly the box
-height (header + scroll-windowed rows, padded) so the frame never jumps,
-and clipped lists flag the overflow with `↑ N more` / `↓ N more`. Unlike
-the old `l` modal there is **no empty guard** — a tab you cycle to always
-shows, rendering `(no open PRs)` when the list is empty. A refresh landing
-a shorter list while the page is open clamps the cursor so it can't vanish
-past the new end.
+Each PR is a **3-line card** (`buildPRCard`), the same 2-col gutter
+(cursor bar `▌` + `▶` marker) + 3-line body as the worktree dashboard:
+
+```
+▌▶ #124 Local Changes stash/discard/poll        ✓    3h
+▌    @alice   feat/local-changes → develop
+▌    ● approved   +312 -47   4 files
+```
+
+- **Line 1** — `#N title`, then a right-anchored status cluster: the CI
+  rollup glyph (`prCheckGlyph`, colored by verdict), a red `⚠` when
+  `mergeable == CONFLICTING`, and the relative `updatedAt` age. The title
+  absorbs truncation; the cluster never does.
+- **Line 2** — the author up front (bright) with the `head → base` branch
+  dimmed beside it. The author is the load-bearing bit here and never
+  truncates (it used to ride the old single-row tail, where it vanished
+  first); the branch absorbs the squeeze.
+- **Line 3** — the review-decision dot (`● approved` green · `changes`
+  red · `pending` grey, from `reviewDecision`) and the diff size
+  (`+adds -dels   N files`). Both are optional — a PR with no review
+  decision and no diff data leaves the line blank.
+
+The view always fills exactly the box height (header + scroll-windowed
+cards, padded) so the frame never jumps, and clipped lists flag the
+overflow with `↑ N more` / `↓ N more`. Unlike the old `l` modal there is
+**no empty guard** — a tab you cycle to always shows, rendering
+`(no open PRs)` when the list is empty. A refresh landing a shorter list
+while the page is open clamps the cursor so it can't vanish past the new
+end.
+
+While the page is open and the terminal is focused, a **30s poll**
+(`prsPollMsg`, gated like the Local Changes poll: armed on entry, dies on
+exit) re-runs `gh pr list` so CI / review / merge state landed by others
+surfaces without a manual `r`. The interval is deliberately coarse —
+`gh pr list` is a remote GraphQL call, not the local read the Local
+Changes 1s poll runs, and `focusFetchThrottle` already pegs remote refresh
+at ~60s. The poll skips its round-trip while the window is blurred
+(`windowFocused`, toggled by `tea.Focus`/`BlurMsg`) so an idle cockpit
+left on the page makes no network calls; `dispatchPRList`'s `prsInFlight`
+gate drops a tick that lands mid-load.
 
 ## Merge confirm (`m`)
 
@@ -75,9 +106,11 @@ The busy status drives the spinner via `statusIsBusy`.
 ## Outcome routing
 
 - **merge done** — the dialog closes to its launching page;
-  `merged #N (<strategy>)` on the status line. Refreshes the PR list
-  (`dispatchPRList`) so the `#N` badge tracks the closed PR. No auto-fetch
-  — the local graph reflects the merge only after the next `F` / `p`.
+  `merged #N (<strategy>)` on the status line. The merge landed on the
+  remote, so it kicks a `git fetch` (unless one's already in flight); the
+  `fetchSucceededMsg` path then reloads the graph (the merge commit
+  appears) and re-pulls the PR list (the `#N` badge drops) — no manual
+  `F` / `r` needed.
 - **merge failed** (not mergeable, checks failing, logged-out `gh`) — the
   dialog closes; `merge failed: <gh error>` (first line) on the status
   line in the error color.

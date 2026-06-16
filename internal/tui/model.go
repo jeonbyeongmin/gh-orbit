@@ -217,6 +217,11 @@ type Model struct {
 	// parallel `gh pr list` calls (and a slow older reply can't overwrite
 	// a newer one). New() arms it because Init always dispatches.
 	prsInFlight bool
+	// windowFocused tracks terminal focus (tea.Focus/BlurMsg, reporting enabled
+	// in main). Starts true so polling works before the first focus event; the
+	// PR poll skips its gh round-trip while the window is blurred so an idle
+	// cockpit left on the page makes no network calls.
+	windowFocused bool
 	// mergeConfirm backs viewModeMergeConfirm: the open PR the `m` dialog will
 	// merge. mergeReturnMode records the page that armed it (graph / PR page)
 	// so the centered dialog composes over — and closes back to — that page.
@@ -378,6 +383,8 @@ type Model struct {
 	// when the page is entered, and the poll handler stops re-arming the moment
 	// the page is left, so an idle cockpit schedules no wakeups.
 	lcPollArmed bool
+	// prsPollArmed is the same gated-tick flag for the Pull Requests page poll.
+	prsPollArmed bool
 	// sidebarWorktreesReqID counts every load fired by
 	// refreshSidebarWorktreesCmd. The post-load worktreesLoadedMsg + each
 	// dirty fan-out msg carry the same reqID so a switch issued mid-load
@@ -411,6 +418,7 @@ func New() Model {
 		streamReqID:           1,
 		sidebarWorktreesReqID: 1,
 		prsInFlight:           true, // Init dispatches the first prListCmd
+		windowFocused:         true, // assume focused until a BlurMsg says otherwise
 	}
 	if wd, err := os.Getwd(); err == nil {
 		m.workdir = wd
@@ -485,6 +493,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		nm.lcPollArmed = true
 		cmd = tea.Batch(cmd, localChangesPollCmd())
 	}
+	// Same gated arm for the Pull Requests page poll.
+	if !nm.prsPollArmed && nm.mode == viewModePRsPage {
+		nm.prsPollArmed = true
+		cmd = tea.Batch(cmd, prsPollCmd())
+	}
 	return nm, cmd
 }
 
@@ -546,6 +559,28 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(loadStatusCmd(m.workdir, true), next)
 		}
 		return m, next
+
+	case prsPollMsg:
+		// Left the page → let the tick die (the Update wrapper re-arms on
+		// re-entry). Otherwise keep the chain alive and re-pull the PR list when
+		// the window is focused — dispatchPRList's own prsInFlight gate drops the
+		// call when one is already running, so the tick is a no-op while blurred
+		// or mid-load and costs nothing.
+		if m.mode != viewModePRsPage {
+			m.prsPollArmed = false
+			return m, nil
+		}
+		next := prsPollCmd()
+		if m.windowFocused {
+			if prCmd := m.dispatchPRList(); prCmd != nil {
+				return m, tea.Batch(prCmd, next)
+			}
+		}
+		return m, next
+
+	case tea.BlurMsg:
+		m.windowFocused = false
+		return m, nil
 
 	case tea.WindowSizeMsg:
 		// Terminals re-emit WindowSizeMsg on focus changes / SIGWINCH bursts.

@@ -179,8 +179,9 @@ func (m *Model) clearBusy() {
 
 // updatePRActionMsg folds the web-open and merge replies back into the model.
 // Web-open is fire-and-forget (a status line, no mode change). Merge closes the
-// dialog back to its launching page either way and refreshes the PR list so the
-// `#N` chip badge tracks the closed PR.
+// dialog back to its launching page either way; on success it fetches so the
+// graph picks up the merge commit and the PR list re-pulls (dropping the `#N`
+// badge) on the same beat.
 func (m Model) updatePRActionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case prWebOpenedMsg:
@@ -198,6 +199,17 @@ func (m Model) updatePRActionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clearBusy()
 		m.status = fmt.Sprintf("merged #%d (%s)", msg.number, msg.strategy)
 		m.statusStyle = statusOkS
+		// The merge landed on the remote, so the local graph can't show it
+		// yet. Kick a fetch (unless one's already running) — its success path
+		// reloads the graph and re-pulls the PR list, so the merge commit
+		// appears and the `#N` badge drops without a manual `F` / `r`. Mirrors
+		// the focus-fetch setup so a concurrent focus event can't double-fetch.
+		if !m.fetchInFlight {
+			m.fetchInFlight = true
+			m.lastFetchAt = time.Now()
+			m.refs.SetLastFetchAt(m.lastFetchAt)
+			return m, fetchCmd(m.workdir)
+		}
 		return m, m.dispatchPRList()
 	case prMergeFailedMsg:
 		m.closeMergeConfirm()

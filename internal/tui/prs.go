@@ -21,6 +21,25 @@ import (
 // prListTimeout matches the 30s budget of the other read-only loaders.
 const prListTimeout = 30 * time.Second
 
+// prsPollInterval is how often the Pull Requests page re-runs prListCmd while
+// it's open and the window is focused, so PR state landed by CI / reviewers /
+// merges surfaces without a manual `r`. 30s keeps it fresh without burning the
+// GitHub API budget a few-second poll would: `gh pr list` is a remote GraphQL
+// call (statusCheckRollup + mergeable are costly), not the local git read the
+// Local Changes 1s poll runs — focusFetchThrottle already pegs remote refresh
+// at ~60s, so 30s is the floor that stays a good citizen.
+const prsPollInterval = 30 * time.Second
+
+// prsPollMsg fires on the poll tick. Self-perpetuating but mode-gated like
+// localChangesPollMsg — the handler stops re-arming the moment the page is left.
+type prsPollMsg struct{}
+
+func prsPollCmd() tea.Cmd {
+	return tea.Tick(prsPollInterval, func(time.Time) tea.Msg {
+		return prsPollMsg{}
+	})
+}
+
 // prCheckState is the one-glyph CI rollup rendered inside a chip's PR badge.
 type prCheckState int
 
@@ -31,14 +50,35 @@ const (
 	prChecksFailing
 )
 
+// prReviewState is the PR's review-decision rollup, drawn as a colored dot on
+// the Pull Requests page (green approved · red changes · grey pending). None
+// covers "no review required by branch protection" — nothing to report.
+type prReviewState int
+
+const (
+	prReviewNone             prReviewState = iota
+	prReviewPending                        // REVIEW_REQUIRED
+	prReviewApproved                       // APPROVED
+	prReviewChangesRequested               // CHANGES_REQUESTED
+)
+
 // prInfo is one open PR. Model.prs keys these by head branch (the chip badge
-// lookup); Model.prList keeps them in gh's newest-first order (the `l` modal).
+// lookup); Model.prList keeps them in gh's newest-first order (the Pull
+// Requests page). The chip badge only reads Number + Checks; the rest feed the
+// page's 3-line cards.
 type prInfo struct {
-	Number  int
-	HeadRef string
-	Title   string
-	Author  string
-	Checks  prCheckState
+	Number      int
+	HeadRef     string
+	BaseRef     string
+	Title       string
+	Author      string
+	Checks      prCheckState
+	Review      prReviewState
+	Conflicting bool // mergeable == CONFLICTING
+	Additions   int
+	Deletions   int
+	Files       int
+	UpdatedAt   time.Time
 }
 
 type prsLoadedMsg struct {
@@ -51,7 +91,7 @@ type prsLoadFailedMsg struct{ err error }
 var prListExec = func(ctx context.Context, dir string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--state", "open", "--limit", "100",
-		"--json", "number,headRefName,title,author,statusCheckRollup")
+		"--json", "number,headRefName,baseRefName,title,author,statusCheckRollup,reviewDecision,mergeable,additions,deletions,changedFiles,updatedAt")
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -92,10 +132,17 @@ func prListCmd(dir string) tea.Cmd {
 type prListItem struct {
 	Number      int    `json:"number"`
 	HeadRefName string `json:"headRefName"`
+	BaseRefName string `json:"baseRefName"`
 	Title       string `json:"title"`
 	Author      struct {
 		Login string `json:"login"`
 	} `json:"author"`
+	ReviewDecision    string    `json:"reviewDecision"`
+	Mergeable         string    `json:"mergeable"`
+	Additions         int       `json:"additions"`
+	Deletions         int       `json:"deletions"`
+	ChangedFiles      int       `json:"changedFiles"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 	StatusCheckRollup []struct {
 		Status     string `json:"status"`
 		Conclusion string `json:"conclusion"`
@@ -123,14 +170,35 @@ func parsePRList(data []byte) ([]prInfo, error) {
 			state = worseCheckState(state, classifyCheck(c.Status, c.Conclusion, c.State))
 		}
 		list = append(list, prInfo{
-			Number:  it.Number,
-			HeadRef: it.HeadRefName,
-			Title:   it.Title,
-			Author:  it.Author.Login,
-			Checks:  state,
+			Number:      it.Number,
+			HeadRef:     it.HeadRefName,
+			BaseRef:     it.BaseRefName,
+			Title:       it.Title,
+			Author:      it.Author.Login,
+			Checks:      state,
+			Review:      classifyReview(it.ReviewDecision),
+			Conflicting: it.Mergeable == "CONFLICTING",
+			Additions:   it.Additions,
+			Deletions:   it.Deletions,
+			Files:       it.ChangedFiles,
+			UpdatedAt:   it.UpdatedAt,
 		})
 	}
 	return list, nil
+}
+
+// classifyReview maps gh's reviewDecision onto the 3-way dot. "" (no review
+// required by branch protection) draws no dot — there's nothing to report.
+func classifyReview(decision string) prReviewState {
+	switch decision {
+	case "APPROVED":
+		return prReviewApproved
+	case "CHANGES_REQUESTED":
+		return prReviewChangesRequested
+	case "REVIEW_REQUIRED":
+		return prReviewPending
+	}
+	return prReviewNone
 }
 
 // classifyCheck maps one rollup context onto the 3-way verdict. state is

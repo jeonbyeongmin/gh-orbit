@@ -21,6 +21,25 @@ import (
 // prListTimeout matches the 30s budget of the other read-only loaders.
 const prListTimeout = 30 * time.Second
 
+// prsPollInterval is how often the Pull Requests page re-runs prListCmd while
+// it's open and the window is focused, so PR state landed by CI / reviewers /
+// merges surfaces without a manual `r`. 30s keeps it fresh without burning the
+// GitHub API budget a few-second poll would: `gh pr list` is a remote GraphQL
+// call (statusCheckRollup + mergeable are costly), not the local git read the
+// Local Changes 1s poll runs — focusFetchThrottle already pegs remote refresh
+// at ~60s, so 30s is the floor that stays a good citizen.
+const prsPollInterval = 30 * time.Second
+
+// prsPollMsg fires on the poll tick. Self-perpetuating but mode-gated like
+// localChangesPollMsg — the handler stops re-arming the moment the page is left.
+type prsPollMsg struct{}
+
+func prsPollCmd() tea.Cmd {
+	return tea.Tick(prsPollInterval, func(time.Time) tea.Msg {
+		return prsPollMsg{}
+	})
+}
+
 // prCheckState is the one-glyph CI rollup rendered inside a chip's PR badge.
 type prCheckState int
 

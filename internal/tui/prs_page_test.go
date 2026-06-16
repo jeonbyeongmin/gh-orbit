@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -270,5 +271,59 @@ func TestBuildPRCard(t *testing.T) {
 	}
 	if !strings.Contains(ansi.Strip(strings.Join(buildPRCard(pr, false, 24, now), "\n")), "…") {
 		t.Error("a narrow card should truncate the title with …")
+	}
+}
+
+// The PR page poll re-pulls the list on a 30s tick, but only while on the page
+// and focused — blurred or off-page it makes no gh round-trip.
+func TestPRsPagePollFocusGated(t *testing.T) {
+	m := initSized(t)
+	m.prList = samplePRs()
+	m, _ = m.enterPRsPage()
+	m.prsPollArmed = true // steady state: page already entered, tick already armed
+
+	// Focused poll on the page dispatches a refresh (dispatchPRList arms the gate).
+	m.windowFocused = true
+	m.prsInFlight = false
+	updated, _ := m.Update(prsPollMsg{})
+	m = updated.(Model)
+	if !m.prsInFlight {
+		t.Error("focused poll on the PR page should dispatch a PR-list refresh")
+	}
+
+	// Blurred poll keeps the tick alive but makes no gh call.
+	m.windowFocused = false
+	m.prsInFlight = false
+	updated, _ = m.Update(prsPollMsg{})
+	m = updated.(Model)
+	if m.prsInFlight {
+		t.Error("blurred poll must not dispatch a gh round-trip")
+	}
+	if !m.prsPollArmed {
+		t.Error("blurred poll should keep the tick armed")
+	}
+
+	// Leaving the page lets the tick die (no re-arm).
+	m.mode = viewModeNormal
+	updated, _ = m.Update(prsPollMsg{})
+	m = updated.(Model)
+	if m.prsPollArmed {
+		t.Error("poll off the PR page should clear prsPollArmed")
+	}
+}
+
+// Blur/Focus events toggle windowFocused, which gates the PR poll's gh call.
+func TestWindowFocusToggle(t *testing.T) {
+	m := initSized(t)
+	if !m.windowFocused {
+		t.Fatal("model should start focused")
+	}
+	updated, _ := m.Update(tea.BlurMsg{})
+	if updated.(Model).windowFocused {
+		t.Error("BlurMsg should clear windowFocused")
+	}
+	updated, _ = updated.(Model).Update(tea.FocusMsg{})
+	if !updated.(Model).windowFocused {
+		t.Error("FocusMsg should set windowFocused")
 	}
 }

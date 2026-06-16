@@ -71,6 +71,17 @@ overflow with `↑ N more` / `↓ N more`. Unlike the old `l` modal there is
 while the page is open clamps the cursor so it can't vanish past the new
 end.
 
+While the page is open and the terminal is focused, a **30s poll**
+(`prsPollMsg`, gated like the Local Changes poll: armed on entry, dies on
+exit) re-runs `gh pr list` so CI / review / merge state landed by others
+surfaces without a manual `r`. The interval is deliberately coarse —
+`gh pr list` is a remote GraphQL call, not the local read the Local
+Changes 1s poll runs, and `focusFetchThrottle` already pegs remote refresh
+at ~60s. The poll skips its round-trip while the window is blurred
+(`windowFocused`, toggled by `tea.Focus`/`BlurMsg`) so an idle cockpit
+left on the page makes no network calls; `dispatchPRList`'s `prsInFlight`
+gate drops a tick that lands mid-load.
+
 ## Merge confirm (`m`)
 
 `m` on a PR (graph cursor or PR-page cursor) arms `viewModeMergeConfirm` —

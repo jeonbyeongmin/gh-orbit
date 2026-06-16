@@ -538,7 +538,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		next := localChangesPollCmd()
-		if m.localChanges.Focused() == paneLCTree && !m.lcDiscardOpen && !m.lcActionInFlight {
+		// statusIsBusy() covers every in-flight mutation (stage/unstage set a
+		// busy status too, not just stash/discard) — skipping the reload while
+		// one runs keeps the poll snapshot from racing the action's own reload
+		// and clobbering its pending-select cursor hint.
+		if m.localChanges.Focused() == paneLCTree && !m.lcDiscardOpen && !m.lcActionInFlight && !m.statusIsBusy() {
 			return m, tea.Batch(loadStatusCmd(m.workdir, true), next)
 		}
 		return m, next

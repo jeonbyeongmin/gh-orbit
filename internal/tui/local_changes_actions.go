@@ -93,6 +93,9 @@ func (m Model) updateLCActionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localChangesStashAllDoneMsg:
 		m.lcActionInFlight = false
 		m.clearBusy()
+		// Tree is clean now; drop any diff the user had drilled into so a large
+		// patch for a stashed-away file doesn't sit resident behind the tree.
+		m.localChanges.ClosePatch()
 		m.localChanges.SetFocus(paneLCTree)
 		m.status = "stashed all changes — pop in your terminal (git stash pop)"
 		m.statusStyle = statusOkS
@@ -109,6 +112,7 @@ func (m Model) updateLCActionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lcActionInFlight = false
 		m.lcDiscardOpen = false
 		m.clearBusy()
+		m.localChanges.ClosePatch()
 		m.localChanges.SetFocus(paneLCTree)
 		if msg.includeUntracked {
 			m.status = "discarded all changes (incl. new files)"

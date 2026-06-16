@@ -680,6 +680,13 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case localChangesStatusLoadedMsg:
+		// Drop a poll snapshot that resolves while a mutation is in flight: it
+		// was captured against the pre-action tree, so applying it would repaint
+		// already-staged/stashed/discarded files until the action's own reload
+		// lands. Action reloads (preserveCursor=false) are never dropped.
+		if msg.preserveCursor && m.statusIsBusy() {
+			return m, nil
+		}
 		// Snapshot what the diff pane was showing before the reload
 		// reclassifies entries, so we can tell whether a per-hunk stage just
 		// consumed its last hunk on that side.

@@ -17,6 +17,12 @@ import (
 
 const localChangesCmdTimeout = 60 * time.Second
 
+// maxUntrackedNumstatProbes caps how many untracked files get a per-file
+// `git diff --no-index --numstat` probe per status load. The poll re-runs the
+// load every ~1s, so an unbounded loop over a large untracked dir would fork a
+// process storm; beyond the cap untracked rows render without a "+N" count.
+const maxUntrackedNumstatProbes = 50
+
 // Package-level seams over git.* — tests stub these to keep the cmd suite
 // hermetic (no real subprocess in unit tests).
 var (
@@ -123,10 +129,20 @@ func loadStatusCmd(dir string, preserveCursor bool) tea.Cmd {
 		// "+N" column would be blank. Probe each with a no-index numstat and
 		// fold it into the unstaged side (where untracked rows render). Each
 		// probe is best-effort: a failure just leaves that one row's stat blank.
+		//
+		// One subprocess per untracked file, and the poll re-runs this every
+		// ~1s — so cap the probes: an un-ignored build/deps dir (hundreds of
+		// untracked files) would otherwise fork a per-second process storm.
+		// Past the cap the extra rows just render without a count (still "?").
+		probes := 0
 		for _, e := range entries {
 			if !e.Untracked {
 				continue
 			}
+			if probes >= maxUntrackedNumstatProbes {
+				break
+			}
+			probes++
 			if fs, ferr := diffUntrackedNumstatExec(ctx, dir, e.Path); ferr == nil {
 				unstaged = append(unstaged, fs)
 			}

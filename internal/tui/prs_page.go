@@ -141,9 +141,21 @@ func (m Model) renderPRsView(width, height int) string {
 // flagging clipped rows with `↑ N more` / `↓ N more`. Cards are separated by
 // one blank line. Mirrors worktreeCardArea.
 func (m Model) prCardArea(areaH, width int, now time.Time) []string {
-	capacity := (areaH + 1) / (prCardLines + 1) // each card is 3 lines + 1 gap
+	cardSlot := prCardLines + 1 // a card is 3 lines + 1 trailing gap
+	capacity := (areaH + 1) / cardSlot
 	if capacity < 1 {
 		capacity = 1
+	}
+	// When the list overflows, the ↑/↓ markers each cost a row that renderPRsView
+	// would otherwise clamp away — shrink capacity by the worst case (both
+	// markers) so the overflow affordance always survives. (worktreeCardArea
+	// skips this: a worktree list rarely overflows, an open-PR list of up to 100
+	// routinely does.)
+	if len(m.prList) > capacity {
+		capacity = (areaH - 2 + 1) / cardSlot
+		if capacity < 1 {
+			capacity = 1
+		}
 	}
 	first := 0
 	if len(m.prList) > capacity {

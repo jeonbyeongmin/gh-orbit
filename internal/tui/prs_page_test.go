@@ -204,6 +204,29 @@ func TestRenderPRsViewOverflowMarker(t *testing.T) {
 	}
 }
 
+// The ↓ marker must survive the final height clamp at heights where the card
+// math leaves no slack — (height-2) ≡ 3 (mod 4), e.g. 9 — otherwise an
+// overflowing list shows no "more below" affordance. Regresses against the
+// single-line layout that reserved marker rows.
+func TestRenderPRsViewOverflowMarkerSurvivesClamp(t *testing.T) {
+	m := initSized(t)
+	many := make([]prInfo, 0, 20)
+	for i := 0; i < 20; i++ {
+		many = append(many, prInfo{Number: 100 + i, Title: "PR", Checks: prChecksNone})
+	}
+	m.prList = many
+	m, _ = m.enterPRsPage() // cursor at 0 → only a ↓ marker, never a ↑ one
+	for _, h := range []int{9, 13} {
+		out := m.renderPRsView(60, h)
+		if lines := strings.Split(out, "\n"); len(lines) != h {
+			t.Errorf("height %d: view = %d lines, want %d", h, len(lines), h)
+		}
+		if !strings.Contains(ansi.Strip(out), "↓") {
+			t.Errorf("height %d: clipped list lost its ↓ overflow marker: %q", h, ansi.Strip(out))
+		}
+	}
+}
+
 func TestBuildPRCard(t *testing.T) {
 	now := time.Now()
 	pr := samplePRs()[0] // #42, passing, approved, alice, feat-a → develop, +120 -8, 3 files

@@ -680,6 +680,13 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case localChangesStatusLoadedMsg:
+		// Drop a poll snapshot that resolves while a mutation is in flight: it
+		// was captured against the pre-action tree, so applying it would repaint
+		// already-staged/stashed/discarded files until the action's own reload
+		// lands. Action reloads (preserveCursor=false) are never dropped.
+		if msg.preserveCursor && m.statusIsBusy() {
+			return m, nil
+		}
 		// Snapshot what the diff pane was showing before the reload
 		// reclassifies entries, so we can tell whether a per-hunk stage just
 		// consumed its last hunk on that side.
@@ -691,8 +698,22 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 				diffPath, diffStaged = e.Path, e.Staged()
 			}
 		}
+		// A poll-driven reload (preserveCursor) carries no pending-select hint,
+		// so capture the tree cursor's file now and re-pin it after the
+		// reclassify — otherwise a file appearing/disappearing would drift the
+		// selection while the user is just sitting on the list.
+		var keepPath string
+		var keepStaged bool
+		if msg.preserveCursor && !inDiff {
+			if e, ok := m.localChanges.CurrentEntry(); ok {
+				keepPath, keepStaged = e.Path, e.Staged()
+			}
+		}
 		m.localChanges.ApplyStatusLoaded(msg.entries)
 		m.localChanges.SetStats(msg.unstagedStat, msg.stagedStat)
+		if keepPath != "" {
+			m.localChanges.SelectByPath(keepPath, keepStaged)
+		}
 		if inDiff {
 			// Diff still has changes on that side → repaint it. Otherwise the
 			// last hunk was staged away, so drop back to the tree (auto-return).
@@ -731,7 +752,7 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusOkS
 		m.sidebarWorktreesReqID++
 		return m, tea.Batch(
-			loadStatusCmd(m.workdir),
+			loadStatusCmd(m.workdir, false),
 			loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 		)
 
@@ -745,7 +766,7 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusOkS
 		m.sidebarWorktreesReqID++
 		return m, tea.Batch(
-			loadStatusCmd(m.workdir),
+			loadStatusCmd(m.workdir, false),
 			loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 		)
 
@@ -763,7 +784,7 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusOkS
 		m.sidebarWorktreesReqID++
 		return m, tea.Batch(
-			loadStatusCmd(m.workdir),
+			loadStatusCmd(m.workdir, false),
 			loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 		)
 

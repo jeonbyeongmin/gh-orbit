@@ -328,6 +328,11 @@ func (m localChangesModel) CurrentHunk() (int, bool) {
 	return m.hunkCursor, true
 }
 
+// HasChanges reports whether the tree holds any entry — the gate the
+// whole-tree stash / discard actions use to skip a no-op git call (and say
+// "nothing to stash" instead) when the working tree is clean.
+func (m localChangesModel) HasChanges() bool { return len(m.entries) > 0 }
+
 // CurrentEntry returns the entry the tree cursor is on, or false when the
 // tree is empty.
 func (m localChangesModel) CurrentEntry() (localChangesEntry, bool) {

@@ -17,17 +17,27 @@ import (
 
 const localChangesCmdTimeout = 60 * time.Second
 
+// maxUntrackedNumstatProbes caps how many untracked files get a per-file
+// `git diff --no-index --numstat` probe per status load. The poll re-runs the
+// load every ~1s, so an unbounded loop over a large untracked dir would fork a
+// process storm; beyond the cap untracked rows render without a "+N" count.
+const maxUntrackedNumstatProbes = 50
+
 // Package-level seams over git.* — tests stub these to keep the cmd suite
 // hermetic (no real subprocess in unit tests).
 var (
-	statusExec        = git.Status
-	diffNumstatExec   = git.DiffNumstat
-	diffFileExec      = git.DiffFile
-	diffFileRawExec   = git.DiffFileRaw
-	diffUntrackedExec = git.DiffUntracked
-	addExec           = git.Add
-	restoreStagedExec = git.RestoreStaged
-	applyCachedExec   = git.ApplyCached
+	statusExec               = git.Status
+	diffNumstatExec          = git.DiffNumstat
+	diffUntrackedNumstatExec = git.DiffUntrackedNumstat
+	diffFileExec             = git.DiffFile
+	diffFileRawExec          = git.DiffFileRaw
+	diffUntrackedExec        = git.DiffUntracked
+	addExec                  = git.Add
+	restoreStagedExec        = git.RestoreStaged
+	applyCachedExec          = git.ApplyCached
+	stashAllExec             = git.StashPush
+	resetHardExec            = git.Reset
+	cleanExec                = git.Clean
 )
 
 // Status load. The numstat slices carry the per-file +/- counts the tree
@@ -37,6 +47,11 @@ type localChangesStatusLoadedMsg struct {
 	entries      []git.StatusEntry
 	unstagedStat []git.FileStat
 	stagedStat   []git.FileStat
+	// preserveCursor is set by the background poll (loadStatusCmd's second
+	// arg) so the handler re-pins the tree cursor to its file after the
+	// reclassify — a 1s refresh shouldn't drift the selection out from under
+	// the user. Action reloads leave it false and use the pendingSelect hint.
+	preserveCursor bool
 }
 
 type localChangesStatusFailedMsg struct {
@@ -97,8 +112,10 @@ type localChangesEnterRequestedMsg struct{}
 // loadStatusCmd dispatches a fresh `git status --porcelain=v2` snapshot plus
 // the two `git diff --numstat` probes that feed the per-row +/- column. The
 // numstat probes are best-effort: a failure leaves the slice nil and the tree
-// renders without stats rather than failing the whole reload.
-func loadStatusCmd(dir string) tea.Cmd {
+// renders without stats rather than failing the whole reload. preserveCursor
+// rides through to the msg so the poll-driven reload can keep the tree cursor
+// pinned (see localChangesStatusLoadedMsg).
+func loadStatusCmd(dir string, preserveCursor bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), localChangesCmdTimeout)
 		defer cancel()
@@ -108,7 +125,103 @@ func loadStatusCmd(dir string) tea.Cmd {
 		}
 		unstaged, _ := diffNumstatExec(ctx, dir, false)
 		staged, _ := diffNumstatExec(ctx, dir, true)
-		return localChangesStatusLoadedMsg{entries: entries, unstagedStat: unstaged, stagedStat: staged}
+		// git diff --numstat has no baseline for untracked files, so their
+		// "+N" column would be blank. Probe each with a no-index numstat and
+		// fold it into the unstaged side (where untracked rows render). Each
+		// probe is best-effort: a failure just leaves that one row's stat blank.
+		//
+		// One subprocess per untracked file, and the poll re-runs this every
+		// ~1s — so cap the probes: an un-ignored build/deps dir (hundreds of
+		// untracked files) would otherwise fork a per-second process storm.
+		// Past the cap the extra rows just render without a count (still "?").
+		probes := 0
+		for _, e := range entries {
+			if !e.Untracked {
+				continue
+			}
+			if probes >= maxUntrackedNumstatProbes {
+				break
+			}
+			probes++
+			if fs, ferr := diffUntrackedNumstatExec(ctx, dir, e.Path); ferr == nil {
+				unstaged = append(unstaged, fs)
+			}
+		}
+		return localChangesStatusLoadedMsg{
+			entries:        entries,
+			unstagedStat:   unstaged,
+			stagedStat:     staged,
+			preserveCursor: preserveCursor,
+		}
+	}
+}
+
+// localChangesPollInterval is how often the Local Changes page re-runs
+// loadStatusCmd while it's open, so working-tree edits from another editor
+// surface without a manual reload. 1s reads as "near real-time" without
+// hammering git; the poll is gated to the tree pane and pauses during an
+// in-flight stash / discard (see the localChangesPollMsg handler).
+const localChangesPollInterval = 1 * time.Second
+
+// localChangesPollMsg fires on the poll tick. Like the spinner tick it is
+// self-perpetuating but mode-gated — the handler stops re-arming the moment
+// the page is left, so an idle cockpit schedules no wakeups.
+type localChangesPollMsg struct{}
+
+func localChangesPollCmd() tea.Cmd {
+	return tea.Tick(localChangesPollInterval, func(time.Time) tea.Msg {
+		return localChangesPollMsg{}
+	})
+}
+
+// Stash-all / discard-all action results. Stash is reversible (git stash pop),
+// so it fires straight off `s`; discard is destructive and goes through the
+// confirm dialog. includeUntracked echoes the discard scope the user picked so
+// the success line can name what was removed.
+type localChangesStashAllDoneMsg struct{}
+
+type localChangesStashAllFailedMsg struct {
+	err error
+}
+
+type localChangesDiscardDoneMsg struct {
+	includeUntracked bool
+}
+
+type localChangesDiscardFailedMsg struct {
+	err error
+}
+
+// stashAllCmd runs `git stash push --include-untracked` — moves every tracked
+// edit and untracked file into a new stash entry, leaving a clean tree.
+func stashAllCmd(dir string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), localChangesCmdTimeout)
+		defer cancel()
+		if err := stashAllExec(ctx, dir); err != nil {
+			return localChangesStashAllFailedMsg{err: err}
+		}
+		return localChangesStashAllDoneMsg{}
+	}
+}
+
+// discardAllCmd resets the working tree to HEAD. Tracked edits + the index go
+// via `git reset --hard HEAD`; when includeUntracked is set, a follow-up
+// `git clean -fd` also removes new files (reset can't touch what HEAD never
+// knew about). The clean only runs after a successful reset.
+func discardAllCmd(dir string, includeUntracked bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), localChangesCmdTimeout)
+		defer cancel()
+		if err := resetHardExec(ctx, dir, git.ResetHard, "HEAD"); err != nil {
+			return localChangesDiscardFailedMsg{err: err}
+		}
+		if includeUntracked {
+			if err := cleanExec(ctx, dir); err != nil {
+				return localChangesDiscardFailedMsg{err: err}
+			}
+		}
+		return localChangesDiscardDoneMsg{includeUntracked: includeUntracked}
 	}
 }
 

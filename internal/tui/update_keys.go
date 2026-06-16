@@ -430,6 +430,11 @@ func (m Model) handleMergeConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The discard confirm is an inline overlay (lcDiscardOpen) rather than a
+	// viewMode, so it intercepts here before any page key.
+	if m.lcDiscardOpen {
+		return m.handleLCDiscardKey(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		return m.handleCtrlC()
@@ -443,8 +448,13 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Inline help on the local changes page itself — no longer yanks to
 		// the graph. Shows the Global + Local Changes categories.
 		return m.toggleHelp()
+	case "s":
+		// Whole-tree stash (tracked + untracked). Works from either pane.
+		return m.dispatchLCStashAll()
 	case "r":
-		return m, loadStatusCmd(m.workdir)
+		// Whole-tree discard confirm. The page auto-reloads (poll), so `r` no
+		// longer needs to be a manual reload — it restores the tree instead.
+		return m.openLCDiscard()
 	}
 	// Single-pane drill-down. Tree owns cursor movement + stage/unstage;
 	// `→` descends into the diff. Diff owns hunk navigation (`[`/`]`),

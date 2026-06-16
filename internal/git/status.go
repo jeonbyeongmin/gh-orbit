@@ -340,3 +340,37 @@ func DiffUntracked(ctx context.Context, dir, path string) (string, error) {
 	}
 	return "", wrapGitErr("git diff --no-index", err, stderr.String())
 }
+
+// DiffUntrackedNumstat returns one untracked file's +/- counts as a FileStat,
+// via `git diff --no-index --numstat -- /dev/null <path>`. Untracked files have
+// no tracked baseline so they're absent from DiffNumstat — without this their
+// "+N" column would render blank. The diff is a full addition (Deletions == 0);
+// binary files come back Insertions/Deletions == -1 (FileStat.Binary). Exit
+// code 1 means "files differ" (always true here) and is treated as success,
+// mirroring DiffUntracked. The returned Path is pinned to the input `path` (the
+// porcelain path) so the caller's per-path stat map keys line up regardless of
+// how `--no-index` echoes the b-side.
+func DiffUntrackedNumstat(ctx context.Context, dir, path string) (FileStat, error) {
+	cmd := exec.CommandContext(ctx, "git", "diff", "--no-index", "--numstat", "--", "/dev/null", path)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return FileStat{}, wrapGitErr("git diff --no-index --numstat", err, stderr.String())
+		}
+	}
+	stats, err := parseNumstat(stdout.String())
+	if err != nil {
+		return FileStat{}, err
+	}
+	if len(stats) == 0 {
+		return FileStat{}, fmt.Errorf("git diff --no-index --numstat: no output for %q", path)
+	}
+	fs := stats[0]
+	fs.Path = path
+	return fs, nil
+}

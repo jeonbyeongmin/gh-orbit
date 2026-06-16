@@ -30,6 +30,81 @@ func TestLocalChangesQIsNoOp(t *testing.T) {
 	}
 }
 
+// withChanges seeds one unstaged entry so the whole-tree stash / discard
+// gates (HasChanges) pass. Same-package access to the private slice keeps the
+// setup a one-liner — no fake git status round-trip needed.
+func withChanges(m Model) Model {
+	m.localChanges.entries = []localChangesEntry{
+		{Path: "f.txt", Section: sectionUnstaged, WorktreeState: 'M'},
+	}
+	return m
+}
+
+func TestLocalChangesROpensDiscardDialog(t *testing.T) {
+	m := withChanges(enterLocalChanges(t, initSized(t)))
+
+	m, _ = pressRune(t, m, 'r')
+	if !m.lcDiscardOpen {
+		t.Fatal("r should open the discard confirm")
+	}
+	if m.mode != viewModeLocalChanges {
+		t.Fatalf("discard confirm must stay in viewModeLocalChanges, got %v", m.mode)
+	}
+
+	// esc backs out without acting.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.lcDiscardOpen || m.lcActionInFlight {
+		t.Fatalf("esc should cancel: open=%v inFlight=%v", m.lcDiscardOpen, m.lcActionInFlight)
+	}
+}
+
+func TestLocalChangesDiscardTrackedDispatches(t *testing.T) {
+	t.Cleanup(restoreLocalChangesExec(t))
+	resetHardExec = func(ctx context.Context, dir string, mode git.ResetMode, hash string) error { return nil }
+	cleanExec = func(ctx context.Context, dir string) error {
+		t.Fatal("tracked-only discard must not clean")
+		return nil
+	}
+	m := withChanges(enterLocalChanges(t, initSized(t)))
+
+	m, _ = pressRune(t, m, 'r')
+	m, cmd := pressRune(t, m, 't')
+	if !m.lcActionInFlight || cmd == nil {
+		t.Fatalf("t should dispatch the discard: inFlight=%v cmd=%v", m.lcActionInFlight, cmd)
+	}
+	if got, ok := cmd().(localChangesDiscardDoneMsg); !ok || got.includeUntracked {
+		t.Fatalf("unexpected discard result: %T %+v", got, got)
+	}
+}
+
+func TestLocalChangesStashAllDispatches(t *testing.T) {
+	t.Cleanup(restoreLocalChangesExec(t))
+	stashAllExec = func(ctx context.Context, dir string) error { return nil }
+	m := withChanges(enterLocalChanges(t, initSized(t)))
+
+	m, cmd := pressRune(t, m, 's')
+	if !m.lcActionInFlight || cmd == nil {
+		t.Fatalf("s should dispatch stash all: inFlight=%v cmd=%v", m.lcActionInFlight, cmd)
+	}
+	if _, ok := cmd().(localChangesStashAllDoneMsg); !ok {
+		t.Fatalf("want localChangesStashAllDoneMsg from stash cmd")
+	}
+}
+
+func TestLocalChangesStashAndDiscardNoOpWhenClean(t *testing.T) {
+	m := enterLocalChanges(t, initSized(t)) // no entries seeded
+
+	m, cmd := pressRune(t, m, 's')
+	if m.lcActionInFlight || cmd != nil {
+		t.Fatalf("stash on clean tree must be a no-op: inFlight=%v cmd=%v", m.lcActionInFlight, cmd)
+	}
+	m, _ = pressRune(t, m, 'r')
+	if m.lcDiscardOpen {
+		t.Fatal("discard on clean tree must not open the dialog")
+	}
+}
+
 func TestClassifyStatusConflictGoesToConflicts(t *testing.T) {
 	got := classifyStatus([]git.StatusEntry{
 		{Path: "f.txt", IndexState: 'U', WorktreeState: 'U', Conflict: true},

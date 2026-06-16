@@ -36,3 +36,14 @@ func (m ResetMode) flag() string {
 func Reset(ctx context.Context, dir string, mode ResetMode, hash string) error {
 	return runGitWrite(ctx, dir, "git reset", nil, "reset", mode.flag(), hash)
 }
+
+// Clean runs `git clean -fd` — force-removes untracked files AND untracked
+// directories from the working tree. Ignored files are deliberately left alone
+// (no -x), so build artifacts and local config survive a discard. Pairs with a
+// `Reset(ResetHard, "HEAD")` to take the working tree all the way back to a
+// clean state; on its own it only removes the new files Reset can't touch.
+// Destructive and irreversible — git keeps no record of untracked content — so
+// the only TUI caller gates it behind the discard confirm's explicit "all".
+func Clean(ctx context.Context, dir string) error {
+	return runGitWrite(ctx, dir, "git clean", nil, "clean", "-fd")
+}

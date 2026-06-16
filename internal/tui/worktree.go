@@ -395,7 +395,7 @@ func (m Model) switchWorktree(path string) (Model, tea.Cmd) {
 	// touch it. Re-fire the status load so the file tree reflects the new
 	// tree immediately rather than waiting for the user to press `r`.
 	if m.mode == viewModeLocalChanges {
-		cmd = tea.Batch(cmd, loadStatusCmd(m.workdir))
+		cmd = tea.Batch(cmd, loadStatusCmd(m.workdir, false))
 	}
 	// switch confirmation: "→ switched: prev → new" with a 3s tea.Tick
 	// auto-clear. statusTickSeq snapshot at dispatch time; only the

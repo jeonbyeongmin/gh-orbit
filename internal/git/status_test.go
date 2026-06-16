@@ -302,6 +302,54 @@ func TestDiffUntrackedShowsAllAdditions(t *testing.T) {
 	}
 }
 
+func TestDiffUntrackedNumstatCountsAdditions(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepoWithFile(t, "f.txt", "a\n")
+	mustWrite(t, dir, "new.txt", "one\ntwo\nthree\n")
+	ctx := context.Background()
+
+	fs, err := DiffUntrackedNumstat(ctx, dir, "new.txt")
+	if err != nil {
+		t.Fatalf("DiffUntrackedNumstat: %v", err)
+	}
+	if fs.Path != "new.txt" {
+		t.Fatalf("path = %q, want new.txt", fs.Path)
+	}
+	if fs.Insertions != 3 || fs.Deletions != 0 {
+		t.Fatalf("counts = +%d -%d, want +3 -0", fs.Insertions, fs.Deletions)
+	}
+	if fs.Binary() {
+		t.Fatal("text file reported as binary")
+	}
+}
+
+func TestCleanRemovesUntrackedKeepsTracked(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepoWithFile(t, "tracked.txt", "a\n")
+	mustWrite(t, dir, "tracked.txt", "a\nb\n") // tracked edit — Clean must NOT touch
+	mustWrite(t, dir, "new.txt", "x\n")        // untracked — Clean removes
+	ctx := context.Background()
+
+	if err := Clean(ctx, dir); err != nil {
+		t.Fatalf("Clean: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("untracked new.txt should be gone, stat err = %v", err)
+	}
+	// The tracked edit survives Clean (only reset --hard would revert it).
+	got, err := Status(ctx, dir)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if len(got) != 1 || got[0].Path != "tracked.txt" || got[0].WorktreeState != 'M' {
+		t.Fatalf("tracked edit should remain after Clean, got %+v", got)
+	}
+}
+
 func mustWrite(t *testing.T, dir, name, contents string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o644); err != nil {

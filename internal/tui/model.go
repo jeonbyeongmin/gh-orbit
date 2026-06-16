@@ -365,6 +365,19 @@ type Model struct {
 	// staged) to drop stale responses when the user keeps moving the
 	// cursor mid-load.
 	localChangesReqID uint64
+	// lcDiscardOpen is the inline "discard all changes?" confirm on the Local
+	// Changes page (armed by `r`). It stays inside viewModeLocalChanges — a
+	// model flag, not a viewMode — so the page renders unchanged underneath
+	// and the breadcrumb / pane sizes don't shift.
+	lcDiscardOpen bool
+	// lcActionInFlight gates the whole-tree stash / discard actions to one at a
+	// time and pauses the poll while a mutation runs (a 1s status reload
+	// must not race a reset --hard). Cleared by the action's terminal handler.
+	lcActionInFlight bool
+	// lcPollArmed mirrors spinnerArmed: the Update wrapper arms one poll tick
+	// when the page is entered, and the poll handler stops re-arming the moment
+	// the page is left, so an idle cockpit schedules no wakeups.
+	lcPollArmed bool
 	// sidebarWorktreesReqID counts every load fired by
 	// refreshSidebarWorktreesCmd. The post-load worktreesLoadedMsg + each
 	// dirty fan-out msg carry the same reqID so a switch issued mid-load
@@ -466,6 +479,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		nm.spinnerArmed = true
 		cmd = tea.Batch(cmd, spinnerTickCmd())
 	}
+	// Arm the Local Changes poll the same gated way: one tick in flight while
+	// the page is open, the handler stops re-arming once it's left.
+	if !nm.lcPollArmed && nm.mode == viewModeLocalChanges {
+		nm.lcPollArmed = true
+		cmd = tea.Batch(cmd, localChangesPollCmd())
+	}
 	return nm, cmd
 }
 
@@ -506,6 +525,23 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diff.spinnerFrame = m.spinnerFrame
 		m.localChanges.spinnerFrame = m.spinnerFrame
 		return m, spinnerTickCmd()
+
+	case localChangesPollMsg:
+		// Left the page → let the tick die (the Update wrapper re-arms on
+		// re-entry). Otherwise keep the chain alive and, while the tree pane is
+		// the focus and no stash/discard is mid-flight, refresh the status so
+		// external edits surface within ~1s. Skipped in the diff pane so reading
+		// a patch isn't interrupted by a reload, and during a discard dialog /
+		// in-flight action so the poll can't race the mutation.
+		if m.mode != viewModeLocalChanges {
+			m.lcPollArmed = false
+			return m, nil
+		}
+		next := localChangesPollCmd()
+		if m.localChanges.Focused() == paneLCTree && !m.lcDiscardOpen && !m.lcActionInFlight {
+			return m, tea.Batch(loadStatusCmd(m.workdir, true), next)
+		}
+		return m, next
 
 	case tea.WindowSizeMsg:
 		// Terminals re-emit WindowSizeMsg on focus changes / SIGWINCH bursts.
@@ -619,6 +655,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		localChangesApplySucceededMsg,
 		localChangesApplyFailedMsg:
 		return m.updateLocalChangesMsg(msg)
+
+	case localChangesStashAllDoneMsg,
+		localChangesStashAllFailedMsg,
+		localChangesDiscardDoneMsg,
+		localChangesDiscardFailedMsg:
+		return m.updateLCActionMsg(msg)
 	}
 	return m, nil
 }
@@ -681,7 +723,7 @@ func (m *Model) enterLocalChangesMode() tea.Cmd {
 	m.focused = paneGraph
 	m.localChanges.SetFocus(paneLCTree)
 	m.applyPaneSizes()
-	return loadStatusCmd(m.workdir)
+	return loadStatusCmd(m.workdir, false)
 }
 
 // enterGraphPage returns to the commit graph — the home page of the
@@ -1256,6 +1298,12 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderStashActionInner()), m.width, m.height)
 	case viewModeStashDropConfirm:
 		return composeOverlay(base, renderModalBox(m.renderStashDropConfirmInner()), m.width, m.height)
+	}
+	// The discard confirm rides on a model flag inside viewModeLocalChanges
+	// (not its own viewMode), so it composes over the page base here rather
+	// than in the mode switch above.
+	if m.mode == viewModeLocalChanges && m.lcDiscardOpen {
+		return composeOverlay(base, renderModalBox(m.renderLCDiscardInner()), m.width, m.height)
 	}
 	return base
 }

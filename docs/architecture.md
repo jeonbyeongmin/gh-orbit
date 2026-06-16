@@ -47,7 +47,7 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `F`            | global | `git fetch --all` in background                                                     |
 | `p`            | global | `git pull` in background (strategy in [config.md](config.md))                       |
 | `P`            | global | `git push` in background (first push auto-sets upstream; never forces)             |
-| `r`            | global | reload refs + log                                                                   |
+| `r`            | global | reload refs + log — except on Local Changes, where the page auto-reloads (poll) so `r` is the discard-all confirm instead |
 | `^C ^C`        | global | quit (press twice; closes patch overlay first)                                      |
 | `?`            | global | toggle inline help reference panel (column layout)                                  |
 | `R`            | graph  | rebase current branch onto cursor (confirm-first; conflicts → terminal) — see [checkout.md](checkout.md) |

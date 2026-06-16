@@ -100,7 +100,9 @@ var (
 			},
 		},
 	}
-	// helpLCTree — local changes tree (file list) pane keys.
+	// helpLCTree — local changes tree (file list) pane keys. `s` / `r` are
+	// page-level (work from the diff pane too); listed here as the primary
+	// surface. The page auto-reloads on a poll, so `r` is discard, not reload.
 	helpLCTree = helpCategory{
 		title: "Tree",
 		groups: [][]helpEntry{
@@ -111,7 +113,8 @@ var (
 			{
 				{"space", "stage/unstage"},
 				{"→", "open diff"},
-				{"r", "reload"},
+				{"s", "stash all"},
+				{"r", "discard all"},
 			},
 		},
 	}

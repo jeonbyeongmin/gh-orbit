@@ -29,7 +29,8 @@ type fileBoundary struct {
 type diffModel struct {
 	viewport     viewport.Model
 	currentHash  string
-	patchText    string
+	patchText    string // plain unified diff from `git show`
+	rendered     string // patchText styled for the viewport (syntax + word-level), cached per load
 	loadingPatch bool
 	err          error
 	reqID        uint64
@@ -81,10 +82,14 @@ func (d *diffModel) SetPatchViewportSize(w, h int) {
 	if h < 1 {
 		h = 1
 	}
+	widthChanged := w != d.viewport.Width
 	d.viewport.Width = w
 	d.viewport.Height = h
 	d.patchViewportInit = true
 	if d.patchText != "" {
+		if widthChanged {
+			d.rendered = renderDiffContent(d.patchText, w)
+		}
 		d.refreshPatchViewport()
 	}
 }
@@ -92,6 +97,7 @@ func (d *diffModel) SetPatchViewportSize(w, h int) {
 func (d *diffModel) BeginPatchLoad(hash string, reqID uint64) {
 	d.currentHash = hash
 	d.patchText = ""
+	d.rendered = ""
 	d.loadingPatch = true
 	d.err = nil
 	d.reqID = reqID
@@ -107,6 +113,7 @@ func (d *diffModel) BeginPatchLoad(hash string, reqID uint64) {
 // vendor diff doesn't sit in memory after the user closes the overlay.
 func (d *diffModel) ClosePatch() {
 	d.patchText = ""
+	d.rendered = ""
 	d.files = nil
 	d.activeFile = -1
 	d.hunkStarts = nil
@@ -127,6 +134,7 @@ func (d *diffModel) ApplyPatchLoaded(reqID uint64, hash, text string) {
 	}
 	d.loadingPatch = false
 	d.patchText = text
+	d.rendered = renderDiffContent(text, d.viewport.Width)
 	d.files = parseFileBoundaries(text)
 	d.hunkStarts = parseHunkStarts(text)
 	d.hunkCursor = 0
@@ -262,11 +270,14 @@ func (d *diffModel) refreshPatchViewport() {
 		d.viewport.SetContent("")
 		return
 	}
+	if d.rendered == "" {
+		d.rendered = renderDiffContent(d.patchText, d.viewport.Width)
+	}
 	if len(d.hunkStarts) == 0 {
-		d.viewport.SetContent(d.patchText)
+		d.viewport.SetContent(d.rendered)
 		return
 	}
-	lines := strings.Split(d.patchText, "\n")
+	lines := strings.Split(d.rendered, "\n")
 	sel := d.hunkStarts[d.hunkCursor]
 	if sel >= 0 && sel < len(lines) {
 		lines[sel] = lcSelectedStyle.Render(ansi.Strip(lines[sel]))
@@ -400,12 +411,11 @@ func firstLine(s string) string {
 // backslash escapes are left as-is (the reviewer reads the same string
 // git would print).
 //
-// gh-orbit invokes git with `color.ui=always` so the overlay can render
-// the green/red diff palette, which means every line — header included —
-// carries ANSI escape sequences. The parser strips them per-line before
-// matching so the prefix / "b/" lookups see the clean text. The
-// `fileBoundary.line` index counts rendered lines (newlines in the raw
-// colored text), which is exactly what viewport.SetYOffset wants.
+// The patch text is uncolored (the viewport styles it in-process), so the
+// ansi.Strip below is just defensive. The `fileBoundary.line` index counts
+// lines (newlines in patchText), which is exactly what viewport.SetYOffset
+// wants — the in-process renderer emits one styled line per source line, so
+// the indices stay valid against the rendered content too.
 func parseFileBoundaries(text string) []fileBoundary {
 	if text == "" {
 		return nil
@@ -428,8 +438,8 @@ func parseFileBoundaries(text string) []fileBoundary {
 // substring (e.g. `dir b/file`) would mis-split, but git never emits
 // such a path without quoting it, and the quoted branch handles that.
 //
-// ANSI escapes on the line (from `color.ui=always`) are stripped before
-// matching; the path returned is plain text suitable for the bottom-hint
+// The line is ANSI-stripped before matching (defensive — the patch is now
+// uncolored); the path returned is plain text suitable for the bottom-hint
 // indicator.
 func parseFileDiffHeader(line string) (string, bool) {
 	plain := ansi.Strip(line)

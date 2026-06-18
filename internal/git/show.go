@@ -35,8 +35,9 @@ func Stat(ctx context.Context, dir, hash string) ([]FileStat, error) {
 }
 
 // Patch returns the unified diff for the given commit hash. Header is
-// suppressed via --format= and ANSI is preserved (-c color.ui=always) so the
-// d-window viewport can show git's own coloring.
+// suppressed via --format=. The diff is uncolored — the diff window styles it
+// in-process (syntax highlighting + word-level emphasis), so git's own
+// coloring would only get in the way.
 func Patch(ctx context.Context, dir, hash string) (string, error) {
 	return runShow(ctx, dir, "--format=", "-p", hash)
 }
@@ -140,7 +141,7 @@ func parseNumstat(s string) ([]FileStat, error) {
 }
 
 func runShow(ctx context.Context, dir string, extra ...string) (string, error) {
-	args := []string{"-c", "color.ui=always", "show"}
+	args := []string{"show"}
 	args = append(args, extra...)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir

@@ -794,6 +794,17 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusStyle = statusErrS
 		return m, nil
 
+	case localChangesOpenSucceededMsg:
+		// Read-only launch — no reload, the tree is unchanged.
+		m.status = "opened " + msg.path
+		m.statusStyle = statusOkS
+		return m, nil
+
+	case localChangesOpenFailedMsg:
+		m.status = "open " + msg.path + ": " + firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
+
 	}
 	return m, nil
 }

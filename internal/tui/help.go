@@ -113,6 +113,7 @@ var (
 			{
 				{"space", "stage/unstage"},
 				{"→", "open diff"},
+				{"enter", "open file"},
 				{"s", "stash all"},
 				{"r", "discard all"},
 			},

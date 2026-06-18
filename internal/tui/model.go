@@ -692,7 +692,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		localChangesRestoreSucceededMsg,
 		localChangesRestoreFailedMsg,
 		localChangesApplySucceededMsg,
-		localChangesApplyFailedMsg:
+		localChangesApplyFailedMsg,
+		localChangesOpenSucceededMsg,
+		localChangesOpenFailedMsg:
 		return m.updateLocalChangesMsg(msg)
 
 	case localChangesStashAllDoneMsg,
@@ -820,6 +822,8 @@ func (m Model) handleLocalChangesTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case " ", "space":
 		return m.dispatchLocalChangesStage()
+	case "enter":
+		return m.dispatchLocalChangesOpen()
 	}
 	return m, nil
 }
@@ -835,6 +839,20 @@ func (m Model) dispatchLocalChangesDiff() (tea.Model, tea.Cmd) {
 	m.localChangesReqID++
 	m.localChanges.BeginDiffLoad(m.localChangesReqID)
 	return m, loadDiffCmd(m.workdir, e.Path, e.Staged(), e.Untracked, m.localChangesReqID)
+}
+
+// dispatchLocalChangesOpen launches the cursor entry's file in the OS default
+// app (`enter`). It's a read-only side action — no index/HEAD mutation — so it
+// skips the gitMutationInFlight gate and triggers no status reload. A deleted
+// entry has no file on disk; openFileExec stats first and the failure lands on
+// the status line.
+func (m Model) dispatchLocalChangesOpen() (tea.Model, tea.Cmd) {
+	e, ok := m.localChanges.CurrentEntry()
+	if !ok {
+		return m, nil
+	}
+	m.setBusyStatus("opening " + e.Path + "…")
+	return m, openFileCmd(m.workdir, e.Path)
 }
 
 // dispatchLocalChangesStage picks Add vs. RestoreStaged based on which

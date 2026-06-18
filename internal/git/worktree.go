@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
 // Worktree is one entry from `git worktree list --porcelain -z`. Path is
-// always populated; Branch is the short branch name (refs/heads/ stripped)
+// always populated and uses OS-native separators (Worktrees normalizes git's
+// forward slashes); Branch is the short branch name (refs/heads/ stripped)
 // for an attached worktree and "" for a detached one. IsMain marks the
 // main worktree — git always emits it first in the porcelain output.
 type Worktree struct {
@@ -65,7 +67,17 @@ func Worktrees(ctx context.Context, dir string) ([]Worktree, error) {
 	if readErr != nil {
 		return nil, fmt.Errorf("git worktree list: read: %w", readErr)
 	}
-	return parseWorktreePorcelain(string(body))
+	wts, err := parseWorktreePorcelain(string(body))
+	if err != nil {
+		return nil, err
+	}
+	// git porcelain emits forward-slash paths even on Windows; normalize to the
+	// OS-native separator so Path compares equal to the os.Getwd()-seeded workdir
+	// and to filepath-built paths (watcher gitDir, modal cursor, display).
+	for i := range wts {
+		wts[i].Path = filepath.FromSlash(wts[i].Path)
+	}
+	return wts, nil
 }
 
 // parseWorktreePorcelain splits the -z stream on double-NUL into entries,

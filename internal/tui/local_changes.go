@@ -74,7 +74,8 @@ type localChangesModel struct {
 	loadErr error
 
 	diff        viewport.Model
-	diffText    string
+	diffText    string // plain unified diff (source for hunk parsing + apply)
+	rendered    string // diffText styled for the viewport (syntax + word-level), cached per load
 	diffLoading bool
 	diffErr     error
 
@@ -128,6 +129,7 @@ func (m *localChangesModel) SetSize(treeW, treeH, diffW, diffH int) {
 	m.treeH = treeH
 	m.diffW = diffW
 	m.diffH = diffH
+	widthChanged := diffW != m.diff.Width
 	m.diff.Width = diffW
 	// One row of the diff pane is the file header (diffHeader); the viewport
 	// takes the rest, so it never paints over the header line.
@@ -137,7 +139,10 @@ func (m *localChangesModel) SetSize(treeW, treeH, diffW, diffH int) {
 	}
 	m.diff.Height = vpH
 	if m.diffText != "" {
-		m.diff.SetContent(m.diffText)
+		if widthChanged {
+			m.rendered = renderDiffContent(m.diffText, diffW)
+		}
+		m.diff.SetContent(m.rendered)
 	}
 	m.followCursor()
 }
@@ -203,6 +208,7 @@ func (m *localChangesModel) ApplyStatusFailed(err error) {
 func (m *localChangesModel) BeginDiffLoad(reqID uint64) {
 	m.diffReqID = reqID
 	m.diffText = ""
+	m.rendered = ""
 	m.diffLoading = true
 	m.diffErr = nil
 	// Drop hunk state up front: between here and ApplyDiffLoaded the diff
@@ -223,6 +229,7 @@ func (m *localChangesModel) ApplyDiffLoaded(reqID uint64, text string) {
 	}
 	m.diffLoading = false
 	m.diffText = text
+	m.rendered = renderDiffContent(text, m.diff.Width)
 	m.diffErr = nil
 	m.hunkStarts = parseHunkStarts(text)
 	m.hunkCursor = 0
@@ -249,6 +256,7 @@ func (m *localChangesModel) ApplyDiffFailed(reqID uint64, err error) {
 // large untracked-file diff resident.
 func (m *localChangesModel) ClosePatch() {
 	m.diffText = ""
+	m.rendered = ""
 	m.hunkStarts = nil
 	m.hunkCursor = 0
 	m.diff.SetContent("")
@@ -280,11 +288,14 @@ func (m *localChangesModel) refreshDiffViewport() {
 		m.diff.SetContent("")
 		return
 	}
+	if m.rendered == "" {
+		m.rendered = renderDiffContent(m.diffText, m.diff.Width)
+	}
 	if m.focused != paneLCDiff || len(m.hunkStarts) == 0 {
-		m.diff.SetContent(m.diffText)
+		m.diff.SetContent(m.rendered)
 		return
 	}
-	lines := strings.Split(m.diffText, "\n")
+	lines := strings.Split(m.rendered, "\n")
 	sel := m.hunkStarts[m.hunkCursor]
 	if sel >= 0 && sel < len(lines) {
 		lines[sel] = lcSelectedStyle.Render(ansi.Strip(lines[sel]))

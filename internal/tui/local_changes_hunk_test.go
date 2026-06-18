@@ -244,9 +244,9 @@ func TestStageHunkEndToEnd(t *testing.T) {
 	mustWriteFile(t, dir, "f.txt", strings.Join(edited, "\n"))
 
 	ctx := context.Background()
-	raw, err := git.DiffFileRaw(ctx, dir, "f.txt", false)
+	raw, err := git.DiffFile(ctx, dir, "f.txt", false)
 	if err != nil {
-		t.Fatalf("DiffFileRaw: %v", err)
+		t.Fatalf("DiffFile: %v", err)
 	}
 	if n := len(parseHunkStarts(raw)); n != 2 {
 		t.Fatalf("expected 2 hunks in the working diff, got %d:\n%s", n, raw)

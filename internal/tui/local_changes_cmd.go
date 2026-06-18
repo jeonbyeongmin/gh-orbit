@@ -30,7 +30,7 @@ var (
 	diffNumstatExec          = git.DiffNumstat
 	diffUntrackedNumstatExec = git.DiffUntrackedNumstat
 	diffFileExec             = git.DiffFile
-	diffFileRawExec          = git.DiffFileRaw
+	diffFileRawExec          = git.DiffFile // the apply-patch source (see stageHunkCmd)
 	diffUntrackedExec        = git.DiffUntracked
 	addExec                  = git.Add
 	restoreStagedExec        = git.RestoreStaged
@@ -271,8 +271,8 @@ func restoreStagedCmd(dir, path string) tea.Cmd {
 }
 
 // stageHunkCmd stages (or, for a staged entry, unstages) a single hunk. It
-// fetches the uncolored diff fresh — the viewport copy is ANSI-colored and
-// `git apply` can't parse it — extracts the hunkIdx-th hunk into a minimal
+// fetches the diff fresh — the viewport copy is styled (syntax + word-level)
+// and `git apply` can't parse it — extracts the hunkIdx-th hunk into a minimal
 // patch, and applies it to the index. staged=true means the hunk came from
 // the staged side, so the patch is applied in reverse to remove it.
 func stageHunkCmd(dir, path string, staged bool, hunkIdx int) tea.Cmd {

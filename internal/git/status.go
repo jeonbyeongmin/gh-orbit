@@ -233,13 +233,6 @@ func RestoreStaged(ctx context.Context, dir, path string) error {
 	return runGitWrite(ctx, dir, "git restore --staged", nil, "restore", "--staged", "--", path)
 }
 
-// DiffFileRaw is DiffFile without ANSI color (`color.ui=never`). Per-hunk
-// staging feeds the result to `git apply`, which can't parse the colored diff
-// the viewport renders — so the patch is rebuilt from this uncolored copy.
-func DiffFileRaw(ctx context.Context, dir, path string, staged bool) (string, error) {
-	return diffFile(ctx, dir, path, staged, "never")
-}
-
 // ApplyCached pipes a unified-diff patch to `git apply --cached`, staging it
 // into the index (reverse=true unstages — applies the patch backwards). The
 // patch must be a complete, valid unified diff (file header + one or more
@@ -265,19 +258,14 @@ func ApplyCached(ctx context.Context, dir, patch string, reverse bool) error {
 
 // DiffFile returns the unified diff for one tracked path. staged=true asks
 // for the index-vs-HEAD diff (`--cached`); staged=false asks for the
-// worktree-vs-index diff. ANSI color is preserved via `-c color.ui=always`
-// so the TUI viewport renders git's own coloring.
+// worktree-vs-index diff. The output is uncolored: the viewport styles it
+// in-process, and per-hunk staging feeds the same text to `git apply` (which
+// can't parse a colored diff), so one plain fetch serves both.
 //
 // `git diff` exits 0 even when there's no diff, so we treat any non-zero
 // exit as a real failure (unlike DiffUntracked).
 func DiffFile(ctx context.Context, dir, path string, staged bool) (string, error) {
-	return diffFile(ctx, dir, path, staged, "always")
-}
-
-// diffFile is the shared body for DiffFile / DiffFileRaw — identical except the
-// `color.ui` mode (always for the viewport, never for the apply patch).
-func diffFile(ctx context.Context, dir, path string, staged bool, colorMode string) (string, error) {
-	args := []string{"-c", "color.ui=" + colorMode, "diff"}
+	args := []string{"-c", "color.ui=never", "diff"}
 	if staged {
 		args = append(args, "--cached")
 	}
@@ -317,12 +305,13 @@ func DiffNumstat(ctx context.Context, dir string, staged bool) ([]FileStat, erro
 }
 
 // DiffUntracked renders an untracked file as a full-addition diff via
-// `git diff --no-index /dev/null <path>`. Exit code 1 means "files differ"
-// (always the case for untracked files) and is treated as success; only
-// exit codes ≥ 2 are real errors per git's convention for diff.
+// `git diff --no-index /dev/null <path>`. Uncolored — the viewport styles it
+// in-process. Exit code 1 means "files differ" (always the case for untracked
+// files) and is treated as success; only exit codes ≥ 2 are real errors per
+// git's convention for diff.
 func DiffUntracked(ctx context.Context, dir, path string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git",
-		"-c", "color.ui=always",
+		"-c", "color.ui=never",
 		"diff", "--no-index", "--", "/dev/null", path,
 	)
 	cmd.Dir = dir

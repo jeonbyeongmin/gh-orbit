@@ -64,11 +64,11 @@ const (
 type diffLineKind int
 
 const (
-	dlMeta diffLineKind = iota // diff --git, index, ---/+++, \ No newline, Binary, blank
-	dlHunk                     // @@ -a,b +c,d @@
-	dlContext                  // leading space
-	dlDel                      // leading -
-	dlAdd                      // leading +
+	dlMeta    diffLineKind = iota // diff --git, index, ---/+++, \ No newline, Binary, blank
+	dlHunk                        // @@ -a,b +c,d @@
+	dlContext                     // leading space
+	dlDel                         // leading -
+	dlAdd                         // leading +
 )
 
 // renderDiffContent styles a plain (uncolored) unified diff for the viewport.

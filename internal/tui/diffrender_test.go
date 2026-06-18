@@ -35,8 +35,8 @@ func TestExpandTabs(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"no tabs", "no tabs"},
 		{"\tx", "    x"},
-		{"a\tb", "a   b"},   // a at col0, tab fills to col4
-		{"ab\tc", "ab  c"},  // ab at col0-1, tab fills to col4
+		{"a\tb", "a   b"},  // a at col0, tab fills to col4
+		{"ab\tc", "ab  c"}, // ab at col0-1, tab fills to col4
 		{"abcd\te", "abcd    e"},
 		{"変\tx", "変  x"}, // wide rune (width 2) → tab fills to col4 with 2 spaces, not 3
 	}

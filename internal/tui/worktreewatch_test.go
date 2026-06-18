@@ -112,16 +112,18 @@ func TestOnRawEventDebouncesBurst(t *testing.T) {
 		hits.Add(1)
 		done <- p
 	})
-	w.byGitDir["/wt/.git"] = "/wt"
+	gitDir := filepath.FromSlash("/wt/.git")
+	wtPath := filepath.FromSlash("/wt")
+	w.byGitDir[gitDir] = wtPath
 
 	// Burst: 5 raw events within the debounce window. Only one send.
 	for i := 0; i < 5; i++ {
-		w.onRawEvent("/wt/.git/HEAD", fsnotify.Write)
+		w.onRawEvent(filepath.Join(gitDir, "HEAD"), fsnotify.Write)
 		time.Sleep(2 * time.Millisecond)
 	}
 	select {
 	case p := <-done:
-		if p != "/wt" {
+		if p != wtPath {
 			t.Errorf("sender got %q want /wt", p)
 		}
 	case <-time.After(200 * time.Millisecond):
@@ -146,11 +148,12 @@ func TestOnRawEventFiltersByBasename(t *testing.T) {
 		fired = true
 		mu.Unlock()
 	})
-	w.byGitDir["/wt/.git"] = "/wt"
+	gitDir := filepath.FromSlash("/wt/.git")
+	w.byGitDir[gitDir] = filepath.FromSlash("/wt")
 
 	// Files git also rewrites that are NOT HEAD or index — must be ignored.
 	for _, name := range []string{"COMMIT_EDITMSG", "ORIG_HEAD", "FETCH_HEAD", "packed-refs", "HEAD.lock"} {
-		w.onRawEvent("/wt/.git/"+name, fsnotify.Write)
+		w.onRawEvent(filepath.Join(gitDir, name), fsnotify.Write)
 	}
 	time.Sleep(40 * time.Millisecond)
 	mu.Lock()
@@ -163,12 +166,14 @@ func TestOnRawEventFiltersByBasename(t *testing.T) {
 func TestOnRawEventIndexBasenameTriggers(t *testing.T) {
 	done := make(chan string, 1)
 	w := newTestWatcher(15*time.Millisecond, func(p string) { done <- p })
-	w.byGitDir["/wt/.git"] = "/wt"
+	gitDir := filepath.FromSlash("/wt/.git")
+	wtPath := filepath.FromSlash("/wt")
+	w.byGitDir[gitDir] = wtPath
 
-	w.onRawEvent("/wt/.git/index", fsnotify.Write)
+	w.onRawEvent(filepath.Join(gitDir, "index"), fsnotify.Write)
 	select {
 	case p := <-done:
-		if p != "/wt" {
+		if p != wtPath {
 			t.Errorf("got %q want /wt", p)
 		}
 	case <-time.After(200 * time.Millisecond):
@@ -186,10 +191,11 @@ func TestOnRawEventIgnoresChmod(t *testing.T) {
 	w := newTestWatcher(10*time.Millisecond, func(string) {
 		t.Errorf("Chmod-only event must not trigger sender")
 	})
-	w.byGitDir["/wt/.git"] = "/wt"
+	gitDir := filepath.FromSlash("/wt/.git")
+	w.byGitDir[gitDir] = filepath.FromSlash("/wt")
 
-	w.onRawEvent("/wt/.git/index", fsnotify.Chmod)
-	w.onRawEvent("/wt/.git/HEAD", fsnotify.Chmod)
+	w.onRawEvent(filepath.Join(gitDir, "index"), fsnotify.Chmod)
+	w.onRawEvent(filepath.Join(gitDir, "HEAD"), fsnotify.Chmod)
 	time.Sleep(40 * time.Millisecond)
 
 	w.mu.Lock()

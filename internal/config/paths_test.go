@@ -20,6 +20,7 @@ func TestConfigDirHonorsXDGConfigHome(t *testing.T) {
 func TestConfigDirFallsBackToHomeDotConfig(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", "/tmp/fakehome")
+	t.Setenv("USERPROFILE", "/tmp/fakehome") // Windows: os.UserHomeDir reads %USERPROFILE%, not $HOME
 	got, err := ConfigDir()
 	if err != nil {
 		t.Fatalf("ConfigDir: %v", err)

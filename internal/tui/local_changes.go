@@ -263,8 +263,8 @@ func (m *localChangesModel) ClosePatch() {
 }
 
 // parseHunkStarts records the line index of every `@@` hunk header in the
-// diff. Lines are ANSI-stripped first because the viewport diff is colored
-// (git's `color.ui=always`), so a header line starts with an escape, not `@@`.
+// diff. It runs on the plain (uncolored) diff text; the ANSI strip is defensive
+// so a stray escape can't hide a `@@` header.
 func parseHunkStarts(diffText string) []int {
 	if diffText == "" {
 		return nil
@@ -281,8 +281,8 @@ func parseHunkStarts(diffText string) []int {
 // refreshDiffViewport repaints the viewport. When the diff pane is focused and
 // has hunks, the selected hunk's `@@` header is reverse-highlighted so the
 // reviewer sees which hunk `space` will stage. The header is ANSI-stripped
-// before restyling so the reverse doesn't fight git's inline color codes (a
-// .Render over an already-colored line breaks on the inner reset).
+// before restyling so the reverse doesn't fight the rendered line's own color
+// codes (a .Render over an already-styled line breaks on the inner reset).
 func (m *localChangesModel) refreshDiffViewport() {
 	if m.diffText == "" {
 		m.diff.SetContent("")

@@ -439,7 +439,7 @@ func expandTabs(s string, tw int) string {
 			continue
 		}
 		b.WriteRune(r)
-		col++
+		col += runewidth.RuneWidth(r)
 	}
 	return b.String()
 }

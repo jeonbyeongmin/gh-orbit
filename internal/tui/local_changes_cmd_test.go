@@ -243,6 +243,7 @@ func restoreLocalChangesExec(t *testing.T) func() {
 	origStashAll := stashAllExec
 	origResetHard := resetHardExec
 	origClean := cleanExec
+	origOpenFile := openFileExec
 	return func() {
 		statusExec = origStatus
 		diffNumstatExec = origDiffNumstat
@@ -254,5 +255,6 @@ func restoreLocalChangesExec(t *testing.T) func() {
 		stashAllExec = origStashAll
 		resetHardExec = origResetHard
 		cleanExec = origClean
+		openFileExec = origOpenFile
 	}
 }

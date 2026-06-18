@@ -485,6 +485,56 @@ func TestDispatchLocalChangesStagePicksAddVsRestore(t *testing.T) {
 	}
 }
 
+func TestDispatchLocalChangesOpenLaunchesCursorFile(t *testing.T) {
+	t.Cleanup(restoreLocalChangesExec(t))
+	var sawPath string
+	openFileExec = func(ctx context.Context, dir, path string) error {
+		sawPath = path
+		return nil
+	}
+
+	m := New()
+	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{
+		{Path: "a.txt", WorktreeState: 'M'},
+		{Path: "b.txt", WorktreeState: 'M'},
+	})
+	m.localChanges.MoveCursor(1) // land on b.txt
+
+	_, cmd := m.dispatchLocalChangesOpen()
+	if cmd == nil {
+		t.Fatalf("dispatch returned nil cmd")
+	}
+	msg := cmd()
+	if sawPath != "b.txt" {
+		t.Fatalf("open called for wrong file: got %q want %q", sawPath, "b.txt")
+	}
+	if got, ok := msg.(localChangesOpenSucceededMsg); !ok || got.path != "b.txt" {
+		t.Fatalf("expected succeeded msg for b.txt, got %#v", msg)
+	}
+}
+
+func TestDispatchLocalChangesOpenSurfacesError(t *testing.T) {
+	t.Cleanup(restoreLocalChangesExec(t))
+	boom := errors.New("no such file")
+	openFileExec = func(ctx context.Context, dir, path string) error { return boom }
+
+	m := New()
+	m.localChanges.ApplyStatusLoaded([]git.StatusEntry{{Path: "gone.txt", WorktreeState: 'D'}})
+
+	_, cmd := m.dispatchLocalChangesOpen()
+	if cmd == nil {
+		t.Fatalf("dispatch returned nil cmd")
+	}
+	msg := cmd()
+	failed, ok := msg.(localChangesOpenFailedMsg)
+	if !ok {
+		t.Fatalf("expected failed msg, got %#v", msg)
+	}
+	if failed.path != "gone.txt" || failed.err != boom {
+		t.Fatalf("failed msg mismatch: %#v", failed)
+	}
+}
+
 func TestLocalChangesTreeViewEmptyHasPlaceholder(t *testing.T) {
 	m := newLocalChangesModel()
 	m.SetSize(20, 10, 20, 10)

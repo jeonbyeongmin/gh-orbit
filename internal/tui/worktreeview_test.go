@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -164,11 +166,16 @@ func TestTruncLeftKeepTail(t *testing.T) {
 }
 
 func TestWorktreePathDisplayCollapsesHome(t *testing.T) {
-	t.Setenv("HOME", "/Users/x")
-	if got := worktreePathDisplay("/Users/x/project/gh-orbit"); got != "~/project/gh-orbit" {
+	home := t.TempDir()
+	t.Setenv("HOME", home)        // unix: os.UserHomeDir reads $HOME
+	t.Setenv("USERPROFILE", home) // windows: reads %USERPROFILE%
+	sub := filepath.Join(home, "project", "gh-orbit")
+	wantCollapsed := "~" + string(os.PathSeparator) + filepath.Join("project", "gh-orbit")
+	if got := worktreePathDisplay(sub); got != wantCollapsed {
 		t.Errorf("home prefix should collapse to ~: %q", got)
 	}
-	if got := worktreePathDisplay("/opt/elsewhere"); got != "/opt/elsewhere" {
+	outside := filepath.FromSlash("/opt/elsewhere")
+	if got := worktreePathDisplay(outside); got != outside {
 		t.Errorf("non-home path should pass through: %q", got)
 	}
 }

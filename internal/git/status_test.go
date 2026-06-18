@@ -213,6 +213,9 @@ func initEmptyRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	gitRun(t, dir, "init", "-b", "main")
+	// Windows CI sets core.autocrlf=true globally; pin it off so committed LF
+	// content round-trips byte-for-byte through checkout on every platform.
+	gitRun(t, dir, "config", "core.autocrlf", "false")
 	return dir
 }
 

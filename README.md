@@ -46,6 +46,8 @@ Each action runs your own `git` / `gh` — here is exactly what each key shells 
 | Local Changes (`tab` cycle) + `space` | `git status` + `git diff` + `git add` / `git restore --staged` |
 | `space` (diff pane, selected hunk) | per-hunk `git apply --cached` (`--reverse` to unstage) |
 | `c` (local changes) | `git commit -m <msg>` |
+| `s` / `r` (local changes) | `git stash push --include-untracked` / `git reset --hard` (+ `git clean -fd` for new files) |
+| `enter` (local changes) | `open` / `xdg-open` / `start` (focused file in your default app) |
 | `C` / `ctrl+x` (local changes, mid-conflict) | `git <cherry-pick\|rebase\|merge\|revert> --continue` / `--abort` |
 | `space` (checkout / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
 | `tab` → Worktrees (switch / add / remove) | `git worktree list` / `add` / `remove` |
@@ -53,9 +55,11 @@ Each action runs your own `git` / `gh` — here is exactly what each key shells 
 | `c` / `R` | `git cherry-pick <commit>` / `git rebase <onto>` |
 | `v` / `x` | `git revert <commit>` / `git reset --soft\|--mixed\|--hard <commit>` |
 | `n` | `git checkout -b <name> <commit>` |
+| `space` / `d` (graph stash row) | `git stash pop` / `apply` / `drop` |
 | `F` / `p` / `P` | `git fetch --all` / `git pull` / `git push` |
 | `enter` (open PR on the web) | `gh pr view <n> --web` |
 | `m` (merge PR) | `gh pr merge --squash\|--merge\|--rebase` |
+| `C` (PR checks modal) | `gh pr checks <number>` |
 | Pull Requests tab | `gh pr list` (reused) → `enter` opens a row on the web, `m` merges it |
 | PR badges on branch chips | `gh pr list` + `gh pr checks <number>` |
 | `y` | `git rev-parse <commit>` → clipboard |
@@ -69,17 +73,18 @@ Each action runs your own `git` / `gh` — here is exactly what each key shells 
 - Unified graph across all local branches, remotes, and tags (`--all`) on launch.
 - Dot vocabulary: `●` commit · `○` merge · `◉` HEAD. Lane colors rotate an 8-hue palette.
 - Each row reads `graph │ message (chips + subject) │ author │ authored time`. Time is right-anchored and always visible; the message column absorbs truncation, dropping chips then author before the subject shrinks below one cell.
-- Branch/tag decorations render as chips. A matching open PR adds a `#N` badge with a CI rollup glyph (`✓` pass · `✗` fail · `○` running), refreshed at launch, on `r`, and after each fetch/pull. Repos with no GitHub remote omit the badge.
-- Reloads are stale-while-revalidate: the current graph stays on screen while the new one streams in.
+- Branch/tag decorations render as chips. A matching open PR adds a `#N` badge with a CI rollup glyph (`✓` pass · `✗` fail · `○` running), refreshed at launch, on `r`, and after each fetch/pull. Repos with no GitHub remote omit the badge. `C` opens that PR's per-check detail.
+- Stash entries appear as their own rows: `space` pops / applies the cursor stash (`[p]` / `[a]`) and `d` drops it (confirm).
+- Reloads are stale-while-revalidate: the current graph stays on screen while the new one streams in. A refs/log load failure or a dropped `gh` login surfaces on the status line instead of failing silently.
 
 ### Diff review
 
 <img src="./docs/assets/diff-review.gif" alt="diff review" width="800">
 
-- `→` opens the focused commit's full patch (`git show -p`) as a full-screen overlay.
+- `→` opens the focused commit's full patch (`git show -p`) as a full-screen overlay — syntax-highlighted, with word-level emphasis on the changed spans.
 - `[` / `]` move between hunks inside the patch, `{` / `}` jump file-to-file; the footer shows `<path> [N/M]`.
-- The **Local Changes** page (in the `tab` / `shift+tab` cycle) is a working-tree diff (file tree + diff pane) split into Conflicts / Unstaged / Staged. `→` enters the diff pane, `←` returns to the tree, `space` stages/unstages the focused file, `c` commits the staged index (message prompt; your `.gitconfig`, hooks, and signing all apply), `r` reloads. When a cherry-pick / rebase / merge / revert stops mid-conflict, a banner appears here: stage your resolutions and press `C` to continue, or `ctrl+x` to abort.
-- Per-hunk staging: `tab` into the diff pane, `[` / `]` move between hunks (the selected `@@` header is highlighted), and `space` stages just that hunk (`git apply --cached`) — or unstages it when viewing a staged entry. Untracked / conflict files stage whole-file from the tree.
+- The **Local Changes** page (in the `tab` / `shift+tab` cycle) is a working-tree diff (file tree + diff pane) split into Conflicts / Unstaged / Staged, each row tagged with its `+N -M` line counts. `→` enters the diff pane, `←` returns to the tree, `space` stages/unstages the focused file, `enter` opens it in your OS default app, `c` commits the staged index (message prompt; your `.gitconfig`, hooks, and signing all apply), `s` stashes the whole tree (tracked + untracked), and `r` discards all changes (`[t]` tracked only · `[a]` tracked + new files). The page auto-reloads on a poll, so external edits appear without a keypress. When a cherry-pick / rebase / merge / revert stops mid-conflict, a banner appears here: stage your resolutions and press `C` to continue, or `ctrl+x` to abort.
+- Per-hunk staging: `→` into the diff pane, `[` / `]` move between hunks (the selected `@@` header is highlighted), and `space` stages just that hunk (`git apply --cached`) — or unstages it when viewing a staged entry. Untracked / conflict files stage whole-file from the tree.
 
 ### Pull requests (`enter` / `m` / the Pull Requests tab)
 
@@ -89,7 +94,8 @@ Reviewing happens on GitHub; gh-orbit jumps you there, and lands the PR from the
 
 - `enter` on a commit whose chip carries an open-PR badge opens that PR on GitHub in your browser (`gh pr view --web`). The same web jump is wired to `enter` on the Worktree and Pull Requests pages.
 - `m` merges the cursor row's open PR via a centered confirm dialog — `[s]` squash · `[m]` merge · `[r]` rebase (`gh pr merge`). Merge closes the dialog and refreshes the PR badges; gh errors (not mergeable, logged-out `gh`) surface on the status line.
-- The **Pull Requests tab** (last in the `tab` / `shift+tab` cycle) lists every open PR — including ones whose head branch isn't checked out locally (which the graph cursor can't reach). Rows read `#N <CI glyph> title · author`; `enter` opens the cursor row on the web, `m` merges it, `r` refreshes the list.
+- `C` opens a per-check CI modal (`gh pr checks`) for the cursor PR — every check's status, with `enter` to open its log on the web. Works on the graph (a PR-badged row) and on the Pull Requests tab.
+- The **Pull Requests tab** (last in the `tab` / `shift+tab` cycle) lists every open PR — including ones whose head branch isn't checked out locally (which the graph cursor can't reach) — as 3-line cards: `#N title` + CI glyph + age, then `@author` with `head → base`, then the review dot + `+N -M` diff size. `enter` opens the cursor card on the web, `m` merges it, `C` shows its checks, `r` refreshes; the list re-polls every 30s while the window is focused.
 
 ### Worktrees (`tab`)
 
@@ -132,11 +138,17 @@ Reviewing happens on GitHub; gh-orbit jumps you there, and lands the PR from the
 | `→` | graph | open the full-screen patch overlay |
 | `enter` | graph | open the cursor row's open PR on the web |
 | `m` | graph | merge the cursor row's open PR (`s`/`m`/`r` strategy) |
+| `C` | graph · pull requests | open the cursor PR's per-check CI modal |
+| `space` / `d` | graph (stash row) | stash pop · apply / drop |
 | `[` / `]` · `{` / `}` | patch | previous / next hunk · previous / next file |
-| `enter` / `m` | pull requests | open on the web / merge the cursor PR |
+| `enter` / `m` / `r` | pull requests | open on the web / merge the cursor PR / refresh list |
 | `tab` / `⇧tab` | global | cycle pages (graph · worktree · local changes · pull requests) |
+| `space` / `s` | worktree | switch to the cursor worktree / sort by last commit |
+| `a` / `d` | worktree | add / remove a worktree |
 | `space` | local changes | stage / unstage the focused file (or hunk, in the diff pane) |
+| `enter` | local changes | open the focused file in your OS default app |
 | `c` | local changes | commit the staged index (message prompt) |
+| `s` / `r` | local changes | stash the whole tree / discard all changes (`t` tracked · `a` + new files) |
 | `C` / `ctrl+x` | local changes | continue / abort an in-progress cherry-pick · rebase · merge · revert (shown while one is mid-conflict) |
 | `[` / `]` | local changes diff | previous / next hunk |
 | `b` | global | branches modal |
@@ -144,7 +156,7 @@ Reviewing happens on GitHub; gh-orbit jumps you there, and lands the PR from the
 | `n` | graph | create a branch at the cursor + switch |
 | `F` / `p` / `P` | global | fetch / pull / push |
 | `y` | graph | copy hash |
-| `r` | global | reload |
+| `r` | graph | reload refs + log |
 | `?` | global | toggle help panel |
 | `ctrl+c` `ctrl+c` | global | quit (press twice) |
 
@@ -175,12 +187,17 @@ golangci-lint run                     # lint
 tail -f ~/.local/state/gh-orbit/log   # follow runtime logs (TUI owns stdout)
 ```
 
-Regenerate the demo GIF with [VHS](https://github.com/charmbracelet/vhs):
+Regenerate the demo GIFs — `docs/assets/record.sh` drives the real binary in a
+tmux PTY, captures with [asciinema](https://asciinema.org), and renders with
+[agg](https://github.com/asciinema/agg) (`brew install asciinema agg`):
 
 ```bash
 go build -o /tmp/orbit-demo ./cmd/orbit
-vhs docs/assets/demo.tape
+docs/assets/record.sh demo   # or: commit-graph · diff-review · pull-requests · worktrees · branches
 ```
+
+The scenes assume a demo environment (a few `feat/*` worktrees off `develop`, a
+couple with open PRs, one left dirty); the script's header documents it.
 
 See [`docs/`](./docs/) for feature-level reference — start at [`docs/index.md`](./docs/index.md).
 

@@ -214,8 +214,9 @@ func prBadge(pr prInfo) string {
 	return fmt.Sprintf("#%d", pr.Number) + prCheckGlyph(pr.Checks)
 }
 
-// prCheckGlyph is the one-char CI rollup glyph shared by the chip badge and
-// the `l` PR list modal. Empty for prChecksNone (no checks configured).
+// prCheckGlyph is the one-char CI rollup glyph shared by the chip badge, the
+// Pull Requests page, and the per-check rows of the checks modal. Empty for
+// prChecksNone (no checks configured).
 func prCheckGlyph(s prCheckState) string {
 	switch s {
 	case prChecksPassing:

@@ -217,6 +217,18 @@ func (m Model) updatePRActionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "merge failed: " + firstLine(msg.err.Error())
 		m.statusStyle = statusErrS
 		return m, nil
+	case prCheckOpenedMsg:
+		// Fire-and-forget like the web open: the checks modal stays up so the
+		// reviewer can open another check's log without reopening it.
+		m.clearBusy()
+		m.status = fmt.Sprintf("opened %s in browser", msg.name)
+		m.statusStyle = statusOkS
+		return m, nil
+	case prCheckOpenFailedMsg:
+		m.clearBusy()
+		m.status = firstLine(msg.err.Error())
+		m.statusStyle = statusErrS
+		return m, nil
 	}
 	return m, nil
 }

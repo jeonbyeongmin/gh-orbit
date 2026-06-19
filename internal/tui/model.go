@@ -135,6 +135,12 @@ const (
 	// viewModeStashDropConfirm is the destructive "drop stash@{N}?" confirm
 	// armed by `d` on a graph stash row.
 	viewModeStashDropConfirm
+	// viewModePRChecks is the centered modal listing one PR's CI contexts
+	// (name + verdict, failures first), armed by `C` on a PR-badged graph row
+	// or the Pull Requests page cursor. prChecks.returnMode records the
+	// launching page so the box composes over — and closes back to — it, the
+	// same backdrop contract the merge confirm uses (isPRsSurface).
+	viewModePRChecks
 )
 
 // pendingCheckout remembers what the user was trying to check out so the
@@ -327,6 +333,9 @@ type Model struct {
 	// prsPage backs viewModePRsPage. Cursor indexes into m.prList; clamped
 	// when a refresh lands a shorter list while the page is open.
 	prsPage prsPageState
+	// prChecks backs viewModePRChecks. Snapshotted from the cursor PR's
+	// CheckRows when `C` opens the modal; reset to zero on close.
+	prChecks prChecksState
 	// pendingRebase backs viewModeRebaseConfirm. Stamped on `R` with the
 	// cursor hash + display label + HEAD branch; consumed by the confirm
 	// key handler. Reset on esc / dispatch.
@@ -659,7 +668,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prWebOpenedMsg,
 		prWebFailedMsg,
 		prMergeDoneMsg,
-		prMergeFailedMsg:
+		prMergeFailedMsg,
+		prCheckOpenedMsg,
+		prCheckOpenFailedMsg:
 		return m.updatePRActionMsg(msg)
 
 	case stashActionDoneMsg,
@@ -1355,6 +1366,8 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderStashActionInner()), m.width, m.height)
 	case viewModeStashDropConfirm:
 		return composeOverlay(base, renderModalBox(m.renderStashDropConfirmInner()), m.width, m.height)
+	case viewModePRChecks:
+		return composeOverlay(base, renderModalBox(m.renderPRChecksInner()), m.width, m.height)
 	}
 	// The discard confirm rides on a model flag inside viewModeLocalChanges
 	// (not its own viewMode), so it composes over the page base here rather
@@ -1395,6 +1408,8 @@ func (m Model) isPRsSurface() bool {
 		return true
 	case viewModeMergeConfirm:
 		return m.mergeReturnMode == viewModePRsPage
+	case viewModePRChecks:
+		return m.prChecks.returnMode == viewModePRsPage
 	}
 	return false
 }

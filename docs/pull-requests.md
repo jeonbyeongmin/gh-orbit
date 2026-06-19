@@ -1,11 +1,12 @@
 # pull-requests
 
-Reviewing a PR happens on GitHub now. The cockpit keeps two PR actions
+Reviewing a PR happens on GitHub now. The cockpit keeps the PR actions
 worth a keystroke from the terminal — **jump to the PR** (`enter`, opens
-it in the browser) and **land it** (`m`, a merge confirm) — plus a
-**Pull Requests page** listing every open PR. The cockpit is a `gh`
-extension, so the `gh` CLI is guaranteed present; non-GitHub remotes / a
-logged-out `gh` surface `gh`'s own error on the status line.
+it in the browser), **land it** (`m`, a merge confirm), and **see which
+check failed** (`C`, a CI checks modal) — plus a **Pull Requests page**
+listing every open PR. The cockpit is a `gh` extension, so the `gh` CLI is
+guaranteed present; non-GitHub remotes / a logged-out `gh` surface `gh`'s
+own error on the status line.
 
 See [`internal/tui/prreview.go`](../internal/tui/prreview.go) (the web /
 merge actions) and [`internal/tui/prs_page.go`](../internal/tui/prs_page.go)
@@ -37,6 +38,7 @@ only owns its own cursor (`prsPage.cursor`).
 | `↑` / `↓`      | move the cursor                                              |
 | `enter`        | open the cursor PR on the web (`gh pr view --web`)           |
 | `m`            | merge the cursor PR (arms the merge confirm)                 |
+| `C`            | open the CI checks modal for the cursor PR                   |
 | `r`            | refresh the open-PR list (`gh pr list`)                      |
 | `tab` / `⇧tab` | cycle to the next / previous page                            |
 | `?`            | toggle the inline help (Global + Pull Requests)             |
@@ -81,6 +83,49 @@ at ~60s. The poll skips its round-trip while the window is blurred
 (`windowFocused`, toggled by `tea.Focus`/`BlurMsg`) so an idle cockpit
 left on the page makes no network calls; `dispatchPRList`'s `prsInFlight`
 gate drops a tick that lands mid-load.
+
+## CI checks modal (`C`)
+
+`C` on a PR — the cursor row's PR-badged chip on the **graph** or the cursor
+card on the **Pull Requests page** — opens `viewModePRChecks`, a centered
+modal (the same `renderModalBox` + `renderScrollWindow` vocabulary the
+branches modal uses) listing every CI context with its name and verdict glyph:
+
+```
+[Checks · #124]
+> ✗ build (ubuntu-latest)
+  ✗ lint
+  ○ e2e
+  ✓ unit
+[↑/↓] navigate · [enter] open log · [esc] close
+```
+
+The badge glyph (`✓`/`✗`/`○`) is a one-character collapse of the whole
+rollup (`worseCheckState`); this modal is its expansion. `gh pr list`
+already fetches `statusCheckRollup` per check, but the badge dropped each
+context's `name` and URL after folding them into the glyph —
+`prInfo.CheckRows` now preserves them (decoded in `parsePRList`: a
+`CheckRun` carries `name` + `detailsUrl`, a `StatusContext` carries
+`context` + `targetUrl`). Rows are sorted **failures first** (then pending,
+then passing — `checkRank`) so the broken check a reviewer came for sits at
+the top.
+
+`enter` on a row opens that check's log in the browser. The cockpit is a
+`gh` extension, but `gh` has no "open an arbitrary URL" verb, so the
+per-check URL rides the OS launcher (`open` / `xdg-open` / `cmd start`,
+`openURLExec`) the Local Changes "open file" action already uses — not a
+`gh` subcommand. It's fire-and-forget: the modal stays up (so you can open
+another check's log) with `opening <name>…` → `opened <name> in browser` on
+the status line. A check with no URL reports `no log URL for <name>` instead
+of launching an empty tab. A PR whose rollup is empty (no CI configured —
+the chip shows no glyph either) has nothing to list, so `C` reports
+`no CI checks on #N` and stays put. In-app log tailing (`gh run view
+--log-failed`) is a separate surface, deferred.
+
+`prChecks.returnMode` records the launching page so the modal composes over
+— and closes back to — the graph or the PR page (`isPRsSurface` keeps the
+breadcrumb steady while it's open), the same backdrop contract the merge
+confirm uses.
 
 ## Merge confirm (`m`)
 

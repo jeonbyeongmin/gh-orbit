@@ -35,19 +35,63 @@ func TestParsePRListRollup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsePRList: %v", err)
 	}
-	// Order is gh's; the modal renders in this order. fail dominates pending.
-	want := []prInfo{
-		{Number: 1, HeadRef: "no-checks", Title: "First", Author: "alice", Checks: prChecksNone},
-		{Number: 2, HeadRef: "all-green", Title: "Second", Author: "bob", Checks: prChecksPassing},
-		{Number: 3, HeadRef: "one-red", Title: "Third", Author: "carol", Checks: prChecksFailing},
-		{Number: 4, HeadRef: "still-running", Title: "Fourth", Author: "dave", Checks: prChecksPending},
+	// Order is gh's; the page renders in this order. fail dominates pending.
+	type meta struct {
+		number int
+		head   string
+		title  string
+		author string
+		checks prCheckState
+	}
+	want := []meta{
+		{1, "no-checks", "First", "alice", prChecksNone},
+		{2, "all-green", "Second", "bob", prChecksPassing},
+		{3, "one-red", "Third", "carol", prChecksFailing},
+		{4, "still-running", "Fourth", "dave", prChecksPending},
 	}
 	if len(list) != len(want) {
 		t.Fatalf("got %d entries, want %d: %v", len(list), len(want), list)
 	}
 	for i, w := range want {
-		if list[i] != w {
-			t.Errorf("entry %d: got %+v, want %+v", i, list[i], w)
+		got := list[i]
+		if got.Number != w.number || got.HeadRef != w.head || got.Title != w.title ||
+			got.Author != w.author || got.Checks != w.checks {
+			t.Errorf("entry %d: got %+v, want %+v", i, got, w)
+		}
+	}
+}
+
+// parsePRList preserves the per-check name, verdict, and URL (collapsed away
+// before) and orders the rows failures-first so the checks modal lands a
+// reviewer on the broken check. detailsUrl (CheckRun) and targetUrl
+// (StatusContext) both feed prCheck.URL.
+func TestParsePRListCheckRows(t *testing.T) {
+	data := []byte(`[
+		{"number":7,"headRefName":"feat","title":"T","author":{"login":"erin"},"statusCheckRollup":[
+			{"status":"COMPLETED","conclusion":"SUCCESS","name":"unit","detailsUrl":"https://ci/unit"},
+			{"context":"lint","state":"FAILURE","targetUrl":"https://ci/lint"},
+			{"status":"IN_PROGRESS","conclusion":"","name":"build","detailsUrl":"https://ci/build"}
+		]}
+	]`)
+	list, err := parsePRList(data)
+	if err != nil {
+		t.Fatalf("parsePRList: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("got %d entries, want 1", len(list))
+	}
+	want := []prCheck{
+		{Name: "lint", State: prChecksFailing, URL: "https://ci/lint"},
+		{Name: "build", State: prChecksPending, URL: "https://ci/build"},
+		{Name: "unit", State: prChecksPassing, URL: "https://ci/unit"},
+	}
+	got := list[0].CheckRows
+	if len(got) != len(want) {
+		t.Fatalf("CheckRows: got %d rows, want %d: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("CheckRows[%d]: got %+v, want %+v", i, got[i], w)
 		}
 	}
 }

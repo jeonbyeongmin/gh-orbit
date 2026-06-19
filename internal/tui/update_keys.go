@@ -72,6 +72,9 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == viewModeMergeConfirm {
 		return m.handleMergeConfirmKey(msg)
 	}
+	if m.mode == viewModePRChecks {
+		return m.handlePRChecksKey(msg)
+	}
 	if m.mode == viewModeStashAction {
 		return m.handleStashActionKey(msg)
 	}
@@ -384,6 +387,9 @@ func (m Model) handlePRsPageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "m":
 		// Arm the merge confirm for the cursor PR.
 		return m.prsPageMerge()
+	case "C":
+		// Open the CI checks modal for the cursor PR (which check failed).
+		return m.beginPRChecksForCursorPR()
 	case "r":
 		// Refresh the open-PR list (the page's data source).
 		return m, m.dispatchPRList()
@@ -422,6 +428,24 @@ func (m Model) handleMergeConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.closeMergeConfirm()
 		m.status = "merge: cancelled"
 		m.statusStyle = statusOkS
+		return m, nil
+	case "ctrl+c":
+		return m.handleCtrlC()
+	}
+	return m, nil
+}
+
+func (m Model) handlePRChecksKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "down":
+		return m.prChecksMoveCursor(1), nil
+	case "up":
+		return m.prChecksMoveCursor(-1), nil
+	case "enter":
+		// Open the cursor check's log in the browser.
+		return m.prChecksOpenSelected()
+	case "q", "esc":
+		m.closePRChecks()
 		return m, nil
 	case "ctrl+c":
 		return m.handleCtrlC()
@@ -599,6 +623,11 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Merge the cursor row's open PR — arms the merge confirm dialog.
 		// Rows without a PR-bearing chip report on the status line.
 		return m.beginMergeForCursor()
+	case "C":
+		// Open the CI checks modal for the cursor row's open PR — which check
+		// failed, without leaving the terminal. Rows without a PR-bearing chip
+		// report on the status line.
+		return m.beginPRChecksForCursor()
 	case " ", "space":
 		// `space` runs the checkout / ff / detach evaluator on the cursor
 		// row — the action `enter` carried before PR review took the enter

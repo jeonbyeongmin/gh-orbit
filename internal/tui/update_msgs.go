@@ -710,9 +710,13 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 				keepPath, keepStaged = e.Path, e.Staged()
 			}
 		}
+		// SetSequencer before ApplyStatusLoaded: the latter runs followCursor,
+		// whose scroll budget subtracts the banner row (visibleTreeRows), so the
+		// banner state must be current before the clamp — otherwise a reload that
+		// changes bannerRows() clamps yOffset against the wrong row budget.
+		m.localChanges.SetSequencer(msg.sequencer)
 		m.localChanges.ApplyStatusLoaded(msg.entries)
 		m.localChanges.SetStats(msg.unstagedStat, msg.stagedStat)
-		m.localChanges.SetSequencer(msg.sequencer)
 		if keepPath != "" {
 			m.localChanges.SelectByPath(keepPath, keepStaged)
 		}

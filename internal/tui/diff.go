@@ -121,6 +121,17 @@ func (d *diffModel) ClosePatch() {
 	d.viewport.SetContent("")
 }
 
+// RerenderTheme repaints the loaded patch under the now-current activeDiffTheme
+// (the Settings picker just cycled it), so the color change shows live behind
+// the dialog. A no-op when no patch is loaded.
+func (d *diffModel) RerenderTheme() {
+	if d.patchText == "" {
+		return
+	}
+	d.rendered = renderDiffContent(d.patchText, d.viewport.Width)
+	d.refreshPatchViewport()
+}
+
 // accepts gates Apply* against stale dispatches. reqID rejects responses from
 // a previous overlay invocation; the hash check catches the rare same-reqID
 // mismatch (re-dispatch on the same id with a new hash).

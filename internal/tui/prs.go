@@ -158,6 +158,16 @@ func prListCmd(dir string) tea.Cmd {
 	}
 }
 
+// isGHAuthError reports whether a `gh pr list` failure is a logged-out gh,
+// as opposed to no GitHub remote or gh-not-installed (both stay quiet per the
+// passive-enrichment contract). gh's auth gate prints a "run: gh auth login"
+// line; neither the no-remote ("no known GitHub host") nor the not-found
+// ("executable file not found") message mentions auth, so a substring match
+// separates the three cleanly.
+func isGHAuthError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "auth")
+}
+
 // prListItem mirrors the subset of `gh pr list --json` fields the badge
 // needs. statusCheckRollup entries are a union of two GraphQL types:
 // CheckRun rows carry status/conclusion, StatusContext rows carry state.

@@ -223,6 +223,10 @@ type Model struct {
 	// parallel `gh pr list` calls (and a slow older reply can't overwrite
 	// a newer one). New() arms it because Init always dispatches.
 	prsInFlight bool
+	// prsAuthNotified is the one-shot latch for the logged-out-gh status
+	// hint: the 30s poll would re-surface it every tick otherwise. Set on
+	// the first auth failure, cleared by the next successful load.
+	prsAuthNotified bool
 	// windowFocused tracks terminal focus (tea.Focus/BlurMsg, reporting enabled
 	// in main). Starts true so polling works before the first focus event; the
 	// PR poll skips its gh round-trip while the window is blurred so an idle

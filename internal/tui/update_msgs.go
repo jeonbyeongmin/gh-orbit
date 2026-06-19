@@ -219,6 +219,13 @@ func (m Model) updateCommitsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m = m.tryHEADJump()
 		}
+		if failed, ok := msg.(refsLoadFailedMsg); ok {
+			// for-each-ref backs the whole graph; swallowing the error left an
+			// empty graph with no reason. Reloads are launch/`r`/post-fetch
+			// driven (never polled), so surfacing every time can't spam.
+			m.status = "refs load failed: " + firstLine(failed.err.Error())
+			m.statusStyle = statusErrS
+		}
 		var cmd tea.Cmd
 		m.refs, cmd = m.refs.Update(msg)
 		return m, cmd
@@ -607,6 +614,7 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case prsLoadedMsg:
 		m.prsInFlight = false
+		m.prsAuthNotified = false // a good load re-arms the one-shot auth hint
 		m.prs = msg.prs
 		m.prList = msg.list
 		m.graph.SetPRs(msg.prs)
@@ -626,9 +634,16 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prsLoadFailedMsg:
 		m.prsInFlight = false
 		// Quiet on purpose: the badge is passive enrichment, and a repo
-		// without a GitHub remote (or a logged-out gh) would otherwise
-		// error-spam the status line on every refresh.
+		// without a GitHub remote (or no gh installed) would otherwise
+		// error-spam the status line on every refresh. The one exception is
+		// a logged-out gh — that reads identically to "no open PRs", so
+		// surface it once (re-armed by the next successful load).
 		log.Printf("pr list failed: %v", msg.err)
+		if !m.prsAuthNotified && isGHAuthError(msg.err) {
+			m.prsAuthNotified = true
+			m.status = "gh not authenticated — run `gh auth login` to see PRs/CI"
+			m.statusStyle = statusErrS
+		}
 		return m, nil
 	}
 	return m, nil

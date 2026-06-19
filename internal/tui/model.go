@@ -392,6 +392,10 @@ type Model struct {
 	// lcDiscardOpen it rides on a flag inside viewModeLocalChanges (not its own
 	// viewMode) so the page stays as the modal backdrop.
 	commitInput commitInputState
+	// lcAbortOpen is the inline "abort <op>?" confirm on the Local Changes page
+	// (armed by ctrl+x when a sequencer is in progress). Like lcDiscardOpen it
+	// stays inside viewModeLocalChanges so the page composes as its backdrop.
+	lcAbortOpen bool
 	// lcPollArmed mirrors spinnerArmed: the Update wrapper arms one poll tick
 	// when the page is entered, and the poll handler stops re-arming the moment
 	// the page is left, so an idle cockpit schedules no wakeups.
@@ -568,7 +572,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// busy status too, not just stash/discard) — skipping the reload while
 		// one runs keeps the poll snapshot from racing the action's own reload
 		// and clobbering its pending-select cursor hint.
-		if m.localChanges.Focused() == paneLCTree && !m.lcDiscardOpen && !m.commitInput.open && !m.lcActionInFlight && !m.statusIsBusy() {
+		if m.localChanges.Focused() == paneLCTree && !m.lcDiscardOpen && !m.commitInput.open && !m.lcAbortOpen && !m.lcActionInFlight && !m.statusIsBusy() {
 			return m, tea.Batch(loadStatusCmd(m.workdir, true), next)
 		}
 		return m, next
@@ -721,6 +725,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case commitSucceededMsg,
 		commitFailedMsg:
 		return m.updateCommitMsg(msg)
+
+	case sequencerContinueDoneMsg,
+		sequencerContinueConflictMsg,
+		sequencerContinueFailedMsg,
+		sequencerAbortDoneMsg,
+		sequencerAbortFailedMsg:
+		return m.updateSequencerMsg(msg)
 	}
 	return m, nil
 }
@@ -1385,6 +1396,9 @@ func (m Model) View() string {
 	}
 	if m.mode == viewModeLocalChanges && m.commitInput.open {
 		return composeOverlay(base, renderModalBox(m.renderCommitInputInner()), m.width, m.height)
+	}
+	if m.mode == viewModeLocalChanges && m.lcAbortOpen {
+		return composeOverlay(base, renderModalBox(m.renderSequencerAbortInner()), m.width, m.height)
 	}
 	return base
 }

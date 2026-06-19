@@ -119,6 +119,10 @@ var (
 				{"s", "stash all"},
 				{"r", "discard all"},
 			},
+			{
+				{"C", "continue (mid-conflict)"},
+				{"^X", "abort (mid-conflict)"},
+			},
 		},
 	}
 	// helpLCDiff — local changes diff pane keys.

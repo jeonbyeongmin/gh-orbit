@@ -110,6 +110,11 @@ type localChangesModel struct {
 	// failed or returned nothing; untracked paths never appear (no baseline).
 	unstagedStat map[string]git.FileStat
 	stagedStat   map[string]git.FileStat
+
+	// sequencer is the in-progress cherry-pick / rebase / merge / revert (set
+	// from each status load), driving the top-of-tree banner and whether `C`
+	// (continue) / abort apply. SequencerNone in the normal case.
+	sequencer git.SequencerKind
 }
 
 func newLocalChangesModel() localChangesModel {
@@ -357,6 +362,29 @@ func (m localChangesModel) StagedCount() int {
 	return n
 }
 
+// ConflictCount returns how many entries sit in the Conflicts section — the
+// gate for `C` (continue), which refuses while any conflict is unresolved. A
+// resolved-but-unstaged file still reads as a conflict in the index (its
+// unmerged stage entries persist until `git add`), so a zero count means every
+// conflict has been resolved *and* staged — exactly what `--continue` needs.
+func (m localChangesModel) ConflictCount() int {
+	n := 0
+	for _, e := range m.entries {
+		if e.Section == sectionConflicts {
+			n++
+		}
+	}
+	return n
+}
+
+// SetSequencer records the in-progress operation detected with the latest
+// status snapshot.
+func (m *localChangesModel) SetSequencer(k git.SequencerKind) { m.sequencer = k }
+
+// Sequencer returns the in-progress operation (SequencerNone when the tree is
+// in a normal state) so the key handlers can gate continue / abort on it.
+func (m localChangesModel) Sequencer() git.SequencerKind { return m.sequencer }
+
 // CurrentEntry returns the entry the tree cursor is on, or false when the
 // tree is empty.
 func (m localChangesModel) CurrentEntry() (localChangesEntry, bool) {
@@ -444,6 +472,45 @@ func (m *localChangesModel) SetFocus(p localChangesPane) {
 	}
 }
 
+// bannerRows is the number of rows the sequencer banner claims at the top of
+// the tree pane (1 while an op is in progress, 0 otherwise). TreeView reserves
+// them and followCursor subtracts them from the scroll budget so the banner
+// never overlaps the file list.
+func (m localChangesModel) bannerRows() int {
+	if m.sequencer == git.SequencerNone {
+		return 0
+	}
+	return 1
+}
+
+// visibleTreeRows is the row budget left for the file list once the banner has
+// taken its share of treeH.
+func (m localChangesModel) visibleTreeRows() int {
+	h := m.treeH - m.bannerRows()
+	if h < 0 {
+		h = 0
+	}
+	return h
+}
+
+// sequencerBanner is the one-row in-progress notice at the top of the tree
+// pane. It names the operation and the resume / unwind keys; while conflicts
+// remain it says to resolve them first (continue is gated until then). Empty
+// when no op is in progress. Truncated to width so it always stays one row.
+func (m localChangesModel) sequencerBanner(width int) string {
+	if m.sequencer == git.SequencerNone {
+		return ""
+	}
+	op := m.sequencer.String()
+	var msg string
+	if m.ConflictCount() > 0 {
+		msg = "! " + op + " in progress — resolve conflicts, then [C]ontinue · [^X] abort"
+	} else {
+		msg = "! " + op + " in progress — [C]ontinue · [^X] abort"
+	}
+	return lcConflictStyle.Render(runewidth.Truncate(msg, width, "…"))
+}
+
 func (m *localChangesModel) clampCursor() {
 	if len(m.entries) == 0 {
 		m.cursor = 0
@@ -467,20 +534,21 @@ func (m *localChangesModel) followCursor() {
 		m.yOffset = 0
 		return
 	}
-	if m.treeH <= 0 {
+	h := m.visibleTreeRows()
+	if h <= 0 {
 		m.yOffset = 0
 		return
 	}
 	if cursorRow < m.yOffset {
 		m.yOffset = cursorRow
 	}
-	if cursorRow >= m.yOffset+m.treeH {
-		m.yOffset = cursorRow - m.treeH + 1
+	if cursorRow >= m.yOffset+h {
+		m.yOffset = cursorRow - h + 1
 	}
 	if m.yOffset < 0 {
 		m.yOffset = 0
 	}
-	maxOffset := len(rows) - m.treeH
+	maxOffset := len(rows) - h
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
@@ -574,15 +642,21 @@ func (m localChangesModel) TreeView() string {
 	if m.loadErr != nil {
 		return "error: " + firstLine(m.loadErr.Error())
 	}
-	if len(m.entries) == 0 {
-		return "(no changes)"
-	}
-	rows := m.flatRows()
 	width := m.treeW
 	if width <= 0 {
 		width = 1
 	}
-	height := m.treeH
+	banner := m.sequencerBanner(width)
+	if len(m.entries) == 0 {
+		// A still-active sequencer with every conflict resolved + staged leaves
+		// a clean tree but must keep the banner so `C` stays reachable.
+		if banner != "" {
+			return banner + "\n(no changes)"
+		}
+		return "(no changes)"
+	}
+	rows := m.flatRows()
+	height := m.visibleTreeRows()
 	if height <= 0 {
 		height = len(rows)
 	}
@@ -591,6 +665,9 @@ func (m localChangesModel) TreeView() string {
 		end = len(rows)
 	}
 	var lines []string
+	if banner != "" {
+		lines = append(lines, banner)
+	}
 	for i := m.yOffset; i < end; i++ {
 		lines = append(lines, m.renderRow(rows[i], width))
 	}

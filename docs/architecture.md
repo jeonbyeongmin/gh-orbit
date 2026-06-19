@@ -50,9 +50,9 @@ One root `tea.Model`. Each pane is a sub-model with the standard `Init/Update/Vi
 | `r`            | global | reload refs + log — except on Local Changes, where the page auto-reloads (poll) so `r` is the discard-all confirm instead |
 | `^C ^C`        | global | quit (press twice; closes patch overlay first)                                      |
 | `?`            | global | toggle inline help reference panel (column layout)                                  |
-| `R`            | graph  | rebase current branch onto cursor (confirm-first; conflicts → terminal) — see [checkout.md](checkout.md) |
-| `c`            | graph  | cherry-pick cursor commit onto current branch (confirm-first; conflicts → terminal) |
-| `v`            | graph  | revert cursor commit (confirm-first; history-preserving; conflicts → terminal)      |
+| `R`            | graph  | rebase current branch onto cursor (confirm-first; conflicts → Local Changes) — see [checkout.md](checkout.md) |
+| `c`            | graph  | cherry-pick cursor commit onto current branch (confirm-first; conflicts → Local Changes) |
+| `v`            | graph  | revert cursor commit (confirm-first; history-preserving; conflicts → Local Changes) |
 | `x`            | graph  | reset current branch to cursor (soft/mixed/hard; pushed-history → revert)           |
 | `n`            | graph  | create branch at cursor + switch (name input modal)                                |
 | `enter`        | graph  | open the cursor row's open PR on GitHub in the browser — see [pull-requests.md](pull-requests.md) |

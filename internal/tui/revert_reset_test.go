@@ -44,8 +44,8 @@ func TestRevertConfirmFlow(t *testing.T) {
 
 	updated, _ = m.Update(revertConflictMsg{err: errors.New("CONFLICT")})
 	m = updated.(Model)
-	if m.revertInFlight || !strings.Contains(m.status, "resolve in your terminal") {
-		t.Errorf("conflict should delegate to terminal, status=%q", m.status)
+	if m.revertInFlight || !strings.Contains(m.status, "resolve in Local Changes") {
+		t.Errorf("conflict should point to Local Changes, status=%q", m.status)
 	}
 }
 

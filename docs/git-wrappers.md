@@ -19,8 +19,9 @@ We want `.gitconfig`, hooks, commit signing, and LFS to keep working with zero e
 Stderr matching turns common git failures into typed sentinels so the TUI can branch on them:
 
 - `ErrCheckoutNeedsCleanTree` — "Please commit your changes or stash them" / "would be overwritten" / "Your local changes". Drives the dirty-tree confirm flow ([checkout.md](checkout.md)).
-- `ErrPullConflict` / `ErrRebaseConflict` — a "CONFLICT" token in `git pull` / `git rebase` output. Drives the "resolve in your terminal" delegation ([checkout.md](checkout.md)); the mid-merge/mid-rebase state is left in place.
-- `ErrCherryPickConflict` / `ErrRevertConflict` — the same "CONFLICT" scan over `git cherry-pick` / `git revert` output, same delegation + leave-in-place contract. `git.Reset` has no conflict sentinel — reset never stops mid-flight, so its failures pass stderr through unchanged.
+- `ErrPullConflict` / `ErrRebaseConflict` — a "CONFLICT" token in `git pull` / `git rebase` output. The mid-merge/mid-rebase state is left in place; the Local Changes page surfaces continue/abort over it ([sequencer.md](sequencer.md)).
+- `ErrCherryPickConflict` / `ErrRevertConflict` — the same "CONFLICT" scan over `git cherry-pick` / `git revert` output, same leave-in-place contract. `git.Reset` has no conflict sentinel — reset never stops mid-flight, so its failures pass stderr through unchanged.
+- `ErrSequencerConflict` — a "CONFLICT" stop from `git <kind> --continue` (a multi-commit cherry-pick / rebase that re-conflicts on the next step). Same scan + leave-in-place contract; keeps the in-progress banner up ([sequencer.md](sequencer.md)).
 - `ErrBranchNotFullyMerged`, `ErrBranchNotFound` — branch lifecycle ([branches.md](branches.md)).
 
 Add new sentinels when a TUI flow needs to react to a specific git failure mode; otherwise pass stderr through unchanged.

@@ -38,6 +38,9 @@ var (
 	stashAllExec             = git.StashPush
 	resetHardExec            = git.Reset
 	cleanExec                = git.Clean
+	detectSequencerExec      = git.DetectSequencer
+	sequencerContinueExec    = git.SequencerContinue
+	sequencerAbortExec       = git.SequencerAbort
 )
 
 // Status load. The numstat slices carry the per-file +/- counts the tree
@@ -52,6 +55,12 @@ type localChangesStatusLoadedMsg struct {
 	// reclassify — a 1s refresh shouldn't drift the selection out from under
 	// the user. Action reloads leave it false and use the pendingSelect hint.
 	preserveCursor bool
+	// sequencer is the in-progress cherry-pick / rebase / merge / revert (if
+	// any) detected alongside the snapshot. It drives the page's in-progress
+	// banner + whether `C` (continue) / abort apply; SequencerNone in the
+	// normal case. Best-effort like the numstat probes — a detection failure
+	// leaves it None rather than failing the whole reload.
+	sequencer git.SequencerKind
 }
 
 type localChangesStatusFailedMsg struct {
@@ -147,11 +156,15 @@ func loadStatusCmd(dir string, preserveCursor bool) tea.Cmd {
 				unstaged = append(unstaged, fs)
 			}
 		}
+		// Best-effort: a detection failure (rare — one rev-parse) just leaves
+		// the banner off rather than failing the whole status reload.
+		kind, _ := detectSequencerExec(ctx, dir)
 		return localChangesStatusLoadedMsg{
 			entries:        entries,
 			unstagedStat:   unstaged,
 			stagedStat:     staged,
 			preserveCursor: preserveCursor,
+			sequencer:      kind,
 		}
 	}
 }
@@ -291,6 +304,45 @@ func stageHunkCmd(dir, path string, staged bool, hunkIdx int) tea.Cmd {
 			return localChangesApplyFailedMsg{path: path, err: err}
 		}
 		return localChangesApplySucceededMsg{path: path, staged: staged}
+	}
+}
+
+// Sequencer continue / abort results. A continue that advances into a fresh
+// conflict (multi-commit pick/rebase) comes back as ...ConflictMsg, keeping the
+// banner up; abort echoes the op name so the success line can say what was
+// unwound.
+type sequencerContinueDoneMsg struct{}
+type sequencerContinueConflictMsg struct{}
+type sequencerContinueFailedMsg struct{ err error }
+type sequencerAbortDoneMsg struct{ op string }
+type sequencerAbortFailedMsg struct{ err error }
+
+// sequencerContinueCmd resumes the in-progress op (`git <kind> --continue`).
+// A still-conflicting step is split off ErrSequencerConflict so the handler can
+// keep the banner instead of treating it as a hard failure.
+func sequencerContinueCmd(dir string, kind git.SequencerKind) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), localChangesCmdTimeout)
+		defer cancel()
+		if err := sequencerContinueExec(ctx, dir, kind); err != nil {
+			if errors.Is(err, git.ErrSequencerConflict) {
+				return sequencerContinueConflictMsg{}
+			}
+			return sequencerContinueFailedMsg{err: err}
+		}
+		return sequencerContinueDoneMsg{}
+	}
+}
+
+// sequencerAbortCmd unwinds the in-progress op (`git <kind> --abort`).
+func sequencerAbortCmd(dir string, kind git.SequencerKind) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), localChangesCmdTimeout)
+		defer cancel()
+		if err := sequencerAbortExec(ctx, dir, kind); err != nil {
+			return sequencerAbortFailedMsg{err: err}
+		}
+		return sequencerAbortDoneMsg{op: kind.String()}
 	}
 }
 

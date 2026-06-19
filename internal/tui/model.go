@@ -141,6 +141,13 @@ const (
 	// launching page so the box composes over — and closes back to — it, the
 	// same backdrop contract the merge confirm uses (isPRsSurface).
 	viewModePRChecks
+	// viewModeSettings is the centered Settings dialog, opened globally with
+	// `,` from any bare page. It shows the running version + update status and
+	// hosts the `U` upgrade action. settingsReturnMode records the launching
+	// page so esc/q (and `,` again) composes back to it. Designed as labeled
+	// rows so future settings (e.g. a diff-highlight theme) slot in as more
+	// rows without reshaping the dialog.
+	viewModeSettings
 )
 
 // pendingCheckout remembers what the user was trying to check out so the
@@ -227,6 +234,20 @@ type Model struct {
 	// hint: the 30s poll would re-surface it every tick otherwise. Set on
 	// the first auth failure, cleared by the next successful load.
 	prsAuthNotified bool
+	// updateLatest / updateAvailable hold the result of the once-a-day release
+	// check (see updatecheck.go). When available, renderHelpStatus surfaces a
+	// compact "↑ update available · , settings" footer nudge; the version
+	// detail and the `U` upgrade action live in the Settings dialog.
+	// updateChecked flips true once any check lands (success or failure) so the
+	// dialog can tell "checking…" apart from a finished result. updateInFlight
+	// gates the `U` action so a second press can't stack `gh extension upgrade`.
+	updateLatest    string
+	updateAvailable bool
+	updateChecked   bool
+	updateInFlight  bool
+	// settingsReturnMode is the page the `,` Settings dialog composes over and
+	// closes back to.
+	settingsReturnMode viewMode
 	// windowFocused tracks terminal focus (tea.Focus/BlurMsg, reporting enabled
 	// in main). Starts true so polling works before the first focus event; the
 	// PR poll skips its gh round-trip while the window is blurred so an idle
@@ -492,6 +513,7 @@ func (m Model) Init() tea.Cmd {
 		loadHeadAncestorsCmd(m.workdir, m.streamReqID),
 		loadWorktreesCmd(m.workdir, m.sidebarWorktreesReqID),
 		prListCmd(m.workdir),
+		checkUpdateCmd(Version),
 	)
 }
 
@@ -699,6 +721,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		pullConflictMsg,
 		pullFailedMsg:
 		return m.updateFetchPullMsg(msg)
+
+	case updateCheckedMsg,
+		updateUpgradedMsg:
+		return m.updateUpdateMsg(msg)
 
 	case branchDeleteSucceededMsg,
 		branchDeleteFailedMsg,
@@ -1303,6 +1329,10 @@ var (
 	statusBusyS = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	statusOkS   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	statusErrS  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	// updateHintS colors the "↑ vX.Y.Z available" reminder with the same
+	// accent (205) the active page tab and cursor use — noticeable without
+	// reading as an error.
+	updateHintS = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSelected))
 	// pageTabActiveS / pageTabInactiveS style the top breadcrumb that names
 	// the current page. Active reuses the focused-pane accent (205); inactive
 	// reuses the dim help color so the three labels read as one quiet bar.
@@ -1327,12 +1357,12 @@ func (m Model) View() string {
 
 	var main string
 	switch {
-	case m.mode == viewModeDiffWindow:
+	case m.surfaceMode() == viewModeDiffWindow:
 		// The commit patch now lives inside the page box — tabs above, keymap
 		// hint below — instead of a chrome-less full-screen overlay, mirroring
 		// the local-changes diff pane.
 		main = boxStyle(true).Width(s.graphW).Height(s.graphH).Render(m.diff.PatchView())
-	case m.mode == viewModeLocalChanges:
+	case m.surfaceMode() == viewModeLocalChanges:
 		// Drill-down: render only the focused pane, full-screen. `enter`
 		// descends tree → diff; `esc` climbs back (see handleLocalChangesKey).
 		if m.localChanges.Focused() == paneLCTree {
@@ -1391,6 +1421,8 @@ func (m Model) View() string {
 		return composeOverlay(base, renderModalBox(m.renderStashDropConfirmInner()), m.width, m.height)
 	case viewModePRChecks:
 		return composeOverlay(base, renderModalBox(m.renderPRChecksInner()), m.width, m.height)
+	case viewModeSettings:
+		return composeOverlay(base, renderModalBox(m.renderSettingsInner()), m.width, m.height)
 	}
 	// The discard confirm and commit input both ride on a model flag inside
 	// viewModeLocalChanges (not their own viewMode), so they compose over the
@@ -1419,7 +1451,7 @@ func boxStyle(focused bool) lipgloss.Style {
 // sub-modals (add / remove), which compose over the dashboard as their
 // backdrop rather than over the graph.
 func (m Model) isWorktreesSurface() bool {
-	switch m.mode {
+	switch m.surfaceMode() {
 	case viewModeWorktreesModal, viewModeWorktreeAddInput, viewModeWorktreeRemoveConfirm:
 		return true
 	}
@@ -1432,7 +1464,7 @@ func (m Model) isWorktreesSurface() bool {
 // launched from the graph keeps the graph backdrop (mergeReturnMode is the
 // graph's viewModeNormal), so it resolves to the default page instead.
 func (m Model) isPRsSurface() bool {
-	switch m.mode {
+	switch m.surfaceMode() {
 	case viewModePRsPage:
 		return true
 	case viewModeMergeConfirm:
@@ -1460,7 +1492,7 @@ var pageTabLabels = [...]string{"Graph", "Worktree", "Local Changes", "Pull Requ
 // stays steady while a modal is open.
 func (m Model) currentPageIndex() int {
 	switch {
-	case m.mode == viewModeLocalChanges:
+	case m.surfaceMode() == viewModeLocalChanges:
 		return 2
 	case m.isWorktreesSurface():
 		return 1
@@ -1469,6 +1501,17 @@ func (m Model) currentPageIndex() int {
 	default:
 		return 0
 	}
+}
+
+// surfaceMode returns the mode whose full-screen page owns the main content
+// area. The Settings dialog is a centered overlay, so it resolves to the page
+// it was opened over (settingsReturnMode) — that keeps the backdrop content
+// and the breadcrumb on the launching page instead of snapping to the graph.
+func (m Model) surfaceMode() viewMode {
+	if m.mode == viewModeSettings {
+		return m.settingsReturnMode
+	}
+	return m.mode
 }
 
 // isPageMode reports whether the bare top-level page owns the screen (graph /
@@ -1545,29 +1588,42 @@ func (m Model) renderHelpStatus() string {
 		viewModeWorktreeRemoveConfirm,
 		viewModeBranchCreateInput, viewModeRefDeleteConfirm,
 		viewModeRebaseConfirm, viewModeCherryPickConfirm,
-		viewModeRevertConfirm, viewModeResetConfirm:
+		viewModeRevertConfirm, viewModeResetConfirm, viewModeSettings:
 		return " "
 	}
 	// Normal operation: the status message on the left, a single pressable
 	// `? help` token pinned to the right edge. The full key reference lives
 	// behind the `?` inline panel.
 	if m.status == "" {
+		// No live status to show. A pending upgrade nudges from any page footer
+		// (this branch is only reached on the bare pages — modals returned " "
+		// above); the version detail and the `U` upgrade action itself live
+		// behind the `,` Settings dialog, so the nudge just points there.
+		if m.updateAvailable {
+			hint := updateHintS.Render("↑ update available · , settings")
+			return m.joinStatusHelp(hint)
+		}
 		return lipgloss.PlaceHorizontal(m.width, lipgloss.Right, collapsedHintRendered)
 	}
 	statusText := m.status
 	if m.statusIsBusy() {
 		statusText = spinnerGlyph(m.spinnerFrame) + " " + m.status
 	}
-	statusRendered := m.statusStyle.Render(statusText)
+	return m.joinStatusHelp(m.statusStyle.Render(statusText))
+}
 
-	avail := m.width - lipgloss.Width(statusRendered) - 1 // 1 for the spacer
+// joinStatusHelp lays the given left-aligned content (a status message or the
+// update reminder) against the `? help` token pinned to the right edge,
+// dropping the help token when the terminal is too narrow to fit both.
+func (m Model) joinStatusHelp(leftRendered string) string {
+	avail := m.width - lipgloss.Width(leftRendered) - 1 // 1 for the spacer
 	if avail < 1 {
-		return statusRendered
+		return leftRendered
 	}
 	helpRendered := fitHelpLine(collapsedHintText, avail)
-	gap := m.width - lipgloss.Width(statusRendered) - lipgloss.Width(helpRendered)
+	gap := m.width - lipgloss.Width(leftRendered) - lipgloss.Width(helpRendered)
 	if gap < 1 {
 		gap = 1
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, statusRendered, strings.Repeat(" ", gap), helpRendered)
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftRendered, strings.Repeat(" ", gap), helpRendered)
 }

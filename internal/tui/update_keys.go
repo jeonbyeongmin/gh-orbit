@@ -28,6 +28,16 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusStyle = statusOkS
 		}
 	}
+	// `,` opens the Settings dialog from any bare page (global), before the
+	// per-mode dispatch so it works on graph / worktree / local changes / diff
+	// / PRs alike. settingsOpenable() keeps it off text-input / confirm
+	// surfaces (notably the Local Changes commit input) where `,` is a literal.
+	if msg.String() == "," && m.settingsOpenable() {
+		return m.beginSettings()
+	}
+	if m.mode == viewModeSettings {
+		return m.handleSettingsKey(msg)
+	}
 	// The viewMode guard runs before the global ctrl+c quit branch so
 	// `esc` inside the overlay closes the overlay instead of killing the app.
 	if m.mode == viewModeDiffWindow {

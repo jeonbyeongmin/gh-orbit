@@ -388,6 +388,10 @@ type Model struct {
 	// time and pauses the poll while a mutation runs (a 1s status reload
 	// must not race a reset --hard). Cleared by the action's terminal handler.
 	lcActionInFlight bool
+	// commitInput backs the `c` commit modal on the Local Changes page. Like
+	// lcDiscardOpen it rides on a flag inside viewModeLocalChanges (not its own
+	// viewMode) so the page stays as the modal backdrop.
+	commitInput commitInputState
 	// lcPollArmed mirrors spinnerArmed: the Update wrapper arms one poll tick
 	// when the page is entered, and the poll handler stops re-arming the moment
 	// the page is left, so an idle cockpit schedules no wakeups.
@@ -564,7 +568,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// busy status too, not just stash/discard) — skipping the reload while
 		// one runs keeps the poll snapshot from racing the action's own reload
 		// and clobbering its pending-select cursor hint.
-		if m.localChanges.Focused() == paneLCTree && !m.lcDiscardOpen && !m.lcActionInFlight && !m.statusIsBusy() {
+		if m.localChanges.Focused() == paneLCTree && !m.lcDiscardOpen && !m.commitInput.open && !m.lcActionInFlight && !m.statusIsBusy() {
 			return m, tea.Batch(loadStatusCmd(m.workdir, true), next)
 		}
 		return m, next
@@ -713,6 +717,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		localChangesDiscardDoneMsg,
 		localChangesDiscardFailedMsg:
 		return m.updateLCActionMsg(msg)
+
+	case commitSucceededMsg,
+		commitFailedMsg:
+		return m.updateCommitMsg(msg)
 	}
 	return m, nil
 }
@@ -1369,11 +1377,14 @@ func (m Model) View() string {
 	case viewModePRChecks:
 		return composeOverlay(base, renderModalBox(m.renderPRChecksInner()), m.width, m.height)
 	}
-	// The discard confirm rides on a model flag inside viewModeLocalChanges
-	// (not its own viewMode), so it composes over the page base here rather
-	// than in the mode switch above.
+	// The discard confirm and commit input both ride on a model flag inside
+	// viewModeLocalChanges (not their own viewMode), so they compose over the
+	// page base here rather than in the mode switch above.
 	if m.mode == viewModeLocalChanges && m.lcDiscardOpen {
 		return composeOverlay(base, renderModalBox(m.renderLCDiscardInner()), m.width, m.height)
+	}
+	if m.mode == viewModeLocalChanges && m.commitInput.open {
+		return composeOverlay(base, renderModalBox(m.renderCommitInputInner()), m.width, m.height)
 	}
 	return base
 }

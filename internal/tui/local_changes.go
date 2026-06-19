@@ -344,6 +344,19 @@ func (m localChangesModel) CurrentHunk() (int, bool) {
 // "nothing to stash" instead) when the working tree is clean.
 func (m localChangesModel) HasChanges() bool { return len(m.entries) > 0 }
 
+// StagedCount returns how many entries sit in the Staged section — the gate
+// for `c` (commit), which refuses with a status line rather than letting git
+// fail on an empty index, and the count shown in the commit modal header.
+func (m localChangesModel) StagedCount() int {
+	n := 0
+	for _, e := range m.entries {
+		if e.Section == sectionStaged {
+			n++
+		}
+	}
+	return n
+}
+
 // CurrentEntry returns the entry the tree cursor is on, or false when the
 // tree is empty.
 func (m localChangesModel) CurrentEntry() (localChangesEntry, bool) {

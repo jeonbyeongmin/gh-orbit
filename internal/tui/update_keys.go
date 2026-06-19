@@ -454,10 +454,13 @@ func (m Model) handlePRChecksKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// The discard confirm is an inline overlay (lcDiscardOpen) rather than a
-	// viewMode, so it intercepts here before any page key.
+	// The discard confirm and commit input are inline overlays (model flags)
+	// rather than viewModes, so they intercept here before any page key.
 	if m.lcDiscardOpen {
 		return m.handleLCDiscardKey(msg)
+	}
+	if m.commitInput.open {
+		return m.handleCommitInputKey(msg)
 	}
 	switch msg.String() {
 	case "ctrl+c":
@@ -479,6 +482,9 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Whole-tree discard confirm. The page auto-reloads (poll), so `r` no
 		// longer needs to be a manual reload — it restores the tree instead.
 		return m.openLCDiscard()
+	case "c":
+		// Commit the staged index (message input modal). Works from either pane.
+		return m.beginCommit()
 	}
 	// Single-pane drill-down. Tree owns cursor movement + stage/unstage;
 	// `→` descends into the diff. Diff owns hunk navigation (`[`/`]`),

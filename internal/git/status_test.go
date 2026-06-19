@@ -216,6 +216,13 @@ func initEmptyRepo(t *testing.T) string {
 	// Windows CI sets core.autocrlf=true globally; pin it off so committed LF
 	// content round-trips byte-for-byte through checkout on every platform.
 	gitRun(t, dir, "config", "core.autocrlf", "false")
+	// Pin a repo-local identity. Most fixtures commit through gitRun, which
+	// injects GIT_AUTHOR_*/GIT_COMMITTER_* env — but wrappers like CommitStaged
+	// shell out with the ambient env (the .gitconfig-inheriting production
+	// contract), so on a CI runner with no global identity their `git commit`
+	// fails "Author identity unknown" without this.
+	gitRun(t, dir, "config", "user.name", "Test")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
 	return dir
 }
 

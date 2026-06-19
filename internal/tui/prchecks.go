@@ -12,11 +12,8 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
-	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -39,25 +36,7 @@ type prCheckOpenFailedMsg struct{ err error }
 // openURLExec is the package-level seam over the OS "open this URL" launcher —
 // the URL twin of openFileExec, minus the file-exists check. Stubbed in tests.
 var openURLExec = func(ctx context.Context, url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.CommandContext(ctx, "open", url)
-	case "windows":
-		// The empty title arg keeps `start` from swallowing the URL as a title.
-		cmd = exec.CommandContext(ctx, "cmd", "/c", "start", "", url)
-	default:
-		cmd = exec.CommandContext(ctx, "xdg-open", url)
-	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return fmt.Errorf("%s", firstLine(msg))
-		}
-		return err
-	}
-	return nil
+	return osLaunch(ctx, url)
 }
 
 func openURLCmd(url, name string) tea.Cmd {
@@ -161,13 +140,6 @@ const helpTextPRChecks = "[↑/↓] navigate · [enter] open log · [esc] close"
 func (m Model) renderPRChecksInner() string {
 	header := modalHeaderS.Render(fmt.Sprintf("[Checks · #%d]", m.prChecks.number))
 	rows := m.prChecks.rows
-	if len(rows) == 0 {
-		return strings.Join([]string{
-			header,
-			help.Render("(no checks)"),
-			help.Render(helpTextPRChecks),
-		}, "\n")
-	}
 
 	const visibleBudget = 16
 	lines := []string{header}
@@ -175,16 +147,12 @@ func (m Model) renderPRChecksInner() string {
 		m.prChecks.cursor-visibleBudget/2, visibleBudget, len(rows),
 		func(i int) string {
 			r := rows[i]
-			glyph := prCheckGlyph(r.State)
-			if glyph == "" {
-				glyph = " "
-			}
 			marker, name := "  ", r.Name
 			if i == m.prChecks.cursor {
 				marker = selectedStyle.Render("> ")
 				name = selectedStyle.Render(name)
 			}
-			return marker + ciStyle(r.State).Render(glyph) + " " + name
+			return marker + ciStyle(r.State).Render(prCheckGlyph(r.State)) + " " + name
 		})...)
 	lines = append(lines, help.Render(helpTextPRChecks))
 	return strings.Join(lines, "\n")

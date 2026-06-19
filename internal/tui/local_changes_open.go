@@ -44,15 +44,23 @@ var openFileExec = func(ctx context.Context, dir, path string) error {
 	if _, err := os.Stat(abs); err != nil {
 		return fmt.Errorf("%s is gone", path)
 	}
+	return osLaunch(ctx, abs)
+}
+
+// osLaunch forks the OS "open with the registered handler" launcher on a single
+// target — an absolute file path (openFileExec) or a URL (openURLExec) — and
+// returns once the handler is spawned. The shared half of the two seams; only
+// the file path's existence pre-check lives in openFileExec.
+func osLaunch(ctx context.Context, target string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.CommandContext(ctx, "open", abs)
+		cmd = exec.CommandContext(ctx, "open", target)
 	case "windows":
-		// The empty title arg keeps `start` from swallowing a quoted path.
-		cmd = exec.CommandContext(ctx, "cmd", "/c", "start", "", abs)
+		// The empty title arg keeps `start` from swallowing a quoted target.
+		cmd = exec.CommandContext(ctx, "cmd", "/c", "start", "", target)
 	default:
-		cmd = exec.CommandContext(ctx, "xdg-open", abs)
+		cmd = exec.CommandContext(ctx, "xdg-open", target)
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

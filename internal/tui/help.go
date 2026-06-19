@@ -115,6 +115,7 @@ var (
 				{"space", "stage/unstage"},
 				{"→", "open diff"},
 				{"enter", "open file"},
+				{"c", "commit staged"},
 				{"s", "stash all"},
 				{"r", "discard all"},
 			},

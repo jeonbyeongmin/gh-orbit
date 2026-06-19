@@ -45,6 +45,7 @@ Each action runs your own `git` / `gh` — here is exactly what each key shells 
 | `→` patch overlay + `[`/`]` · `{`/`}` | `git show -p <commit>`, navigated by hunk · by file |
 | Local Changes (`tab` cycle) + `space` | `git status` + `git diff` + `git add` / `git restore --staged` |
 | `space` (diff pane, selected hunk) | per-hunk `git apply --cached` (`--reverse` to unstage) |
+| `c` (local changes) | `git commit -m <msg>` |
 | `space` (checkout / fast-forward) | `git checkout <branch>` / `git merge --ff-only <ref>` |
 | `tab` → Worktrees (switch / add / remove) | `git worktree list` / `add` / `remove` |
 | `b` → `d` (delete branch) | `git branch -d <branch>` |
@@ -76,7 +77,7 @@ Each action runs your own `git` / `gh` — here is exactly what each key shells 
 
 - `→` opens the focused commit's full patch (`git show -p`) as a full-screen overlay.
 - `[` / `]` move between hunks inside the patch, `{` / `}` jump file-to-file; the footer shows `<path> [N/M]`.
-- The **Local Changes** page (in the `tab` / `shift+tab` cycle) is a working-tree diff (file tree + diff pane) split into Conflicts / Unstaged / Staged. `→` enters the diff pane, `←` returns to the tree, `space` stages/unstages the focused file, `r` reloads.
+- The **Local Changes** page (in the `tab` / `shift+tab` cycle) is a working-tree diff (file tree + diff pane) split into Conflicts / Unstaged / Staged. `→` enters the diff pane, `←` returns to the tree, `space` stages/unstages the focused file, `c` commits the staged index (message prompt; your `.gitconfig`, hooks, and signing all apply), `r` reloads.
 - Per-hunk staging: `tab` into the diff pane, `[` / `]` move between hunks (the selected `@@` header is highlighted), and `space` stages just that hunk (`git apply --cached`) — or unstages it when viewing a staged entry. Untracked / conflict files stage whole-file from the tree.
 
 ### Pull requests (`enter` / `m` / the Pull Requests tab)
@@ -134,6 +135,7 @@ Reviewing happens on GitHub; gh-orbit jumps you there, and lands the PR from the
 | `enter` / `m` | pull requests | open on the web / merge the cursor PR |
 | `tab` / `⇧tab` | global | cycle pages (graph · worktree · local changes · pull requests) |
 | `space` | local changes | stage / unstage the focused file (or hunk, in the diff pane) |
+| `c` | local changes | commit the staged index (message prompt) |
 | `[` / `]` | local changes diff | previous / next hunk |
 | `b` | global | branches modal |
 | `c` / `R` / `v` / `x` | graph | cherry-pick / rebase / revert / reset |

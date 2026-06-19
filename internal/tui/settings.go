@@ -81,10 +81,18 @@ func (m Model) cycleDiffTheme(next bool) Model {
 	m.localChanges.RerenderTheme()
 	m.diff.RerenderTheme()
 
-	prefs := config.Prefs{
-		Pull: config.PullPrefs{Strategy: m.pullPrefStrategy},
-		Diff: config.DiffPrefs{Theme: diffThemes[m.diffThemeIdx].key},
+	// Persist by mutating the on-disk prefs, not by rebuilding from Model state:
+	// a fresh load keeps every key the file already has (the pull strategy, any
+	// field New() didn't mirror) regardless of whether startup's LoadPrefs
+	// succeeded. A malformed file fails the load — surface it and leave the file
+	// untouched rather than clobbering it; the new theme still applies live.
+	prefs, err := config.LoadPrefs()
+	if err != nil {
+		m.status = "theme save failed: " + firstLine(err.Error())
+		m.statusStyle = statusErrS
+		return m
 	}
+	prefs.Diff.Theme = diffThemes[m.diffThemeIdx].key
 	if err := config.SavePrefs(prefs); err != nil {
 		m.status = "theme save failed: " + firstLine(err.Error())
 		m.statusStyle = statusErrS

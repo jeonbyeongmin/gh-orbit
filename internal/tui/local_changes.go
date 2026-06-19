@@ -267,6 +267,17 @@ func (m *localChangesModel) ClosePatch() {
 	m.diff.SetContent("")
 }
 
+// RerenderTheme repaints the loaded diff under the now-current activeDiffTheme
+// (the Settings picker just cycled it), so the color change shows live behind
+// the dialog. A no-op when no diff is loaded.
+func (m *localChangesModel) RerenderTheme() {
+	if m.diffText == "" {
+		return
+	}
+	m.rendered = renderDiffContent(m.diffText, m.diff.Width)
+	m.refreshDiffViewport()
+}
+
 // parseHunkStarts records the line index of every `@@` hunk header in the
 // diff. It runs on the plain (uncolored) diff text; the ANSI strip is defensive
 // so a stray escape can't hide a `@@` header.

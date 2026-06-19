@@ -134,23 +134,50 @@ func TestRenderDiffContentPreservesLines(t *testing.T) {
 
 func TestRenderDiffContentEmphForeground(t *testing.T) {
 	// A one-word edit inside a (gray) comment clears wordMatchFloor, so the
-	// changed word gets word-level emphasis. Its foreground must be the bright
-	// override (diffEmphFg), not the dim comment color, or it'd be unreadable on
-	// the emph background. Comparing against a reference segment rendered through
-	// the same path keeps this independent of the test's color profile.
+	// changed word gets word-level emphasis. Its foreground must be the theme's
+	// emph override (activeDiffTheme.emphFg), not the dim comment color, or it'd
+	// be unreadable on the emph background. Comparing against a reference segment
+	// rendered through the same path keeps this independent of the test's color
+	// profile and of which theme is active.
+	th := activeDiffTheme
 	patch := strings.Join([]string{
 		"@@ -1,1 +1,1 @@",
 		"-// the old label",
 		"+// the new label",
 	}, "\n")
 	out := renderDiffContent(patch, 40)
-	addWord := styledSeg("new", diffEmphFg, diffAddEmphBg)
-	delWord := styledSeg("old", diffEmphFg, diffDelEmphBg)
+	addWord := styledSeg("new", th.emphFg, th.addEmphBg)
+	delWord := styledSeg("old", th.emphFg, th.delEmphBg)
 	if !strings.Contains(out, addWord) {
 		t.Errorf("changed add word not rendered with the bright emph foreground")
 	}
 	if !strings.Contains(out, delWord) {
 		t.Errorf("changed del word not rendered with the bright emph foreground")
+	}
+}
+
+func TestDiffThemesRenderOneLinePerInput(t *testing.T) {
+	// Every shipped theme must resolve its chroma style and render the
+	// one-output-line-per-input-line invariant the hunk/file indices depend on.
+	patch := strings.Join([]string{
+		"diff --git a/x.go b/x.go",
+		"@@ -1,2 +1,2 @@",
+		" ctx := keep()",
+		"-x := 1",
+		"+x := 2",
+	}, "\n")
+	saved := activeDiffTheme
+	defer func() { activeDiffTheme = saved }()
+	for _, th := range diffThemes {
+		activeDiffTheme = th
+		// width 0 → no full-width padding, so the stripped render equals the source.
+		out := renderDiffContent(patch, 0)
+		if got, want := len(strings.Split(out, "\n")), len(strings.Split(patch, "\n")); got != want {
+			t.Errorf("%s: line count %d, want %d", th.key, got, want)
+		}
+		if ansi.Strip(out) != patch {
+			t.Errorf("%s: stripped render != source patch", th.key)
+		}
 	}
 }
 

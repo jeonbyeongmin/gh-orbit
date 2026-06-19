@@ -277,6 +277,10 @@ type Model struct {
 	// "merge" / "rebase" / ""). Loaded once in New() from ConfigPath; an
 	// empty string means "let git config / final fallback decide".
 	pullPrefStrategy string
+	// diffThemeIdx is the index into diffThemes of the active diff color theme.
+	// Loaded in New() from [diff] theme; the `,` Settings dialog's ←/→ cycles
+	// it, re-pointing activeDiffTheme and persisting the new key via SavePrefs.
+	diffThemeIdx int
 	// pendingHEADHash drives the post-pull cursor jump. pullSucceededMsg
 	// arms it with the sentinel pendingHEADSentinel; the post-reload
 	// refsLoadedMsg replaces the sentinel with HEAD's actual hash;
@@ -479,6 +483,8 @@ func New() Model {
 		m.statusStyle = statusErrS
 	} else {
 		m.pullPrefStrategy = prefs.Pull.Strategy
+		m.diffThemeIdx = diffThemeIndex(prefs.Diff.Theme)
+		activeDiffTheme = diffThemes[m.diffThemeIdx]
 	}
 	return m
 }

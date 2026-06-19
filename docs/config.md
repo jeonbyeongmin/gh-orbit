@@ -18,12 +18,22 @@ XDG-conformant paths. `internal/config` owns resolution.
 - File is optional — missing or empty means "use defaults".
 - `internal/config.LoadPrefs` parses TOML; unknown keys are ignored.
 
-Schema (only field today):
+Schema:
 
 ```toml
 [pull]
 strategy = "rebase"   # "ff-only" | "merge" | "rebase"
+
+[diff]
+theme = "github-dark"   # "github-dark" | "catppuccin-mocha" | "catppuccin-latte" | "github-light"
 ```
+
+`[diff] theme` picks the diff color theme — two dark (`github-dark`, the
+default; `catppuccin-mocha`) and two light (`catppuccin-latte`, `github-light`).
+Unset / unrecognized falls back to `github-dark`. The Settings dialog (`,`)
+cycles it with ←/→, applies it live, and writes the choice back here via
+`SavePrefs` — which rewrites the whole file from the known keys, so hand-written
+comments and unknown keys are dropped on save.
 
 ## Pull strategy resolution
 

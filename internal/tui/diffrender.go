@@ -29,28 +29,92 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-// diffSyntaxStyleName is the chroma style the diff foreground colors come from.
-// A dark, muted palette to sit under gh-orbit's chrome — change this one line
-// to retune syntax colors.
-const diffSyntaxStyleName = "catppuccin-mocha"
+// diffTheme bundles every color the diff renderer needs. syntaxStyle is the
+// chroma style the code foreground comes from. base* tints a whole changed
+// line; emph* (louder) marks the word-level span. *Marker is the leading +/-
+// glyph. metaFg/hunkFg color the `diff --git`/`index`/`---`/`+++` headers and
+// the `@@` hunk headers. emphFg overrides the syntax foreground on a word-level
+// span so the changed text stays legible over the louder emph background even
+// when its token color is dim (a gray comment is the case that breaks
+// otherwise). Hex colors are truecolor — lipgloss degrades to the nearest 256
+// color on lesser terminals; bare numbers are 256-color indices.
+//
+// key is the stable [diff] theme config value; name + dark drive the Settings
+// picker row.
+type diffTheme struct {
+	key  string
+	name string
+	dark bool
 
-// Diff background palette, tuned for a dark terminal. base* tints the whole
-// changed line; emph* (louder) marks the word-level span. Hex (truecolor) —
-// lipgloss degrades to the nearest 256 color on lesser terminals.
-const (
-	diffAddBaseBg = "#243c1d" // added-line bar
-	diffDelBaseBg = "#4a1e1b" // removed-line bar
-	diffAddEmphBg = "#3c6a32" // changed-word backgrounds: louder than the bar
-	diffDelEmphBg = "#83372f"
-	diffAddMarker = "#a6e3a1" // the leading +/- glyph
-	diffDelMarker = "#f38ba8"
-	diffMetaFg    = "240" // diff --git / index / ---/+++ headers
-	diffHunkFg    = "75"  // @@ … @@ hunk headers
-	// diffEmphFg overrides the syntax foreground on word-level changed spans, so
-	// the changed text stays legible on the louder emph background even when its
-	// token color is dim (a gray comment is the case that breaks otherwise).
-	diffEmphFg = "#f2f3f8"
-)
+	syntaxStyle string
+	addBaseBg   string
+	delBaseBg   string
+	addEmphBg   string
+	delEmphBg   string
+	addMarker   string
+	delMarker   string
+	metaFg      string
+	hunkFg      string
+	emphFg      string
+}
+
+// diffThemes is the Settings picker order: the two dark themes, then the two
+// light. Index 0 is the default for an unset / unknown [diff] theme — GitHub
+// Dark, the familiar reviewer palette. (catppuccin-mocha, the original tuning,
+// is one slot over.)
+var diffThemes = []diffTheme{
+	{
+		key: "github-dark", name: "GitHub Dark", dark: true,
+		syntaxStyle: "github-dark",
+		addBaseBg:   "#12261e", delBaseBg: "#25171c",
+		addEmphBg: "#1f6f33", delEmphBg: "#7c2b2e",
+		addMarker: "#3fb950", delMarker: "#f85149",
+		metaFg: "#6e7681", hunkFg: "#58a6ff", emphFg: "#f0f6fc",
+	},
+	{
+		key: "catppuccin-mocha", name: "Catppuccin Mocha", dark: true,
+		syntaxStyle: "catppuccin-mocha",
+		addBaseBg:   "#243c1d", delBaseBg: "#4a1e1b",
+		addEmphBg: "#3c6a32", delEmphBg: "#83372f",
+		addMarker: "#a6e3a1", delMarker: "#f38ba8",
+		metaFg: "240", hunkFg: "75", emphFg: "#f2f3f8",
+	},
+	{
+		key: "catppuccin-latte", name: "Catppuccin Latte", dark: false,
+		syntaxStyle: "catppuccin-latte",
+		addBaseBg:   "#e3f0e1", delBaseBg: "#fbe4e6",
+		addEmphBg: "#c5e6bf", delEmphBg: "#f4c4ca",
+		addMarker: "#40a02b", delMarker: "#d20f39",
+		metaFg: "#8c8fa1", hunkFg: "#1e66f5", emphFg: "#4c4f69",
+	},
+	{
+		key: "github-light", name: "GitHub Light", dark: false,
+		syntaxStyle: "github",
+		addBaseBg:   "#e6ffec", delBaseBg: "#ffebe9",
+		addEmphBg: "#abf2bc", delEmphBg: "#ffc1c0",
+		addMarker: "#1a7f37", delMarker: "#cf222e",
+		metaFg: "#6e7781", hunkFg: "#0550ae", emphFg: "#1f2328",
+	},
+}
+
+// activeDiffTheme is the theme renderDiffContent paints with — a single
+// app-wide setting (one diff theme at a time), set once in Model.New from prefs
+// and re-pointed when the Settings picker cycles it. A package global to mirror
+// the existing chrome globals (Version, the lipgloss style vars) and keep
+// renderDiffContent's signature stable; it defaults to diffThemes[0] (GitHub
+// Dark) so any render before New (tests) has a valid theme.
+var activeDiffTheme = diffThemes[0]
+
+// diffThemeIndex returns the diffThemes index for a config key, or 0 (the
+// default dark theme) for "" / an unrecognized key.
+func diffThemeIndex(key string) int {
+	for i, t := range diffThemes {
+		if t.key == key {
+			return i
+		}
+	}
+	return 0
+}
 
 // Render guards: above these the cost of per-line tokenisation + LCS isn't
 // worth it, so the line (or whole patch) falls back to plain +/- backgrounds
@@ -84,7 +148,8 @@ func renderDiffContent(patch string, width int) string {
 	lines := strings.Split(patch, "\n")
 	syntax := len(lines) <= maxDiffRenderLines
 
-	r := newDiffRenderer()
+	th := activeDiffTheme
+	r := newDiffRenderer(th)
 
 	kinds := make([]diffLineKind, len(lines))
 	codes := make([]string, len(lines)) // tab-expanded code (content lines only)
@@ -114,28 +179,30 @@ func renderDiffContent(patch string, width int) string {
 		}
 		switch kinds[i] {
 		case dlHunk:
-			b.WriteString(styledSeg(ln, diffHunkFg, ""))
+			b.WriteString(styledSeg(ln, th.hunkFg, ""))
 		case dlMeta:
-			b.WriteString(styledSeg(ln, diffMetaFg, ""))
+			b.WriteString(styledSeg(ln, th.metaFg, ""))
 		case dlContext:
 			b.WriteString(r.contentLine(' ', codes[i], lex[i], "", "", "", nil, syntax, width))
 		case dlAdd:
-			b.WriteString(r.contentLine('+', codes[i], lex[i], diffAddBaseBg, diffAddEmphBg, diffAddMarker, changed[i], syntax, width))
+			b.WriteString(r.contentLine('+', codes[i], lex[i], th.addBaseBg, th.addEmphBg, th.addMarker, changed[i], syntax, width))
 		case dlDel:
-			b.WriteString(r.contentLine('-', codes[i], lex[i], diffDelBaseBg, diffDelEmphBg, diffDelMarker, changed[i], syntax, width))
+			b.WriteString(r.contentLine('-', codes[i], lex[i], th.delBaseBg, th.delEmphBg, th.delMarker, changed[i], syntax, width))
 		}
 	}
 	return b.String()
 }
 
 type diffRenderer struct {
+	theme    diffTheme
 	style    *chroma.Style
 	lexCache map[string]chroma.Lexer
 }
 
-func newDiffRenderer() *diffRenderer {
+func newDiffRenderer(th diffTheme) *diffRenderer {
 	return &diffRenderer{
-		style:    styles.Get(diffSyntaxStyleName), // falls back to a registered style if unknown
+		theme:    th,
+		style:    styles.Get(th.syntaxStyle), // falls back to a registered style if unknown
 		lexCache: map[string]chroma.Lexer{},
 	}
 }
@@ -206,11 +273,11 @@ func (r *diffRenderer) writeSpans(b *strings.Builder, runes []rune, base int, fg
 		for j < len(runes) && bgAt(base+j, changed, baseBg, emphBg) == bg {
 			j++
 		}
-		// On a word-level changed span, force a bright foreground so the text
-		// stays legible over the emph background regardless of its token color.
+		// On a word-level changed span, force the theme's emph foreground so the
+		// text stays legible over the emph background regardless of its token color.
 		segFg := fg
 		if emphBg != "" && bg == emphBg {
-			segFg = diffEmphFg
+			segFg = r.theme.emphFg
 		}
 		b.WriteString(styledSeg(string(runes[k:j]), segFg, bg))
 		k = j

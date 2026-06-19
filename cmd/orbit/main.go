@@ -38,6 +38,10 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.Printf("orbit start (version=%s)", version)
 
+	// Hand the build version to the TUI so its once-a-day release check can
+	// compare against the running build (and stay silent on "dev" builds).
+	tui.Version = version
+
 	m, w := tui.NewWithWatcher()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithReportFocus())
 	if w != nil {

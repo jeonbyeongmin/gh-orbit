@@ -34,6 +34,7 @@ var (
 		title: "Global",
 		groups: [][]helpEntry{{
 			{"?", "help"},
+			{",", "settings"},
 			{"^C ^C", "quit"},
 			{"tab/⇧tab", "next/prev page"},
 		}},

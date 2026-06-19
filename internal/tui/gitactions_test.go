@@ -102,8 +102,8 @@ func TestCherryPickConfirmFlow(t *testing.T) {
 
 	updated, _ = m.Update(cherryPickConflictMsg{err: errors.New("CONFLICT")})
 	m = updated.(Model)
-	if m.cherryPickInFlight || !strings.Contains(m.status, "resolve in your terminal") {
-		t.Errorf("conflict should delegate to terminal, status=%q", m.status)
+	if m.cherryPickInFlight || !strings.Contains(m.status, "resolve in Local Changes") {
+		t.Errorf("conflict should point to Local Changes, status=%q", m.status)
 	}
 }
 

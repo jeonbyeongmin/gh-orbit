@@ -462,6 +462,9 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.commitInput.open {
 		return m.handleCommitInputKey(msg)
 	}
+	if m.lcAbortOpen {
+		return m.handleSequencerAbortKey(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		return m.handleCtrlC()
@@ -485,6 +488,14 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		// Commit the staged index (message input modal). Works from either pane.
 		return m.beginCommit()
+	case "C":
+		// Resume an in-progress sequencer (cherry-pick / rebase / merge / revert)
+		// after its conflicts are resolved + staged. No-op when none is running.
+		return m.beginSequencerContinue()
+	case "ctrl+x":
+		// Abort an in-progress sequencer (destructive → confirm dialog). No-op
+		// when none is running.
+		return m.openSequencerAbort()
 	}
 	// Single-pane drill-down. Tree owns cursor movement + stage/unstage;
 	// `→` descends into the diff. Diff owns hunk navigation (`[`/`]`),

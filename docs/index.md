@@ -26,6 +26,10 @@ detail.
 - [pull-requests.md](pull-requests.md) — `enter` opens a PR on the web,
   `m` merges it (confirm dialog), and the Pull Requests tab lists every
   open PR. The "jump to a PR and land it from the terminal" surface.
+- [sequencer.md](sequencer.md) — mid-conflict cherry-pick / rebase /
+  merge / revert resolution on the Local Changes page: `C` continue,
+  `ctrl+x` abort. The "a conflict no longer kicks you out to a shell"
+  surface.
 
 When a behavior crosses files, the canonical doc is **checkout.md**
 for control flow and **git-wrappers.md** for the wrapper surface.

@@ -33,4 +33,4 @@ strategy = "rebase"   # "ff-only" | "merge" | "rebase"
 2. git config `pull.rebase` (`true` → rebase)
 3. fallback `--ff-only`
 
-A pull conflict surfaces `pull: CONFLICT — resolve in your terminal` in the status bar; the user resolves with their normal git workflow outside the TUI.
+A pull conflict surfaces `pull: CONFLICT — resolve in Local Changes (C / abort)` in the status bar; the user stages resolutions on the Local Changes page and continues/aborts there ([sequencer.md](sequencer.md)), or resolves in their terminal.

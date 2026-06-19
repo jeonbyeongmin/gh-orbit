@@ -66,12 +66,14 @@ same graph cursor as `space`.
   else the first remote chip, else the short hash.
 - **Rejections up front**: detached HEAD (`checkout a branch first`),
   cursor on HEAD itself (no-op), or any in-flight graph action.
-- **Conflicts delegate to the terminal**: a conflict stop reports
-  `rebase: CONFLICT — resolve in your terminal`, reloads so the graph
-  shows the mid-rebase state, and never auto-aborts — identical contract
-  to pull conflicts. Success reloads with a HEAD jump
-  (`rebase: done (<head> onto <label>)`); a dirty-tree refusal surfaces
-  git's own message as `rebase failed: …`.
+- **Conflicts surface in Local Changes**: a conflict stop reports
+  `rebase: CONFLICT — resolve in Local Changes (C / abort)`, reloads so
+  the graph shows the mid-rebase state, and never auto-aborts. The
+  mid-op state is left in place; the **Local Changes** page detects the
+  sequencer (`git.DetectSequencer`) and offers `C` (continue) / `ctrl+x`
+  (abort) — see [sequencer.md](sequencer.md). Success reloads with a HEAD
+  jump (`rebase: done (<head> onto <label>)`); a dirty-tree refusal
+  surfaces git's own message as `rebase failed: …`.
 - Wrapper: `git.Rebase` (plain `git rebase <onto>`), conflict detection
   via the same merge-like stderr/stdout scan as `git.Pull`
   (`ErrRebaseConflict`).
@@ -81,9 +83,10 @@ same graph cursor as `space`.
 `c` applies the **cursor commit onto the current branch** — the same
 confirm-first dialog and conflict contract as `R`
 (`cherry-pick <hash> onto <head>? [y]/[esc]`; conflicts report
-`resolve in your terminal` and leave the mid-pick state in place).
-Rejections mirror rebase: detached HEAD, cursor on HEAD, in-flight
-actions. Wrapper: `git.CherryPick` (`ErrCherryPickConflict`).
+`resolve in Local Changes (C / abort)` and leave the mid-pick state in
+place — see [sequencer.md](sequencer.md)). Rejections mirror rebase:
+detached HEAD, cursor on HEAD, in-flight actions. Wrapper:
+`git.CherryPick` (`ErrCherryPickConflict`).
 
 ## Revert (`v`) / reset (`x`) — the scrap path
 
@@ -92,7 +95,8 @@ leaving the cockpit. `v` **reverts the cursor commit** — `git revert
 --no-edit <hash>` records a new commit that undoes it, preserving
 history (safe on already-pushed commits). Same single-`y` confirm and
 conflict contract as `c` (`revert <hash> on <head>? [y]/[esc]`;
-`ErrRevertConflict` → resolve in your terminal). Detached HEAD is
+`ErrRevertConflict` → resolve in Local Changes, [sequencer.md](sequencer.md)).
+Detached HEAD is
 rejected; reverting HEAD itself is allowed (a normal undo). Wrapper:
 `git.Revert`.
 

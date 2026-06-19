@@ -401,7 +401,7 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case rebaseConflictMsg:
 		m.rebaseInFlight = false
 		m.pendingRebase = pendingRebase{}
-		m.status = "rebase: CONFLICT — resolve in your terminal"
+		m.status = "rebase: CONFLICT — resolve in Local Changes (C / abort)"
 		m.statusStyle = statusErrS
 		// Reload so the graph reflects the mid-rebase state. No HEAD jump —
 		// the user is mid-conflict (mirrors the pull-conflict handler).
@@ -426,7 +426,7 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cherryPickConflictMsg:
 		m.cherryPickInFlight = false
 		m.pendingCherryPick = pendingCherryPick{}
-		m.status = "cherry-pick: CONFLICT — resolve in your terminal"
+		m.status = "cherry-pick: CONFLICT — resolve in Local Changes (C / abort)"
 		m.statusStyle = statusErrS
 		return m, m.reloadCmd()
 
@@ -449,7 +449,7 @@ func (m Model) updateCheckoutMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case revertConflictMsg:
 		m.revertInFlight = false
 		m.pendingRevert = pendingRevert{}
-		m.status = "revert: CONFLICT — resolve in your terminal"
+		m.status = "revert: CONFLICT — resolve in Local Changes (C / abort)"
 		m.statusStyle = statusErrS
 		return m, m.reloadCmd()
 
@@ -593,7 +593,7 @@ func (m Model) updateFetchPullMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pullConflictMsg:
 		m.pullInFlight = false
-		m.status = "pull: CONFLICT — resolve in your terminal"
+		m.status = "pull: CONFLICT — resolve in Local Changes (C / abort)"
 		m.statusStyle = statusErrS
 		// Reload so refs (HEAD may now sit on a half-merged commit) and the
 		// graph reflect post-pull state. No HEAD jump — user is mid-conflict.
@@ -710,6 +710,11 @@ func (m Model) updateLocalChangesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 				keepPath, keepStaged = e.Path, e.Staged()
 			}
 		}
+		// SetSequencer before ApplyStatusLoaded: the latter runs followCursor,
+		// whose scroll budget subtracts the banner row (visibleTreeRows), so the
+		// banner state must be current before the clamp — otherwise a reload that
+		// changes bannerRows() clamps yOffset against the wrong row budget.
+		m.localChanges.SetSequencer(msg.sequencer)
 		m.localChanges.ApplyStatusLoaded(msg.entries)
 		m.localChanges.SetStats(msg.unstagedStat, msg.stagedStat)
 		if keepPath != "" {

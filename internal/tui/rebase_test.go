@@ -132,8 +132,8 @@ func TestRebaseOutcomeHandlers(t *testing.T) {
 	m.rebaseInFlight = true
 	updated, cmd = m.Update(rebaseConflictMsg{err: errors.New("CONFLICT")})
 	conflict := updated.(Model)
-	if !strings.Contains(conflict.status, "resolve in your terminal") || cmd == nil {
-		t.Errorf("conflict should delegate to terminal + reload, status=%q", conflict.status)
+	if !strings.Contains(conflict.status, "resolve in Local Changes") || cmd == nil {
+		t.Errorf("conflict should point to Local Changes + reload, status=%q", conflict.status)
 	}
 
 	m.rebaseInFlight = true

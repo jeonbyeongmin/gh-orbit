@@ -37,12 +37,12 @@ func TestLatestTag(t *testing.T) {
 	releaseExec = func(context.Context) ([]byte, error) {
 		return []byte("v0.6.5\n"), nil
 	}
-	got, err := LatestTag(context.Background())
+	got, err := latestTag(context.Background())
 	if err != nil {
-		t.Fatalf("LatestTag: %v", err)
+		t.Fatalf("latestTag: %v", err)
 	}
 	if got != "v0.6.5" {
-		t.Errorf("LatestTag = %q, want v0.6.5", got)
+		t.Errorf("latestTag = %q, want v0.6.5", got)
 	}
 }
 

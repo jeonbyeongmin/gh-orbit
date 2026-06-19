@@ -66,8 +66,8 @@ var upgradeExec = func(ctx context.Context) error {
 	return nil
 }
 
-// LatestTag returns the newest published release tag (e.g. "v0.6.5").
-func LatestTag(ctx context.Context) (string, error) {
+// latestTag returns the newest published release tag (e.g. "v0.6.5").
+func latestTag(ctx context.Context) (string, error) {
 	out, err := releaseExec(ctx)
 	if err != nil {
 		return "", err
@@ -90,7 +90,7 @@ func Check(ctx context.Context, current string) (string, error) {
 	if c, ok := loadCache(); ok && time.Since(c.CheckedAt) < cacheTTL {
 		return c.Latest, nil
 	}
-	latest, err := LatestTag(ctx)
+	latest, err := latestTag(ctx)
 	if err != nil {
 		return "", err
 	}

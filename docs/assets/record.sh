@@ -22,7 +22,7 @@ SCENE="${1:?scene name required (demo|commit-graph|diff-review|pull-requests|wor
 BIN="${ORBIT_BIN:-/tmp/orbit-demo}"
 REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 OUT="${OUT_DIR:-$REPO/docs/assets}"
-CAST="$(mktemp -t "orbit-$SCENE-XXXX").cast"
+CAST="${TMPDIR:-/tmp}/orbit-$SCENE.cast"
 S="rec_$SCENE"
 
 # terminal geometry per scene (cols x rows). demo is the wide hero shot.

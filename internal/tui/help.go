@@ -52,6 +52,7 @@ var (
 				{"space", "checkout / ff / detach"},
 				{"enter", "open PR (web)"},
 				{"m", "merge PR"},
+				{"C", "PR checks"},
 				{"R", "rebase onto cursor"},
 				{"c", "cherry-pick cursor"},
 				{"v", "revert cursor"},
@@ -152,6 +153,7 @@ var (
 			{"↑/↓", "nav"},
 			{"enter", "open PR (web)"},
 			{"m", "merge PR"},
+			{"C", "PR checks"},
 			{"r", "refresh"},
 		}},
 	}

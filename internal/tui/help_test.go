@@ -10,7 +10,7 @@ import (
 // hint carries — every refactor of the panel must keep them all.
 func TestHelpDataCoverage(t *testing.T) {
 	required := []string{
-		"↑/↓", "enter", "y", "d", "F", "p", "P", "r", "R", "c", "n", "m",
+		"↑/↓", "enter", "y", "d", "F", "p", "P", "r", "R", "c", "n", "m", "C",
 		"^C ^C", "tab/⇧tab", "space", "b",
 	}
 

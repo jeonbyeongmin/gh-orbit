@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,6 +51,33 @@ const (
 	prChecksFailing
 )
 
+// prCheck is one CI context from a PR's statusCheckRollup, kept before
+// worseCheckState collapses the lot into the single badge glyph so the PR
+// checks modal can show *which* check failed. Name / URL are the union of the
+// two GraphQL row types: a CheckRun carries name + detailsUrl, a StatusContext
+// carries context + targetUrl.
+type prCheck struct {
+	Name  string
+	State prCheckState
+	URL   string
+}
+
+// checkRank orders checks for the modal: failing first, then pending, then
+// passing, then anything else. A stable sort on this keeps gh's rollup order
+// within each rank, so the failures a reviewer came for sit at the top.
+func checkRank(s prCheckState) int {
+	switch s {
+	case prChecksFailing:
+		return 0
+	case prChecksPending:
+		return 1
+	case prChecksPassing:
+		return 2
+	default:
+		return 3
+	}
+}
+
 // prReviewState is the PR's review-decision rollup, drawn as a colored dot on
 // the Pull Requests page (green approved · red changes · grey pending). None
 // covers "no review required by branch protection" — nothing to report.
@@ -79,6 +107,10 @@ type prInfo struct {
 	Deletions   int
 	Files       int
 	UpdatedAt   time.Time
+	// CheckRows is every CI context, failures-first, preserved before
+	// worseCheckState folded them into Checks. The PR checks modal (`C`)
+	// renders these; the chip badge only reads the collapsed Checks glyph.
+	CheckRows []prCheck
 }
 
 type prsLoadedMsg struct {
@@ -147,14 +179,21 @@ type prListItem struct {
 		Status     string `json:"status"`
 		Conclusion string `json:"conclusion"`
 		State      string `json:"state"`
+		// name/detailsUrl are the CheckRun fields; context/targetUrl the
+		// StatusContext ones. Decoded so the checks modal can label each row
+		// and jump to its log — both were dropped before.
+		Name       string `json:"name"`
+		Context    string `json:"context"`
+		DetailsURL string `json:"detailsUrl"`
+		TargetURL  string `json:"targetUrl"`
 	} `json:"statusCheckRollup"`
 }
 
 // parsePRList turns `gh pr list --json` output into an ordered prInfo slice
-// (gh's newest-first order, preserved for the `l` modal). prListCmd folds it
-// into the head-branch → prInfo map the chip renderer reads; when two open
-// PRs share a head branch the later row wins that map slot — gh orders by
-// recency, and the badge only needs "the PR you'd land on".
+// (gh's newest-first order, the order the Pull Requests page renders).
+// prListCmd folds it into the head-branch → prInfo map the chip renderer reads;
+// when two open PRs share a head branch the later row wins that map slot — gh
+// orders by recency, and the badge only needs "the PR you'd land on".
 func parsePRList(data []byte) ([]prInfo, error) {
 	var items []prListItem
 	if err := json.Unmarshal(data, &items); err != nil {
@@ -166,9 +205,23 @@ func parsePRList(data []byte) ([]prInfo, error) {
 			continue
 		}
 		state := prChecksNone
+		var rows []prCheck
 		for _, c := range it.StatusCheckRollup {
-			state = worseCheckState(state, classifyCheck(c.Status, c.Conclusion, c.State))
+			cs := classifyCheck(c.Status, c.Conclusion, c.State)
+			state = worseCheckState(state, cs)
+			name := c.Name
+			if name == "" {
+				name = c.Context
+			}
+			url := c.DetailsURL
+			if url == "" {
+				url = c.TargetURL
+			}
+			rows = append(rows, prCheck{Name: name, State: cs, URL: url})
 		}
+		sort.SliceStable(rows, func(i, j int) bool {
+			return checkRank(rows[i].State) < checkRank(rows[j].State)
+		})
 		list = append(list, prInfo{
 			Number:      it.Number,
 			HeadRef:     it.HeadRefName,
@@ -182,6 +235,7 @@ func parsePRList(data []byte) ([]prInfo, error) {
 			Deletions:   it.Deletions,
 			Files:       it.ChangedFiles,
 			UpdatedAt:   it.UpdatedAt,
+			CheckRows:   rows,
 		})
 	}
 	return list, nil

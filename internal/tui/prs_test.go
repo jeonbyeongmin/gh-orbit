@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestParsePRListEmpty(t *testing.T) {
 	list, err := parsePRList([]byte(`[]`))
@@ -99,6 +103,66 @@ func TestParsePRListCheckRows(t *testing.T) {
 func TestParsePRListBadJSON(t *testing.T) {
 	if _, err := parsePRList([]byte(`{not json`)); err == nil {
 		t.Fatal("want parse error, got nil")
+	}
+}
+
+// isGHAuthError must single out a logged-out gh from the two failures that
+// stay quiet by contract: no GitHub remote, and gh not installed.
+func TestIsGHAuthError(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{errors.New("gh pr list: To get started with GitHub CLI, please run:  gh auth login"), true},
+		{errors.New("gh pr list: none of the git remotes point to a known GitHub host"), false},
+		{errors.New(`gh pr list: exec: "gh": executable file not found in $PATH`), false},
+		{nil, false},
+	}
+	for _, c := range cases {
+		if got := isGHAuthError(c.err); got != c.want {
+			t.Errorf("isGHAuthError(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}
+
+// A logged-out gh reads identically to "no open PRs", so the hint surfaces
+// once — but the 30s poll must not re-spam it, and a good load re-arms it.
+func TestPRListAuthFailureSurfacesOnce(t *testing.T) {
+	authErr := errors.New("gh pr list: run gh auth login")
+
+	m := New()
+	m.status = ""
+	updated, _ := m.Update(prsLoadFailedMsg{err: authErr})
+	m = updated.(Model)
+	if !m.prsAuthNotified || !strings.Contains(m.status, "gh auth login") {
+		t.Fatalf("first auth failure should surface once, status=%q notified=%v", m.status, m.prsAuthNotified)
+	}
+
+	// A repeat failure (the poll firing again) must stay quiet.
+	m.status = ""
+	updated, _ = m.Update(prsLoadFailedMsg{err: authErr})
+	m = updated.(Model)
+	if m.status != "" {
+		t.Errorf("repeat auth failure should stay quiet, status=%q", m.status)
+	}
+
+	// A successful load re-arms the one-shot.
+	updated, _ = m.Update(prsLoadedMsg{prs: map[string]prInfo{}, list: nil})
+	m = updated.(Model)
+	if m.prsAuthNotified {
+		t.Error("successful load should re-arm the auth hint")
+	}
+}
+
+// A no-remote / not-installed failure stays quiet — the documented contract
+// is "no GitHub remote ⇒ columns omitted, no errors".
+func TestPRListNonAuthFailureStaysQuiet(t *testing.T) {
+	m := New()
+	m.status = ""
+	updated, _ := m.Update(prsLoadFailedMsg{err: errors.New("gh pr list: no known GitHub host")})
+	m = updated.(Model)
+	if m.status != "" || m.prsAuthNotified {
+		t.Errorf("no-remote failure should stay quiet, status=%q notified=%v", m.status, m.prsAuthNotified)
 	}
 }
 

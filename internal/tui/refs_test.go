@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
@@ -20,6 +21,18 @@ func TestRefModelHandlesLoadFailure(t *testing.T) {
 	}
 	if r.err == nil {
 		t.Error("err should carry the failure sentinel")
+	}
+}
+
+// A for-each-ref failure backs the whole graph, so the Model must surface it
+// on the status line rather than leave an unexplained empty graph.
+func TestRefsLoadFailureSurfacesStatus(t *testing.T) {
+	m := New()
+	m.status = ""
+	updated, _ := m.Update(refsLoadFailedMsg{err: errSentinel})
+	m = updated.(Model)
+	if !strings.Contains(m.status, "refs load failed") {
+		t.Errorf("refs load failure should surface, status=%q", m.status)
 	}
 }
 

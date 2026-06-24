@@ -123,7 +123,7 @@ on row 0. An empty inventory still lands on the page — it renders a
 `(no worktrees loaded yet)` body rather than refusing entry, so the
 cycle never gets stuck. While the page owns the screen it owns every key
 (the global shortcuts route to its cursor); only the `tab` / `shift+tab`
-cycle, `?` (toggle the inline help panel), and `^C` quit pass through.
+cycle, `?` (toggle the inline help panel), and the `q q` / `^C` quit pass through.
 
 ### Open a card's PR on the web (`enter`)
 

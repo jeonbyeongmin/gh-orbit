@@ -154,8 +154,8 @@ func TestBranchesModalEscClosesModal(t *testing.T) {
 	}
 }
 
-// TestBranchesModalQClosesModal — q closes the modal like esc does. Quitting
-// is still ctrl+c twice, so q must not arm quit.
+// TestBranchesModalQClosesModal — q closes the modal like esc does. The modal
+// owns q, so it never reaches the top-level two-press quit (q must not arm).
 func TestBranchesModalQClosesModal(t *testing.T) {
 	m := initSized(t)
 	m = seedRefs(t, m, []git.Ref{

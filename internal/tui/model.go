@@ -782,27 +782,40 @@ func (m Model) gitMutationInFlight() bool {
 		m.pushInFlight || m.revertInFlight || m.resetInFlight || m.stashInFlight
 }
 
-// quitArmHint is the status line shown after the first ctrl+c. Kept as a
-// const so the disarm chokepoint in updateKey can match it exactly before
-// clearing — an unrelated status message is left untouched.
-const quitArmHint = "^C again to quit"
+// quitArmHint / quitArmHintQ are the status lines shown after the first quit
+// keypress — one per trigger key so the hint names the key the reviewer just
+// pressed. Kept as consts so the disarm chokepoint in updateKey can match them
+// exactly before clearing — an unrelated status message is left untouched.
+const (
+	quitArmHint  = "^C again to quit"
+	quitArmHintQ = "q again to quit"
+)
 
-// handleCtrlC implements the two-press quit. The first press arms quit and
-// paints quitArmHint; the second (while still armed) cancels the in-flight
-// stream and quits. Disarm happens key-driven at the top of the tea.KeyMsg
-// branch, so no timer is involved. Every ctrl+c site routes through here to
-// keep the rule uniform across modes; callers must re-assign the returned
-// Model (`return m.handleCtrlC()`) or the armed flag is lost.
-func (m Model) handleCtrlC() (Model, tea.Cmd) {
+// armOrQuit implements the shared two-press quit. The first press arms quit and
+// paints `hint`; the second (while still armed) cancels the in-flight stream and
+// quits. Disarm happens key-driven at the top of the tea.KeyMsg branch, so no
+// timer is involved. ctrl+c and q both route through here so the two-press rule
+// is identical for either trigger; callers must re-assign the returned Model
+// (`return m.handleCtrlC()`) or the armed flag is lost.
+func (m Model) armOrQuit(hint string) (Model, tea.Cmd) {
 	if m.quitArmed {
 		m.cancelStream()
 		return m, tea.Quit
 	}
 	m.quitArmed = true
-	m.status = quitArmHint
+	m.status = hint
 	m.statusStyle = statusErrS
 	return m, nil
 }
+
+// handleCtrlC arms/quits via ctrl+c. Every ctrl+c site routes through here to
+// keep the rule uniform across modes.
+func (m Model) handleCtrlC() (Model, tea.Cmd) { return m.armOrQuit(quitArmHint) }
+
+// handleQuitKey arms/quits via `q`. Wired into the top-level page handlers
+// (graph / worktree / local changes / PRs) only — the patch overlay keeps its
+// arrow-only navigation, so q does nothing there.
+func (m Model) handleQuitKey() (Model, tea.Cmd) { return m.armOrQuit(quitArmHintQ) }
 
 // applyPaneSizes recomputes the inner content dimensions for every sub-model
 // from the current width/height. refs is a pure storage model

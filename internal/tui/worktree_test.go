@@ -467,7 +467,7 @@ func TestWorktreesTabCycle(t *testing.T) {
 }
 
 // TestWorktreesEscIsNoOp — esc no longer exits the worktree page (page nav is
-// the tab cycle only); it stays put. q is likewise inert.
+// the tab cycle only); it stays put. q stays on the page too, but arms quit.
 func TestWorktreesEscIsNoOp(t *testing.T) {
 	m := New()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -486,10 +486,10 @@ func TestWorktreesEscIsNoOp(t *testing.T) {
 	}
 	m, _ = pressRune(t, m, 'q')
 	if m.mode != viewModeWorktreesModal {
-		t.Errorf("q should be a no-op on the worktree page, mode = %v", m.mode)
+		t.Errorf("q should not leave the worktree page, mode = %v", m.mode)
 	}
-	if m.quitArmed {
-		t.Errorf("q must not arm quit")
+	if !m.quitArmed {
+		t.Errorf("q should arm quit on the worktree page")
 	}
 }
 

@@ -35,7 +35,7 @@ var (
 		groups: [][]helpEntry{{
 			{"?", "help"},
 			{",", "settings"},
-			{"^C ^C", "quit"},
+			{"q q / ^C ^C", "quit"},
 			{"tab/⇧tab", "next/prev page"},
 		}},
 	}

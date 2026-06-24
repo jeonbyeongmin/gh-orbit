@@ -817,6 +817,20 @@ func (m Model) handleCtrlC() (Model, tea.Cmd) { return m.armOrQuit(quitArmHint) 
 // arrow-only navigation, so q does nothing there.
 func (m Model) handleQuitKey() (Model, tea.Cmd) { return m.armOrQuit(quitArmHintQ) }
 
+// qTriggersQuit reports whether `q` arms or completes the two-press quit in the
+// current mode — the four top-level pages wired to handleQuitKey. The disarm
+// preamble keeps a pending quit armed across only these; in a confirm modal q
+// is the cancel key (and the patch overlay ignores it), so there q must instead
+// fall through to the normal disarm and clear a stale armed quit an async mode
+// flip carried in (the flip bypasses the preamble and overwrites the hint).
+func (m Model) qTriggersQuit() bool {
+	switch m.mode {
+	case viewModeNormal, viewModeWorktreesModal, viewModeLocalChanges, viewModePRsPage:
+		return true
+	}
+	return false
+}
+
 // applyPaneSizes recomputes the inner content dimensions for every sub-model
 // from the current width/height. refs is a pure storage model
 // post-sidebar-shell-subtract, so it owns no size of its own — the

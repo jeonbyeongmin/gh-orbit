@@ -1047,6 +1047,35 @@ func TestQDisarmedByOtherKey(t *testing.T) {
 	}
 }
 
+func TestQDisarmsWhenModalOwnsIt(t *testing.T) {
+	// A quit armed on a top-level page must not survive into a modal that owns
+	// q as its cancel key. An async mode flip (e.g. checkoutNeedsCleanTreeMsg)
+	// bypasses the disarm preamble and overwrites the quit hint, so the armed
+	// flag goes invisible; if q didn't disarm there, the modal's cancel-q would
+	// leave it armed and a later single q would quit without the two-press.
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(Model)
+	if !m.quitArmed {
+		t.Fatalf("setup: q should arm quit on the graph")
+	}
+
+	// Simulate an async transition into a confirm modal (no preamble run).
+	m.mode = viewModeBranchesModal
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Fatalf("q should close the branches modal, got mode %v", m.mode)
+	}
+	if m.quitArmed {
+		t.Errorf("q in a modal must disarm the stale quit, not keep it armed")
+	}
+}
+
 func TestCtrlCDisarmedByOtherKey(t *testing.T) {
 	// An intervening non-ctrl+c key clears the armed state + hint, so the
 	// next single ctrl+c only re-arms instead of quitting.

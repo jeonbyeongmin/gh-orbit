@@ -18,12 +18,14 @@ import (
 )
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Any key other than a quit trigger (ctrl+c / q) disarms a pending quit.
-	// Handled here once, before the per-mode dispatch, so every branch shares
-	// one disarm point. Keeping q out of the disarm set lets the second q reach
-	// the page handler that quits. Only the arm hint is cleared so an unrelated
-	// status survives.
-	if m.quitArmed && msg.String() != "ctrl+c" && msg.String() != "q" {
+	// Any key other than a quit trigger disarms a pending quit. Handled here
+	// once, before the per-mode dispatch, so every branch shares one disarm
+	// point. ctrl+c always continues the quit (every handler routes it through
+	// handleCtrlC); q continues it only on the top-level pages (qTriggersQuit) —
+	// in a modal q is the cancel key, so it must disarm there instead, clearing
+	// a stale armed quit an async mode flip carried in. Only the arm hint is
+	// cleared so an unrelated status survives.
+	if m.quitArmed && msg.String() != "ctrl+c" && (msg.String() != "q" || !m.qTriggersQuit()) {
 		m.quitArmed = false
 		if m.status == quitArmHint || m.status == quitArmHintQ {
 			m.status = ""

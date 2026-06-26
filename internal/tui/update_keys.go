@@ -18,12 +18,16 @@ import (
 )
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Any key other than ctrl+c disarms a pending quit. Handled here once,
-	// before the per-mode dispatch, so every branch shares one disarm
-	// point. Only the arm hint is cleared so an unrelated status survives.
-	if m.quitArmed && msg.String() != "ctrl+c" {
+	// Any key other than a quit trigger disarms a pending quit. Handled here
+	// once, before the per-mode dispatch, so every branch shares one disarm
+	// point. ctrl+c always continues the quit (every handler routes it through
+	// handleCtrlC); q continues it only on the top-level pages (qTriggersQuit) —
+	// in a modal q is the cancel key, so it must disarm there instead, clearing
+	// a stale armed quit an async mode flip carried in. Only the arm hint is
+	// cleared so an unrelated status survives.
+	if m.quitArmed && msg.String() != "ctrl+c" && (msg.String() != "q" || !m.qTriggersQuit()) {
 		m.quitArmed = false
-		if m.status == quitArmHint {
+		if m.status == quitArmHint || m.status == quitArmHintQ {
 			m.status = ""
 			m.statusStyle = statusOkS
 		}
@@ -381,6 +385,8 @@ func (m Model) handleWorktreesModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggleHelp()
 	case "ctrl+c":
 		return m.handleCtrlC()
+	case "q":
+		return m.handleQuitKey()
 	}
 	return m, nil
 }
@@ -414,6 +420,8 @@ func (m Model) handlePRsPageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggleHelp()
 	case "ctrl+c":
 		return m.handleCtrlC()
+	case "q":
+		return m.handleQuitKey()
 	}
 	return m, nil
 }
@@ -478,6 +486,10 @@ func (m Model) handleLocalChangesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m.handleCtrlC()
+	case "q":
+		// Two-press quit. The commit-input / discard / abort overlays are
+		// guarded above, so q is never literal text here.
+		return m.handleQuitKey()
 	case "tab":
 		// Page cycle: local changes → pull requests. Releases the diff body.
 		return m.cyclePage(false)
@@ -589,6 +601,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m.handleCtrlC()
+	case "q":
+		// Two-press quit, mirroring ctrl+c. The graph defers `q` to the list
+		// (which ignores it), so intercepting here is free.
+		return m.handleQuitKey()
 	case "?":
 		// Toggle the inline help reference panel. It grows out of the footer
 		// (not a modal) — other shortcuts keep working while it is open.

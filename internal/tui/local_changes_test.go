@@ -11,10 +11,10 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/git"
 )
 
-// TestLocalChangesQIsNoOp — q no longer exits the local changes page (page
-// nav is the tab cycle only); it stays put and must not arm quit (quitting is
-// still ctrl+c twice).
-func TestLocalChangesQIsNoOp(t *testing.T) {
+// TestLocalChangesQArmsQuit — q does not exit the local changes page (page nav
+// is the tab cycle only); it stays put but arms the two-press quit, same as
+// ctrl+c.
+func TestLocalChangesQArmsQuit(t *testing.T) {
 	m := initSized(t)
 	m = enterLocalChanges(t, m)
 	if m.mode != viewModeLocalChanges {
@@ -23,10 +23,10 @@ func TestLocalChangesQIsNoOp(t *testing.T) {
 
 	m, _ = pressRune(t, m, 'q')
 	if m.mode != viewModeLocalChanges {
-		t.Errorf("q should be a no-op on local changes, got mode %v", m.mode)
+		t.Errorf("q should not leave the local changes page, got mode %v", m.mode)
 	}
-	if m.quitArmed {
-		t.Errorf("q must not arm quit")
+	if !m.quitArmed {
+		t.Errorf("q should arm quit on the local changes page")
 	}
 }
 

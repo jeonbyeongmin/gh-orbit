@@ -919,7 +919,8 @@ func TestModelRightWithoutSelectionIsNoop(t *testing.T) {
 func TestModelEscQDoNotCloseDiffWindow(t *testing.T) {
 	// `←` is the sole diff exit now (TestModelLeftClosesDiffWindow); q/esc no
 	// longer close, matching the arrow-only navigation the local-changes diff
-	// uses. q must also not arm quit — that is still ctrl+c twice.
+	// uses. The two-press q quit is wired into the top-level pages only, so q
+	// must not arm quit inside the patch overlay either.
 	for _, key := range []tea.KeyMsg{
 		{Type: tea.KeyEsc},
 		{Type: tea.KeyRunes, Runes: []rune{'q'}},
@@ -983,6 +984,95 @@ func TestCtrlCArmsThenQuits(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Errorf("second ctrl+c should dispatch tea.Quit, got %T", cmd())
+	}
+}
+
+func TestQArmsThenQuits(t *testing.T) {
+	// On a top-level page the first q arms quit and paints the q hint without
+	// quitting; a second consecutive q quits. Mirrors the ctrl+c two-press.
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(Model)
+	if !m.quitArmed {
+		t.Fatalf("first q should arm quit")
+	}
+	if m.status != quitArmHintQ {
+		t.Errorf("first q should set the q quit hint, got status %q", m.status)
+	}
+	if cmd != nil {
+		t.Errorf("first q must not quit, got cmd=%v", cmd)
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Fatalf("second q should quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("second q should dispatch tea.Quit, got %T", cmd())
+	}
+}
+
+func TestQDisarmedByOtherKey(t *testing.T) {
+	// An intervening key that is neither q nor ctrl+c clears a q-armed quit, so
+	// the next single q only re-arms instead of quitting.
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(Model)
+	if !m.quitArmed {
+		t.Fatalf("q should arm quit")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+	if m.quitArmed {
+		t.Errorf("j should disarm quit")
+	}
+	if m.status != "" {
+		t.Errorf("disarm should clear the quit hint, got status %q", m.status)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(Model)
+	if !m.quitArmed {
+		t.Errorf("q after disarm should re-arm, not quit")
+	}
+	if cmd != nil {
+		t.Errorf("re-arming q must not quit, got cmd=%v", cmd)
+	}
+}
+
+func TestQDisarmsWhenModalOwnsIt(t *testing.T) {
+	// A quit armed on a top-level page must not survive into a modal that owns
+	// q as its cancel key. An async mode flip (e.g. checkoutNeedsCleanTreeMsg)
+	// bypasses the disarm preamble and overwrites the quit hint, so the armed
+	// flag goes invisible; if q didn't disarm there, the modal's cancel-q would
+	// leave it armed and a later single q would quit without the two-press.
+	m := New()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(Model)
+	if !m.quitArmed {
+		t.Fatalf("setup: q should arm quit on the graph")
+	}
+
+	// Simulate an async transition into a confirm modal (no preamble run).
+	m.mode = viewModeBranchesModal
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(Model)
+	if m.mode != viewModeNormal {
+		t.Fatalf("q should close the branches modal, got mode %v", m.mode)
+	}
+	if m.quitArmed {
+		t.Errorf("q in a modal must disarm the stale quit, not keep it armed")
 	}
 }
 

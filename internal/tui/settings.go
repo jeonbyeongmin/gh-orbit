@@ -15,6 +15,13 @@ import (
 	"github.com/jeonbyeongmin/gh-orbit/internal/config"
 )
 
+// Settings dialog adjustable rows, in top-to-bottom order. ↑/↓ moves focus
+// between them; ←/→ acts on the focused one.
+const (
+	settingsFocusMode = iota
+	settingsFocusTheme
+)
+
 // settingsOpenable reports whether `,` should open the Settings dialog from
 // the current surface. Only the bare pages qualify; a text-input or confirm
 // riding on the Local Changes page (commit message / discard / abort) is
@@ -29,6 +36,8 @@ func (m Model) settingsOpenable() bool {
 func (m Model) beginSettings() (tea.Model, tea.Cmd) {
 	m.settingsReturnMode = m.mode
 	m.settingsEntryThemeIdx = m.diffThemeIdx
+	// Open on the mode row so the dark/light choice comes first.
+	m.settingsFocus = settingsFocusMode
 	m.mode = viewModeSettings
 	// Open clean: a stale action status from the launching page would otherwise
 	// render as the dialog's feedback line.
@@ -63,8 +72,18 @@ func (m Model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.reloadCmd()
 		}
 		return m, nil
+	case "up", "k":
+		m.settingsFocus = settingsFocusMode
+		return m, nil
+	case "down", "j":
+		m.settingsFocus = settingsFocusTheme
+		return m, nil
 	case "left", "right":
-		return m.cycleDiffTheme(msg.String() == "right"), nil
+		next := msg.String() == "right"
+		if m.settingsFocus == settingsFocusMode {
+			return m.toggleThemeMode(), nil
+		}
+		return m.cycleDiffTheme(next), nil
 	case "U":
 		if !m.updateAvailable || Version == "dev" {
 			return m, nil
@@ -76,22 +95,43 @@ func (m Model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// cycleDiffTheme steps the active theme one slot (forward when next), wrapping
-// around the themes. applyTheme re-points activeDiffTheme and rebuilds the
-// shared chrome styles; the chips, graph meta columns, status line, borders, and
-// tabs read those vars each View so they repaint live, and RerenderTheme repaints
-// the cached diff. The graph's lane glyphs are the exception — they're baked into
-// each row's cached prefix at stream time, so they refresh on the reload the
-// Settings dialog fires on close (see handleSettingsKey), not per cycle. It then
-// persists the new key — a save failure surfaces in the dialog's feedback line
-// but leaves the theme applied for the session.
+// cycleDiffTheme steps the active theme one slot (forward when next) within the
+// current dark/light mode, wrapping around that mode's themes — so the dark and
+// light sets stay separate (the mode row switches between them).
 func (m Model) cycleDiffTheme(next bool) Model {
 	delta := -1
 	if next {
 		delta = 1
 	}
-	m.diffThemeIdx = (m.diffThemeIdx + delta + len(diffThemes)) % len(diffThemes)
-	applyTheme(diffThemes[m.diffThemeIdx])
+	idxs := modeIndices(diffThemes[m.diffThemeIdx].dark)
+	pos := (posInMode(m.diffThemeIdx) + delta + len(idxs)) % len(idxs)
+	return m.setTheme(idxs[pos])
+}
+
+// toggleThemeMode flips between the dark and light theme sets, landing on the
+// same position within the target mode (clamped to its last theme) so a reviewer
+// who picked the 3rd dark theme gets the 3rd light one rather than a reset.
+func (m Model) toggleThemeMode() Model {
+	target := modeIndices(!diffThemes[m.diffThemeIdx].dark)
+	pos := posInMode(m.diffThemeIdx)
+	if pos >= len(target) {
+		pos = len(target) - 1
+	}
+	return m.setTheme(target[pos])
+}
+
+// setTheme makes diffThemes[idx] active and persists it. applyTheme re-points
+// activeDiffTheme and rebuilds the shared chrome styles; the chips, graph meta
+// columns, status line, borders, and tabs read those vars each View so they
+// repaint live, and RerenderTheme repaints the cached diff. The graph's lane
+// glyphs are the exception — they're baked into each row's cached prefix at
+// stream time, so they refresh on the reload the Settings dialog fires on close
+// (see handleSettingsKey), not per step. It then persists the new key — a save
+// failure surfaces in the dialog's feedback line but leaves the theme applied
+// for the session.
+func (m Model) setTheme(idx int) Model {
+	m.diffThemeIdx = idx
+	applyTheme(diffThemes[idx])
 	m.localChanges.RerenderTheme()
 	m.diff.RerenderTheme()
 
@@ -108,7 +148,7 @@ func (m Model) cycleDiffTheme(next bool) Model {
 	}
 	// Write the app-wide key and migrate off the legacy [diff] theme so there's
 	// a single source of truth after the first switch.
-	prefs.Theme = diffThemes[m.diffThemeIdx].key
+	prefs.Theme = diffThemes[idx].key
 	prefs.Diff.Theme = ""
 	if err := config.SavePrefs(prefs); err != nil {
 		m.status = "theme save failed: " + firstLine(err.Error())
@@ -124,9 +164,10 @@ func (m Model) renderSettingsInner() string {
 	rows := []string{
 		confirmPromptS.Render("Settings"),
 		"",
-		settingsRow("version", Version),
-		settingsRow("latest", m.latestLabel()),
-		settingsRow("theme", m.diffThemeLabel()),
+		settingsRow(false, "version", Version),
+		settingsRow(false, "latest", m.latestLabel()),
+		settingsRow(m.settingsFocus == settingsFocusMode, "mode", m.themeModeLabel()),
+		settingsRow(m.settingsFocus == settingsFocusTheme, "theme", m.themeValueLabel()),
 		"",
 	}
 	// Feedback line: while the dialog owns the keys, the only status that can
@@ -158,28 +199,41 @@ func (m Model) latestLabel() string {
 	}
 }
 
-// diffThemeLabel renders the "theme" row value: the current theme name framed
-// by ◂ ▸ to signal it's adjustable, with a dim light/dark tag so the reviewer
-// knows which terminal background it's tuned for.
-func (m Model) diffThemeLabel() string {
-	th := diffThemes[m.diffThemeIdx]
-	mode := "dark"
-	if !th.dark {
-		mode = "light"
+// themeModeLabel renders the "mode" row value: which terminal background the
+// theme set is tuned for. settingsRow frames it with ◂ ▸ when focused.
+func (m Model) themeModeLabel() string {
+	if diffThemes[m.diffThemeIdx].dark {
+		return "Dark"
 	}
-	return fmt.Sprintf("◂ %s ▸ ", th.name) + help.Render("("+mode+")")
+	return "Light"
+}
+
+// themeValueLabel renders the "theme" row value: the current theme name plus a
+// dim "(pos/total)" within its mode, so the reviewer sees where they are in the
+// dark (or light) set. settingsRow frames it with ◂ ▸ when focused.
+func (m Model) themeValueLabel() string {
+	idxs := modeIndices(diffThemes[m.diffThemeIdx].dark)
+	return fmt.Sprintf("%s ", diffThemes[m.diffThemeIdx].name) +
+		help.Render(fmt.Sprintf("(%d/%d)", posInMode(m.diffThemeIdx)+1, len(idxs)))
 }
 
 // settingsHint is the dialog's bottom key row, offering `U` only when an
 // upgrade is actually available.
 func (m Model) settingsHint() string {
 	if m.updateAvailable && Version != "dev" {
-		return "[←/→] theme · [U] upgrade · [esc] close"
+		return "[↑/↓] row · [←/→] change · [U] upgrade · [esc] close"
 	}
-	return "[←/→] theme · [esc] close"
+	return "[↑/↓] row · [←/→] change · [esc] close"
 }
 
 // settingsRow lays a dim, fixed-width label against its value so the rows align.
-func settingsRow(label, value string) string {
-	return help.Render(fmt.Sprintf("%-8s ", label)) + value
+// A focused row gets a ▸ pointer in the gutter and frames its value with ◂ ▸ to
+// mark it as the one ←/→ adjusts; non-focused rows pad the gutter to stay aligned.
+func settingsRow(focused bool, label, value string) string {
+	gutter := "  "
+	if focused {
+		gutter = cursorStyle.Render("▸ ")
+		value = "◂ " + value + " ▸"
+	}
+	return gutter + help.Render(fmt.Sprintf("%-8s ", label)) + value
 }

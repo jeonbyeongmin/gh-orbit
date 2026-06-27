@@ -82,9 +82,10 @@ type diffTheme struct {
 	statusErrFg    string
 }
 
-// diffThemes is the Settings picker order: every dark theme first, then every
-// light one (the dark/light boundary sits between catppuccin-mocha and
-// catppuccin-latte). Index 0 is the default for an unset / unknown theme key —
+// diffThemes is the Settings picker order, grouped by mode: every dark theme
+// first, then every light one. The Settings dialog scopes ←/→ to one mode at a
+// time (see modeIndices), so this within-mode order is the cycle order. Index 0
+// is the default for an unset / unknown theme key —
 // Orbit Dark, the project's signature slate-purple palette (#7c6f9f accent).
 // GitHub Dark (the pre-theming default, an exact match of the old chrome) is one
 // slot over; the rest are muted, low-neon palettes (Nord, Gruvbox, One Dark,
@@ -215,21 +216,22 @@ var diffThemes = []diffTheme{
 		statusBusyFg: "#fab387", statusOkFg: "#a6adc8", statusErrFg: "#f38ba8",
 	},
 	{
-		key: "catppuccin-latte", name: "Catppuccin Latte", dark: false,
-		syntaxStyle: "catppuccin-latte",
-		addBaseBg:   "#e3f0e1", delBaseBg: "#fbe4e6",
-		addEmphBg: "#c5e6bf", delEmphBg: "#f4c4ca",
-		addMarker: "#40a02b", delMarker: "#d20f39",
-		metaFg: "#8c8fa1", hunkFg: "#1e66f5", emphFg: "#4c4f69",
-		laneColors: []string{"#ea76cb", "#04a5e5", "#fe640b", "#40a02b", "#7287fd", "#df8e1d", "#1e66f5", "#e64553"},
+		key: "orbit-light", name: "Orbit Light", dark: false,
+		syntaxStyle: "tokyonight-day",
+		addBaseBg:   "#e2ecdf", delBaseBg: "#f5e0e6",
+		addEmphBg: "#c8e0c2", delEmphBg: "#f0c8d2",
+		addMarker: "#4f8f5f", delMarker: "#b05068",
+		metaFg: "#8b86a0", hunkFg: "#6a5d8f", emphFg: "#2e2a3a",
+		laneColors: []string{"#6f5d8f", "#3f7f97", "#b06a3a", "#4f8f5f", "#4f63a0", "#a07a2a", "#b05a7f", "#3f8f87"},
 		// Light theme: pastel chip bgs carry dark text (chipFg) so even the
-		// dim/overflow chip (dimFg bg) stays legible.
-		timeFg: "#8c8fa1", authorFg: "#6c6f85", dimFg: "#9ca0b0", selectedFg: "#8839ef",
-		chipLocalBg: "#b7c5f7", chipRemoteBg: "#f4c6ea", chipTagBg: "#f1dcab",
-		chipStashBg: "#d9c5f6", chipFg: "#4c4f69",
-		badgeBg: "#ccd0da", badgePassFg: "#40a02b", badgeFailFg: "#d20f39",
-		badgePendingFg: "#df8e1d", badgeNoneFg: "#6c6f85",
-		statusBusyFg: "#fe640b", statusOkFg: "#6c6f85", statusErrFg: "#d20f39",
+		// dim/overflow chip (dimFg bg) stays legible. The light set below mirrors
+		// the dark set's family order one-for-one.
+		timeFg: "#8b86a0", authorFg: "#6e6880", dimFg: "#a59fb5", selectedFg: "#7c6f9f",
+		chipLocalBg: "#cfd6f0", chipRemoteBg: "#e2d6f0", chipTagBg: "#f0e3c0",
+		chipStashBg: "#cfe6e0", chipFg: "#2e2a3a",
+		badgeBg: "#e8e4f0", badgePassFg: "#4f8f5f", badgeFailFg: "#b05068",
+		badgePendingFg: "#a07a2a", badgeNoneFg: "#8b86a0",
+		statusBusyFg: "#b06a3a", statusOkFg: "#8b86a0", statusErrFg: "#b05068",
 	},
 	{
 		key: "github-light", name: "GitHub Light", dark: false,
@@ -247,19 +249,23 @@ var diffThemes = []diffTheme{
 		statusBusyFg: "#9a6700", statusOkFg: "#6e7781", statusErrFg: "#cf222e",
 	},
 	{
-		key: "orbit-light", name: "Orbit Light", dark: false,
+		// Nord has no upstream light variant: this pairs Snow Storm backgrounds
+		// with Polar Night text and darkened Frost/Aurora accents so it reads on
+		// a light terminal. tokyonight-day stands in for the (absent) light Nord
+		// chroma style — cool, light, blue/purple tokens closest to Nord's hue.
+		key: "nord-light", name: "Nord Light", dark: false,
 		syntaxStyle: "tokyonight-day",
-		addBaseBg:   "#e2ecdf", delBaseBg: "#f5e0e6",
-		addEmphBg: "#c8e0c2", delEmphBg: "#f0c8d2",
-		addMarker: "#4f8f5f", delMarker: "#b05068",
-		metaFg: "#8b86a0", hunkFg: "#6a5d8f", emphFg: "#2e2a3a",
-		laneColors: []string{"#6f5d8f", "#3f7f97", "#b06a3a", "#4f8f5f", "#4f63a0", "#a07a2a", "#b05a7f", "#3f8f87"},
-		timeFg:     "#8b86a0", authorFg: "#6e6880", dimFg: "#a59fb5", selectedFg: "#7c6f9f",
-		chipLocalBg: "#cfd6f0", chipRemoteBg: "#e2d6f0", chipTagBg: "#f0e3c0",
-		chipStashBg: "#cfe6e0", chipFg: "#2e2a3a",
-		badgeBg: "#e8e4f0", badgePassFg: "#4f8f5f", badgeFailFg: "#b05068",
-		badgePendingFg: "#a07a2a", badgeNoneFg: "#8b86a0",
-		statusBusyFg: "#b06a3a", statusOkFg: "#8b86a0", statusErrFg: "#b05068",
+		addBaseBg:   "#e2ecdc", delBaseBg: "#f3dde0",
+		addEmphBg: "#cadcc0", delEmphBg: "#eec4ca",
+		addMarker: "#5e8a4e", delMarker: "#b0454f",
+		metaFg: "#6a7488", hunkFg: "#5e81ac", emphFg: "#2e3440",
+		laneColors: []string{"#8a5f86", "#3f8590", "#b85f48", "#5e8a4e", "#4a6f9c", "#a07a2a", "#3f8a86", "#a8434f"},
+		timeFg:     "#6a7488", authorFg: "#545d72", dimFg: "#aab2c0", selectedFg: "#5e81ac",
+		chipLocalBg: "#cdd8ec", chipRemoteBg: "#ddd2e8", chipTagBg: "#ece0c0",
+		chipStashBg: "#cfe3e0", chipFg: "#2e3440",
+		badgeBg: "#dde3ec", badgePassFg: "#5e8a4e", badgeFailFg: "#a8434f",
+		badgePendingFg: "#a07a2a", badgeNoneFg: "#6a7488",
+		statusBusyFg: "#b85f48", statusOkFg: "#6a7488", statusErrFg: "#a8434f",
 	},
 	{
 		key: "gruvbox-light", name: "Gruvbox Light", dark: false,
@@ -277,6 +283,38 @@ var diffThemes = []diffTheme{
 		statusBusyFg: "#af3a03", statusOkFg: "#7c6f64", statusErrFg: "#9d0006",
 	},
 	{
+		// Atom One Light. paraiso-light stands in for the (absent) One Light
+		// chroma style — its purple keywords + green strings track One's palette.
+		key: "one-light", name: "One Light", dark: false,
+		syntaxStyle: "paraiso-light",
+		addBaseBg:   "#e2f0e0", delBaseBg: "#fbe3e0",
+		addEmphBg: "#c6e3c2", delEmphBg: "#f6c9c4",
+		addMarker: "#50a14f", delMarker: "#e45649",
+		metaFg: "#a0a1a7", hunkFg: "#4078f2", emphFg: "#383a42",
+		laneColors: []string{"#a626a4", "#0184bc", "#b06a00", "#50a14f", "#4078f2", "#c18401", "#e45649", "#7a3e9d"},
+		timeFg:     "#a0a1a7", authorFg: "#696c77", dimFg: "#bcbcc0", selectedFg: "#4078f2",
+		chipLocalBg: "#cfddfb", chipRemoteBg: "#ecd2ec", chipTagBg: "#f1e3c0",
+		chipStashBg: "#cfe7f0", chipFg: "#383a42",
+		badgeBg: "#e8e8ea", badgePassFg: "#50a14f", badgeFailFg: "#e45649",
+		badgePendingFg: "#b06a00", badgeNoneFg: "#696c77",
+		statusBusyFg: "#b06a00", statusOkFg: "#696c77", statusErrFg: "#e45649",
+	},
+	{
+		key: "tokyo-night-day", name: "Tokyo Night Day", dark: false,
+		syntaxStyle: "tokyonight-day",
+		addBaseBg:   "#dde7d2", delBaseBg: "#f8d8df",
+		addEmphBg: "#c8dcb2", delEmphBg: "#f2bdca",
+		addMarker: "#587539", delMarker: "#f52a65",
+		metaFg: "#848cb5", hunkFg: "#2e7de9", emphFg: "#343b58",
+		laneColors: []string{"#9854f1", "#007197", "#b15c00", "#587539", "#2e7de9", "#8c6c3e", "#f52a65", "#118c74"},
+		timeFg:     "#848cb5", authorFg: "#6172b0", dimFg: "#a1a6c5", selectedFg: "#2e7de9",
+		chipLocalBg: "#c7d8f7", chipRemoteBg: "#e2d2f7", chipTagBg: "#ecdfc0",
+		chipStashBg: "#c7e6dd", chipFg: "#343b58",
+		badgeBg: "#d5dae8", badgePassFg: "#587539", badgeFailFg: "#f52a65",
+		badgePendingFg: "#8c6c3e", badgeNoneFg: "#6172b0",
+		statusBusyFg: "#b15c00", statusOkFg: "#6172b0", statusErrFg: "#f52a65",
+	},
+	{
 		key: "rose-pine-dawn", name: "Rosé Pine Dawn", dark: false,
 		syntaxStyle: "rose-pine-dawn",
 		addBaseBg:   "#d3ece6", delBaseBg: "#f8dade",
@@ -290,6 +328,21 @@ var diffThemes = []diffTheme{
 		badgeBg: "#f2e9e1", badgePassFg: "#56949f", badgeFailFg: "#b4637a",
 		badgePendingFg: "#ea9d34", badgeNoneFg: "#9893a5",
 		statusBusyFg: "#ea9d34", statusOkFg: "#797593", statusErrFg: "#b4637a",
+	},
+	{
+		key: "catppuccin-latte", name: "Catppuccin Latte", dark: false,
+		syntaxStyle: "catppuccin-latte",
+		addBaseBg:   "#e3f0e1", delBaseBg: "#fbe4e6",
+		addEmphBg: "#c5e6bf", delEmphBg: "#f4c4ca",
+		addMarker: "#40a02b", delMarker: "#d20f39",
+		metaFg: "#8c8fa1", hunkFg: "#1e66f5", emphFg: "#4c4f69",
+		laneColors: []string{"#ea76cb", "#04a5e5", "#fe640b", "#40a02b", "#7287fd", "#df8e1d", "#1e66f5", "#e64553"},
+		timeFg:     "#8c8fa1", authorFg: "#6c6f85", dimFg: "#9ca0b0", selectedFg: "#8839ef",
+		chipLocalBg: "#b7c5f7", chipRemoteBg: "#f4c6ea", chipTagBg: "#f1dcab",
+		chipStashBg: "#d9c5f6", chipFg: "#4c4f69",
+		badgeBg: "#ccd0da", badgePassFg: "#40a02b", badgeFailFg: "#d20f39",
+		badgePendingFg: "#df8e1d", badgeNoneFg: "#6c6f85",
+		statusBusyFg: "#fe640b", statusOkFg: "#6c6f85", statusErrFg: "#d20f39",
 	},
 }
 
@@ -307,6 +360,29 @@ func diffThemeIndex(key string) int {
 	for i, t := range diffThemes {
 		if t.key == key {
 			return i
+		}
+	}
+	return 0
+}
+
+// modeIndices lists the diffThemes indices for the given mode (dark when true),
+// in array order — the set the Settings dialog cycles within. Always non-empty.
+func modeIndices(dark bool) []int {
+	var out []int
+	for i, t := range diffThemes {
+		if t.dark == dark {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// posInMode returns themeIdx's position within its own mode (0-based), so the
+// Settings dialog can show "(pos/len)" and preserve it across a mode toggle.
+func posInMode(themeIdx int) int {
+	for p, i := range modeIndices(diffThemes[themeIdx].dark) {
+		if i == themeIdx {
+			return p
 		}
 	}
 	return 0

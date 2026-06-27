@@ -1,9 +1,9 @@
 // Settings dialog — opened globally with `,` (see updateKey). It shows the
 // running build version and the once-a-day update check's result, hosts the
 // `U` upgrade action (`gh extension upgrade orbit`), and lets ←/→ cycle the
-// diff color theme (applied live behind the dialog, persisted via SavePrefs).
-// The body is a list of labeled rows so future settings drop in as more rows
-// without reshaping the dialog.
+// app-wide color theme — diff, commit graph, chips, and chrome (applied live
+// behind the dialog, persisted via SavePrefs). The body is a list of labeled
+// rows so future settings drop in as more rows without reshaping the dialog.
 package tui
 
 import (
@@ -28,6 +28,7 @@ func (m Model) settingsOpenable() bool {
 
 func (m Model) beginSettings() (tea.Model, tea.Cmd) {
 	m.settingsReturnMode = m.mode
+	m.settingsEntryThemeIdx = m.diffThemeIdx
 	m.mode = viewModeSettings
 	// Open clean: a stale action status from the launching page would otherwise
 	// render as the dialog's feedback line.
@@ -52,6 +53,15 @@ func (m Model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Close back to the launching page. m.status is left intact so a
 		// post-upgrade "restart gh orbit" note carries to that page's footer.
 		m.mode = m.settingsReturnMode
+		if m.diffThemeIdx != m.settingsEntryThemeIdx {
+			// Theme changed this session: the diff/chips/meta repainted live,
+			// but the graph's lane glyphs are baked into each row's cached
+			// prefix (rendered once at stream time, see commitItem). Restream
+			// so renderGraphRow re-runs with the new lane palette. reloadCmd is
+			// stale-while-revalidate and preserves the cursor, so the only
+			// visible effect is the recolor.
+			return m, m.reloadCmd()
+		}
 		return m, nil
 	case "left", "right":
 		return m.cycleDiffTheme(msg.String() == "right"), nil
@@ -66,18 +76,22 @@ func (m Model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// cycleDiffTheme steps the active diff theme one slot (forward when next),
-// wrapping around the four themes. It re-points activeDiffTheme, repaints any
-// diff visible behind the dialog so the change shows live, and persists the new
-// key — a save failure surfaces in the dialog's feedback line but leaves the
-// theme applied for the session.
+// cycleDiffTheme steps the active theme one slot (forward when next), wrapping
+// around the themes. applyTheme re-points activeDiffTheme and rebuilds the
+// shared chrome styles; the chips, graph meta columns, status line, borders, and
+// tabs read those vars each View so they repaint live, and RerenderTheme repaints
+// the cached diff. The graph's lane glyphs are the exception — they're baked into
+// each row's cached prefix at stream time, so they refresh on the reload the
+// Settings dialog fires on close (see handleSettingsKey), not per cycle. It then
+// persists the new key — a save failure surfaces in the dialog's feedback line
+// but leaves the theme applied for the session.
 func (m Model) cycleDiffTheme(next bool) Model {
 	delta := -1
 	if next {
 		delta = 1
 	}
 	m.diffThemeIdx = (m.diffThemeIdx + delta + len(diffThemes)) % len(diffThemes)
-	activeDiffTheme = diffThemes[m.diffThemeIdx]
+	applyTheme(diffThemes[m.diffThemeIdx])
 	m.localChanges.RerenderTheme()
 	m.diff.RerenderTheme()
 
@@ -92,7 +106,10 @@ func (m Model) cycleDiffTheme(next bool) Model {
 		m.statusStyle = statusErrS
 		return m
 	}
-	prefs.Diff.Theme = diffThemes[m.diffThemeIdx].key
+	// Write the app-wide key and migrate off the legacy [diff] theme so there's
+	// a single source of truth after the first switch.
+	prefs.Theme = diffThemes[m.diffThemeIdx].key
+	prefs.Diff.Theme = ""
 	if err := config.SavePrefs(prefs); err != nil {
 		m.status = "theme save failed: " + firstLine(err.Error())
 		m.statusStyle = statusErrS

@@ -82,6 +82,30 @@ func TestLoadPrefsDiffTheme(t *testing.T) {
 	}
 }
 
+func TestThemeKeyResolution(t *testing.T) {
+	tests := []struct {
+		name  string
+		prefs Prefs
+		want  string
+	}{
+		{"unset", Prefs{}, ""},
+		{"top-level only", Prefs{Theme: "catppuccin-mocha"}, "catppuccin-mocha"},
+		{"legacy only", Prefs{Diff: DiffPrefs{Theme: "github-light"}}, "github-light"},
+		{
+			"top-level wins over legacy",
+			Prefs{Theme: "catppuccin-latte", Diff: DiffPrefs{Theme: "github-light"}},
+			"catppuccin-latte",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.prefs.ThemeKey(); got != tt.want {
+				t.Errorf("ThemeKey() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSavePrefsRoundTrip(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	want := Prefs{Pull: PullPrefs{Strategy: "rebase"}, Diff: DiffPrefs{Theme: "catppuccin-latte"}}

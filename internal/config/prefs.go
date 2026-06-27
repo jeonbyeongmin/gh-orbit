@@ -14,8 +14,22 @@ import (
 // All fields are optional — a missing file decodes to a zero-value Prefs and
 // callers must treat empty strings as "unset, fall back to git config / defaults".
 type Prefs struct {
-	Pull PullPrefs `toml:"pull"`
-	Diff DiffPrefs `toml:"diff"`
+	// Theme is the app-wide color theme key (one of internal/tui's theme table
+	// keys, or "" = unset → default). It supersedes the legacy [diff] theme;
+	// see ThemeKey for the resolution order.
+	Theme string    `toml:"theme,omitempty"`
+	Pull  PullPrefs `toml:"pull"`
+	Diff  DiffPrefs `toml:"diff"`
+}
+
+// ThemeKey resolves the configured theme key, preferring the top-level `theme`
+// and falling back to the legacy `[diff] theme` so files written before the
+// theme went app-wide keep working. "" means unset (caller defaults).
+func (p Prefs) ThemeKey() string {
+	if p.Theme != "" {
+		return p.Theme
+	}
+	return p.Diff.Theme
 }
 
 // PullPrefs mirrors the [pull] section. Strategy is one of "ff-only", "merge",
@@ -26,10 +40,11 @@ type PullPrefs struct {
 	Strategy string `toml:"strategy,omitempty"`
 }
 
-// DiffPrefs mirrors the [diff] section. Theme names the diff color theme; one
-// of the keys in internal/tui's theme table ("github-dark", "catppuccin-mocha",
-// "catppuccin-latte", "github-light") or "" (unset → "github-dark", the
-// default). Unknown values fall through to the default at the call site.
+// DiffPrefs mirrors the [diff] section. Theme is the legacy theme key, kept so
+// pre-existing config files still load (see Prefs.ThemeKey); new writes go to
+// the top-level Prefs.Theme and clear this. One of internal/tui's theme table
+// keys (see docs/config.md) or "" (unset → default). Unknown values fall through
+// to the default.
 type DiffPrefs struct {
 	Theme string `toml:"theme,omitempty"`
 }

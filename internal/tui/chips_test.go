@@ -183,6 +183,7 @@ func TestBuildChipsTruncatedNamePreservesPairPrefix(t *testing.T) {
 }
 
 func TestBuildChipsSelectedOverridesBackground(t *testing.T) {
+	useTheme(t, "github-dark")
 	unselected, _ := buildChips([]string{"main"}, nil, false, false)
 	selected, _ := buildChips([]string{"main"}, nil, true, false)
 	if unselected == selected {
@@ -240,6 +241,7 @@ func TestBuildChipsPRBadgeSurvivesNameTruncation(t *testing.T) {
 }
 
 func TestBuildChipsPRBadgeTwoToneSegment(t *testing.T) {
+	useTheme(t, "github-dark")
 	prs := map[string]prInfo{"feat-x": {Number: 86, Checks: prChecksPending}}
 	s, _ := buildChips([]string{"feat-x"}, prs, false, false)
 	// 배지 tail 은 칩 본체와 다른 bg(236) + 상태색 fg(pending 214) 를 가진

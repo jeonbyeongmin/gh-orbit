@@ -277,10 +277,15 @@ type Model struct {
 	// "merge" / "rebase" / ""). Loaded once in New() from ConfigPath; an
 	// empty string means "let git config / final fallback decide".
 	pullPrefStrategy string
-	// diffThemeIdx is the index into diffThemes of the active diff color theme.
-	// Loaded in New() from [diff] theme; the `,` Settings dialog's ←/→ cycles
-	// it, re-pointing activeDiffTheme and persisting the new key via SavePrefs.
+	// diffThemeIdx is the index into diffThemes of the active app-wide theme.
+	// Loaded in New() from prefs (ThemeKey); the `,` Settings dialog's ←/→
+	// cycles it, calling applyTheme and persisting the new key via SavePrefs.
 	diffThemeIdx int
+	// settingsEntryThemeIdx snapshots diffThemeIdx when the Settings dialog
+	// opens, so closing it can detect a theme change and restream the graph
+	// once (its lane glyphs are baked into each row's cached prefix and don't
+	// repaint live like the chips/meta do). See handleSettingsKey's close case.
+	settingsEntryThemeIdx int
 	// pendingHEADHash drives the post-pull cursor jump. pullSucceededMsg
 	// arms it with the sentinel pendingHEADSentinel; the post-reload
 	// refsLoadedMsg replaces the sentinel with HEAD's actual hash;
@@ -483,8 +488,8 @@ func New() Model {
 		m.statusStyle = statusErrS
 	} else {
 		m.pullPrefStrategy = prefs.Pull.Strategy
-		m.diffThemeIdx = diffThemeIndex(prefs.Diff.Theme)
-		activeDiffTheme = diffThemes[m.diffThemeIdx]
+		m.diffThemeIdx = diffThemeIndex(prefs.ThemeKey())
+		applyTheme(diffThemes[m.diffThemeIdx])
 	}
 	return m
 }

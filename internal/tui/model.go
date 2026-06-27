@@ -279,8 +279,13 @@ type Model struct {
 	pullPrefStrategy string
 	// diffThemeIdx is the index into diffThemes of the active app-wide theme.
 	// Loaded in New() from prefs (ThemeKey); the `,` Settings dialog's ←/→
-	// cycles it, calling applyTheme and persisting the new key via SavePrefs.
+	// cycles it within the active dark/light mode, calling applyTheme and
+	// persisting the new key via SavePrefs.
 	diffThemeIdx int
+	// settingsFocus is which adjustable row the Settings dialog's ←/→ acts on
+	// (settingsFocusMode / settingsFocusTheme); ↑/↓ moves between them. The
+	// dialog opens on the mode row so the dark/light choice comes first.
+	settingsFocus int
 	// settingsEntryThemeIdx snapshots diffThemeIdx when the Settings dialog
 	// opens, so closing it can detect a theme change and restream the graph
 	// once (its lane glyphs are baked into each row's cached prefix and don't

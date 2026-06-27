@@ -262,6 +262,7 @@ func TestRenderCommitLineChipDroppedWhenSubjectWouldStarve(t *testing.T) {
 }
 
 func TestRenderCommitLineSelectedRecolorsChipBackground(t *testing.T) {
+	useTheme(t, "github-dark")
 	c := git.Commit{
 		Hash:       "abcdef1234567",
 		Subject:    "sel",
@@ -954,6 +955,7 @@ func renderDelegateRowRaw(t *testing.T, d commitDelegate, items []list.Item, idx
 const dimSGR = "38;5;240"
 
 func TestCommitDelegateDimAppliedAboveHEAD(t *testing.T) {
+	useTheme(t, "github-dark")
 	now := time.Now()
 	// Three rows; index 1 is HEAD. index 0 is "above HEAD" → dim.
 	items := []list.Item{
@@ -985,6 +987,7 @@ func TestCommitDelegateDimAppliedAboveHEAD(t *testing.T) {
 }
 
 func TestCommitDelegateDimSkipsAncestorAboveHEAD(t *testing.T) {
+	useTheme(t, "github-dark")
 	// In an --all view, an ancestor of HEAD (e.g. an older common base) can
 	// appear *above* HEAD when topo-order interleaves another branch's tip.
 	// shouldDim must keep the ancestor row bright even though it sits above.
@@ -1030,6 +1033,7 @@ func TestCommitDelegateDimSuppressedWhenHeadOutOfWindow(t *testing.T) {
 }
 
 func TestCommitDelegateDimFallbackBeforeAncestorsArrive(t *testing.T) {
+	useTheme(t, "github-dark")
 	// Before `git rev-list HEAD` lands the delegate has headRowIndex but no
 	// ancestors set. Fallback: dim every row above HEAD so the boundary
 	// reads on first paint (precision arrives a moment later).

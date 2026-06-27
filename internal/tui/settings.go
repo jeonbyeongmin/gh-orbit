@@ -1,9 +1,9 @@
 // Settings dialog — opened globally with `,` (see updateKey). It shows the
 // running build version and the once-a-day update check's result, hosts the
 // `U` upgrade action (`gh extension upgrade orbit`), and lets ←/→ cycle the
-// diff color theme (applied live behind the dialog, persisted via SavePrefs).
-// The body is a list of labeled rows so future settings drop in as more rows
-// without reshaping the dialog.
+// app-wide color theme — diff, commit graph, chips, and chrome (applied live
+// behind the dialog, persisted via SavePrefs). The body is a list of labeled
+// rows so future settings drop in as more rows without reshaping the dialog.
 package tui
 
 import (
@@ -66,18 +66,19 @@ func (m Model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// cycleDiffTheme steps the active diff theme one slot (forward when next),
-// wrapping around the four themes. It re-points activeDiffTheme, repaints any
-// diff visible behind the dialog so the change shows live, and persists the new
-// key — a save failure surfaces in the dialog's feedback line but leaves the
-// theme applied for the session.
+// cycleDiffTheme steps the active theme one slot (forward when next), wrapping
+// around the four themes. applyTheme re-points activeDiffTheme and rebuilds the
+// shared chrome styles (graph, chips, status, borders, tabs); the graph repaints
+// from those on the next View, and RerenderTheme repaints the cached diff. It
+// then persists the new key — a save failure surfaces in the dialog's feedback
+// line but leaves the theme applied for the session.
 func (m Model) cycleDiffTheme(next bool) Model {
 	delta := -1
 	if next {
 		delta = 1
 	}
 	m.diffThemeIdx = (m.diffThemeIdx + delta + len(diffThemes)) % len(diffThemes)
-	activeDiffTheme = diffThemes[m.diffThemeIdx]
+	applyTheme(diffThemes[m.diffThemeIdx])
 	m.localChanges.RerenderTheme()
 	m.diff.RerenderTheme()
 
@@ -92,7 +93,10 @@ func (m Model) cycleDiffTheme(next bool) Model {
 		m.statusStyle = statusErrS
 		return m
 	}
-	prefs.Diff.Theme = diffThemes[m.diffThemeIdx].key
+	// Write the app-wide key and migrate off the legacy [diff] theme so there's
+	// a single source of truth after the first switch.
+	prefs.Theme = diffThemes[m.diffThemeIdx].key
+	prefs.Diff.Theme = ""
 	if err := config.SavePrefs(prefs); err != nil {
 		m.status = "theme save failed: " + firstLine(err.Error())
 		m.statusStyle = statusErrS

@@ -483,8 +483,8 @@ func New() Model {
 		m.statusStyle = statusErrS
 	} else {
 		m.pullPrefStrategy = prefs.Pull.Strategy
-		m.diffThemeIdx = diffThemeIndex(prefs.Diff.Theme)
-		activeDiffTheme = diffThemes[m.diffThemeIdx]
+		m.diffThemeIdx = diffThemeIndex(prefs.ThemeKey())
+		applyTheme(diffThemes[m.diffThemeIdx])
 	}
 	return m
 }

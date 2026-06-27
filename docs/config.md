@@ -21,19 +21,37 @@ XDG-conformant paths. `internal/config` owns resolution.
 Schema:
 
 ```toml
+theme = "orbit-dark"   # any key from the table below
+
 [pull]
 strategy = "rebase"   # "ff-only" | "merge" | "rebase"
-
-[diff]
-theme = "github-dark"   # "github-dark" | "catppuccin-mocha" | "catppuccin-latte" | "github-light"
 ```
 
-`[diff] theme` picks the diff color theme — two dark (`github-dark`, the
-default; `catppuccin-mocha`) and two light (`catppuccin-latte`, `github-light`).
-Unset / unrecognized falls back to `github-dark`. The Settings dialog (`,`)
-cycles it with ←/→, applies it live, and writes the choice back here via
-`SavePrefs` — which rewrites the whole file from the known keys, so hand-written
-comments and unknown keys are dropped on save.
+Top-level `theme` picks the app-wide color theme — it paints the diff, the commit
+graph (lane palette + meta columns), ref chips / PR badges, the status line,
+modal borders, and the page tabs. Unset / unrecognized falls back to
+`orbit-dark`. The Settings dialog (`,`) cycles it with ←/→, applies it live, and
+writes the choice back here via `SavePrefs` — which rewrites the whole file from
+the known keys, so hand-written comments and unknown keys are dropped on save.
+
+| dark | light |
+| --- | --- |
+| `orbit-dark` (default, signature) | `orbit-light` (signature) |
+| `github-dark` | `github-light` |
+| `nord` | `catppuccin-latte` |
+| `gruvbox-dark` | `gruvbox-light` |
+| `one-dark` | `rose-pine-dawn` |
+| `tokyo-night` | |
+| `rose-pine` | |
+| `catppuccin-mocha` | |
+
+`orbit-dark` / `orbit-light` carry the project's signature slate-purple accent
+(`#7c6f9f`); `github-dark` matches the cockpit's pre-theming look; the rest are
+muted, low-neon palettes.
+
+> **Legacy `[diff] theme`**: earlier versions stored the theme under `[diff]
+> theme`. It's still read when top-level `theme` is unset, and the first theme
+> switch migrates it to the top-level key.
 
 ## Pull strategy resolution
 

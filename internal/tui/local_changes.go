@@ -87,6 +87,12 @@ type localChangesModel struct {
 	hunkStarts []int
 	hunkCursor int
 
+	// srcToDisp maps each source line of the rendered diff to the display row it
+	// wraps to (see wrapDiffLines), so scrollToHunk lands on the right row after
+	// long lines fold. Rebuilt on every refreshDiffViewport (width/content
+	// dependent).
+	srcToDisp []int
+
 	// diffReqID is the freshest dispatch id. ApplyDiffLoaded ignores stale
 	// responses whose reqID doesn't match, so a slow git-diff for a file the
 	// user already scrolled past never repaints the viewport. The counter
@@ -147,7 +153,9 @@ func (m *localChangesModel) SetSize(treeW, treeH, diffW, diffH int) {
 		if widthChanged {
 			m.rendered = renderDiffContent(m.diffText, diffW)
 		}
-		m.diff.SetContent(m.rendered)
+		// Go through refresh so the content is re-wrapped to the new width and
+		// srcToDisp is rebuilt — a raw SetContent would leave long lines unfolded.
+		m.refreshDiffViewport()
 	}
 	m.followCursor()
 }
@@ -264,6 +272,7 @@ func (m *localChangesModel) ClosePatch() {
 	m.rendered = ""
 	m.hunkStarts = nil
 	m.hunkCursor = 0
+	m.srcToDisp = nil
 	m.diff.SetContent("")
 }
 
@@ -301,22 +310,27 @@ func parseHunkStarts(diffText string) []int {
 // codes (a .Render over an already-styled line breaks on the inner reset).
 func (m *localChangesModel) refreshDiffViewport() {
 	if m.diffText == "" {
+		m.srcToDisp = nil
 		m.diff.SetContent("")
 		return
 	}
 	if m.rendered == "" {
 		m.rendered = renderDiffContent(m.diffText, m.diff.Width)
 	}
-	if m.focused != paneLCDiff || len(m.hunkStarts) == 0 {
-		m.diff.SetContent(m.rendered)
-		return
+	content := m.rendered
+	if m.focused == paneLCDiff && len(m.hunkStarts) > 0 {
+		lines := strings.Split(m.rendered, "\n")
+		sel := m.hunkStarts[m.hunkCursor]
+		if sel >= 0 && sel < len(lines) {
+			lines[sel] = lcSelectedStyle.Render(ansi.Strip(lines[sel]))
+		}
+		content = strings.Join(lines, "\n")
 	}
-	lines := strings.Split(m.rendered, "\n")
-	sel := m.hunkStarts[m.hunkCursor]
-	if sel >= 0 && sel < len(lines) {
-		lines[sel] = lcSelectedStyle.Render(ansi.Strip(lines[sel]))
-	}
-	m.diff.SetContent(strings.Join(lines, "\n"))
+	// Soft-wrap long lines so nothing is truncated at the viewport edge, and cache
+	// the source→display map scrollToHunk translates through.
+	wrapped, srcToDisp := wrapDiffLines(content, m.diff.Width)
+	m.srcToDisp = srcToDisp
+	m.diff.SetContent(wrapped)
 }
 
 // scrollToHunk slides the viewport so the selected hunk's header sits at the
@@ -326,7 +340,7 @@ func (m *localChangesModel) scrollToHunk() {
 	if len(m.hunkStarts) == 0 {
 		return
 	}
-	m.diff.SetYOffset(m.hunkStarts[m.hunkCursor])
+	m.diff.SetYOffset(dispRowForSrc(m.srcToDisp, m.hunkStarts[m.hunkCursor]))
 }
 
 // MoveHunk shifts the hunk selection by delta (clamped) and follows it into
@@ -868,7 +882,7 @@ func (m localChangesModel) diffHeader() string {
 	if e.Renamed() {
 		label = e.OrigPath + " → " + e.Path
 	}
-	return lcHeaderStyle.Render(runewidth.Truncate(label+"  ("+side+")", w, "…"))
+	return lcHeaderStyle.Render(fitHeaderLabel(label, "("+side+")", w))
 }
 
 // HasEntry reports whether an entry for path exists on the requested side.

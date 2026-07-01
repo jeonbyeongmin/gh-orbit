@@ -55,6 +55,11 @@ type diffModel struct {
 	// model so the graph diff navigates like the local-changes diff.
 	hunkStarts []int
 	hunkCursor int
+	// srcToDisp maps each source line of the rendered patch to the display row
+	// it wraps to (see wrapDiffLines). Rebuilt on every refreshPatchViewport
+	// (width- and content-dependent); source-line navigation translates through
+	// it so `[`/`]`/`{`/`}` scroll the wrapped viewport to the right row.
+	srcToDisp []int
 	// spinnerFrame is pushed in by Model on every spinnerTickMsg so the
 	// loading placeholder animates. Only read while loadingPatch.
 	spinnerFrame int
@@ -105,6 +110,7 @@ func (d *diffModel) BeginPatchLoad(hash string, reqID uint64) {
 	d.activeFile = -1
 	d.hunkStarts = nil
 	d.hunkCursor = 0
+	d.srcToDisp = nil
 	d.viewport.SetContent("")
 	d.viewport.GotoTop()
 }
@@ -118,6 +124,7 @@ func (d *diffModel) ClosePatch() {
 	d.activeFile = -1
 	d.hunkStarts = nil
 	d.hunkCursor = 0
+	d.srcToDisp = nil
 	d.viewport.SetContent("")
 }
 
@@ -204,7 +211,7 @@ func (d *diffModel) MoveHunk(delta int) {
 		d.activeFile = fi
 	}
 	d.refreshPatchViewport()
-	d.viewport.SetYOffset(d.hunkStarts[d.hunkCursor])
+	d.viewport.SetYOffset(dispRowForSrc(d.srcToDisp, d.hunkStarts[d.hunkCursor]))
 }
 
 // syncHunkFromYOffset parks hunkCursor on the largest hunk header at or below
@@ -215,7 +222,7 @@ func (d *diffModel) syncHunkFromYOffset() {
 		d.hunkCursor = 0
 		return
 	}
-	cur := d.viewport.YOffset
+	cur := srcForDispRow(d.srcToDisp, d.viewport.YOffset)
 	idx := 0
 	for i, s := range d.hunkStarts {
 		if s <= cur {
@@ -278,22 +285,27 @@ func (d diffModel) firstHunkForFile(fi int) int {
 // localChangesModel.refreshDiffViewport.
 func (d *diffModel) refreshPatchViewport() {
 	if d.patchText == "" {
+		d.srcToDisp = nil
 		d.viewport.SetContent("")
 		return
 	}
 	if d.rendered == "" {
 		d.rendered = renderDiffContent(d.patchText, d.viewport.Width)
 	}
-	if len(d.hunkStarts) == 0 {
-		d.viewport.SetContent(d.rendered)
-		return
+	content := d.rendered
+	if len(d.hunkStarts) > 0 {
+		lines := strings.Split(d.rendered, "\n")
+		sel := d.hunkStarts[d.hunkCursor]
+		if sel >= 0 && sel < len(lines) {
+			lines[sel] = lcSelectedStyle.Render(ansi.Strip(lines[sel]))
+		}
+		content = strings.Join(lines, "\n")
 	}
-	lines := strings.Split(d.rendered, "\n")
-	sel := d.hunkStarts[d.hunkCursor]
-	if sel >= 0 && sel < len(lines) {
-		lines[sel] = lcSelectedStyle.Render(ansi.Strip(lines[sel]))
-	}
-	d.viewport.SetContent(strings.Join(lines, "\n"))
+	// Soft-wrap long lines so nothing is truncated at the viewport edge, and cache
+	// the source→display map the navigation offsets below translate through.
+	wrapped, srcToDisp := wrapDiffLines(content, d.viewport.Width)
+	d.srcToDisp = srcToDisp
+	d.viewport.SetContent(wrapped)
 }
 
 // JumpToNextFile advances activeFile by one and slides the viewport down
@@ -312,7 +324,7 @@ func (d *diffModel) JumpToNextFile() {
 	// the (possibly clamped) YOffset would leave it on the prior file's hunk.
 	d.hunkCursor = d.firstHunkForFile(d.activeFile)
 	d.refreshPatchViewport()
-	d.viewport.SetYOffset(d.files[d.activeFile].line)
+	d.viewport.SetYOffset(dispRowForSrc(d.srcToDisp, d.files[d.activeFile].line))
 }
 
 // JumpToPrevFile retreats activeFile by one and slides the viewport up
@@ -326,7 +338,7 @@ func (d *diffModel) JumpToPrevFile() {
 	d.activeFile--
 	d.hunkCursor = d.firstHunkForFile(d.activeFile)
 	d.refreshPatchViewport()
-	d.viewport.SetYOffset(d.files[d.activeFile].line)
+	d.viewport.SetYOffset(dispRowForSrc(d.srcToDisp, d.files[d.activeFile].line))
 }
 
 // syncActiveFileFromYOffset finds the largest file boundary at or below
@@ -339,7 +351,7 @@ func (d *diffModel) syncActiveFileFromYOffset() {
 		d.activeFile = -1
 		return
 	}
-	cur := d.viewport.YOffset
+	cur := srcForDispRow(d.srcToDisp, d.viewport.YOffset)
 	idx := 0
 	for i, f := range d.files {
 		if f.line <= cur {
@@ -400,11 +412,11 @@ func (d diffModel) patchHeader() string {
 	if path == "" {
 		return lcHeaderStyle.Render(runewidth.Truncate("Diff", w, "…"))
 	}
-	label := path
+	suffix := ""
 	if k, n := d.CurrentHunk(); n > 0 {
-		label = fmt.Sprintf("%s  [hunk %d/%d]", path, k, n)
+		suffix = fmt.Sprintf("[hunk %d/%d]", k, n)
 	}
-	return lcHeaderStyle.Render(runewidth.Truncate(label, w, "…"))
+	return lcHeaderStyle.Render(fitHeaderLabel(path, suffix, w))
 }
 
 func firstLine(s string) string {

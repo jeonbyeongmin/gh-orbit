@@ -26,6 +26,7 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -524,6 +525,98 @@ func renderDiffContent(patch string, width int) string {
 	return b.String()
 }
 
+// wrapDiffLines soft-wraps each already-styled source line of rendered to width
+// so a long diff line folds onto continuation rows instead of being truncated at
+// the viewport's right edge (the viewport has no horizontal scroll). ansi.Hardwrap
+// keeps the SGR styling and accounts for wide runes.
+//
+// It also returns srcToDisp, mapping each source line index to the display row
+// its first wrapped segment lands on. Navigation stores hunk/file positions as
+// source-line indices (width-independent, parsed from the raw patch) and
+// translates through this map to drive the viewport, which counts display rows.
+// A width < 1 (unsized viewport) disables wrapping and yields an identity map.
+func wrapDiffLines(rendered string, width int) (string, []int) {
+	if rendered == "" {
+		return "", nil
+	}
+	lines := strings.Split(rendered, "\n")
+	srcToDisp := make([]int, len(lines))
+	var b strings.Builder
+	disp := 0
+	for i, ln := range lines {
+		srcToDisp[i] = disp
+		wrapped := ln
+		if width >= 1 {
+			// preserveSpace so no leading cell is dropped on a folded row — that
+			// keeps each row exactly width wide, so the changed-line background bar
+			// (padded to a multiple of width in contentLine) reaches the edge.
+			wrapped = ansi.Hardwrap(ln, width, true)
+		}
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(wrapped)
+		disp += strings.Count(wrapped, "\n") + 1
+	}
+	return b.String(), srcToDisp
+}
+
+// fitHeaderLabel lays out a diff header — a file path plus a short status suffix
+// like "(unstaged)" or "[hunk 2/3]" — into w cells. When the whole thing
+// overflows, it drops the path's leading directories (…/basename) instead of
+// letting a plain right-truncate eat the file name or the suffix, which are the
+// parts a reviewer actually needs. A basename+suffix that still overflows is
+// right-truncated as a last resort. suffix may be empty.
+func fitHeaderLabel(path, suffix string, w int) string {
+	if w < 1 {
+		w = 1
+	}
+	join := func(p string) string {
+		if suffix == "" {
+			return p
+		}
+		return p + "  " + suffix
+	}
+	if full := join(path); runewidth.StringWidth(full) <= w {
+		return full
+	}
+	// Overflow: keep the basename (and suffix), drop the leading directories.
+	short := path
+	if i := strings.LastIndexByte(path, '/'); i >= 0 {
+		short = "…/" + path[i+1:]
+	}
+	if elided := join(short); runewidth.StringWidth(elided) <= w {
+		return elided
+	}
+	// Still too wide (a very narrow pane): right-truncate the elided form.
+	return runewidth.Truncate(join(short), w, "…")
+}
+
+// dispRowForSrc returns the display row a source line wraps to, for SetYOffset.
+// Out-of-range (empty map / unloaded patch) falls back to the top.
+func dispRowForSrc(srcToDisp []int, src int) int {
+	if src < 0 || src >= len(srcToDisp) {
+		return 0
+	}
+	return srcToDisp[src]
+}
+
+// srcForDispRow is the inverse: the source line owning a display row — the
+// largest source index whose first wrapped row sits at or above disp. Used to
+// re-derive the active file/hunk after a raw viewport scroll. srcToDisp is
+// ascending, so the first entry past disp ends the walk.
+func srcForDispRow(srcToDisp []int, disp int) int {
+	idx := 0
+	for i, d := range srcToDisp {
+		if d <= disp {
+			idx = i
+		} else {
+			break
+		}
+	}
+	return idx
+}
+
 type diffRenderer struct {
 	theme    diffTheme
 	style    *chroma.Style
@@ -583,10 +676,14 @@ func (r *diffRenderer) contentLine(marker rune, code string, lexer chroma.Lexer,
 		}
 	}
 
-	// Pad the background out to the viewport width so a changed line reads as a
-	// continuous bar. Context lines (no background) are left unpadded.
+	// Pad the background so a changed line reads as a continuous bar. Rounding up
+	// to a whole multiple of width (the marker takes the first cell) means a line
+	// that soft-wraps carries the bar to the edge on *every* wrapped row, not
+	// just the first. Context lines (no background) are left unpadded.
 	if baseBg != "" && width > 0 {
-		if pad := width - 1 - runewidth.StringWidth(code); pad > 0 {
+		total := 1 + runewidth.StringWidth(code)
+		rows := (total + width - 1) / width
+		if pad := rows*width - total; pad > 0 {
 			b.WriteString(styledSeg(strings.Repeat(" ", pad), "", baseBg))
 		}
 	}

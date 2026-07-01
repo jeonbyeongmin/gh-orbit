@@ -212,6 +212,109 @@ func TestRenderDiffContentFullWidthBars(t *testing.T) {
 	}
 }
 
+func TestWrapDiffLinesFoldsAndMaps(t *testing.T) {
+	const width = 20
+	// Two short lines around one long line; the long line must fold, the shorts
+	// must not, and srcToDisp must point each source line at its first row.
+	rendered := renderDiffContent(strings.Join([]string{
+		"@@ -1 +1,3 @@",
+		"+short",
+		"+" + strings.Repeat("x", 45), // ~46 wide → 3 rows at width 20
+		"+tail",
+	}, "\n"), width)
+
+	wrapped, srcToDisp := wrapDiffLines(rendered, width)
+	rows := strings.Split(wrapped, "\n")
+
+	// No display row exceeds the width — nothing is truncated at the edge.
+	for i, r := range rows {
+		if w := runewidth.StringWidth(ansi.Strip(r)); w > width {
+			t.Errorf("row %d width = %d, want <= %d", i, w, width)
+		}
+	}
+	// One source line per input; the long one contributes >1 display row so the
+	// total row count grew.
+	if len(srcToDisp) != 4 {
+		t.Fatalf("srcToDisp len = %d, want 4", len(srcToDisp))
+	}
+	if len(rows) <= 4 {
+		t.Errorf("wrapped rows = %d, want > 4 (long line should fold)", len(rows))
+	}
+	// The last source line ("+tail") must map to the last display row, and the
+	// full "tail" text survives the fold (i.e. wasn't truncated away).
+	if got := srcToDisp[3]; got != len(rows)-1 {
+		t.Errorf("srcToDisp[3] = %d, want %d (last row)", got, len(rows)-1)
+	}
+	if !strings.Contains(ansi.Strip(rows[len(rows)-1]), "tail") {
+		t.Errorf("last row = %q, want it to contain %q", ansi.Strip(rows[len(rows)-1]), "tail")
+	}
+}
+
+func TestFitHeaderLabel(t *testing.T) {
+	const path = "internal/tui/local_changes.go"
+	cases := []struct {
+		name   string
+		path   string
+		suffix string
+		w      int
+		want   string
+	}{
+		{"fits whole", path, "(unstaged)", 60, path + "  (unstaged)"},
+		// Too narrow for the full path: drop leading dirs, keep basename+suffix.
+		{"elide dirs", path, "(unstaged)", 32, "…/local_changes.go  (unstaged)"},
+		{"no suffix", path, "", 20, "…/local_changes.go"},
+		{"basename fits", "a.go", "(staged)", 40, "a.go  (staged)"},
+		// Pathological narrow: last-resort right-truncate of the elided form.
+		{"very narrow", path, "(unstaged)", 10, runewidth.Truncate("…/local_changes.go  (unstaged)", 10, "…")},
+	}
+	for _, c := range cases {
+		got := fitHeaderLabel(c.path, c.suffix, c.w)
+		if got != c.want {
+			t.Errorf("%s: fitHeaderLabel(%q,%q,%d) = %q, want %q", c.name, c.path, c.suffix, c.w, got, c.want)
+		}
+		if w := runewidth.StringWidth(got); w > c.w {
+			t.Errorf("%s: result %q width %d exceeds w=%d", c.name, got, w, c.w)
+		}
+	}
+}
+
+func TestContentLinePadsToWidthMultiple(t *testing.T) {
+	const width = 20
+	// A long added line renders as one source line whose display width is a whole
+	// multiple of width, so every soft-wrapped row fills the full-width bar.
+	rendered := renderDiffContent("+"+strings.Repeat("a", 45), width)
+	line := strings.Split(rendered, "\n")[0]
+	w := runewidth.StringWidth(ansi.Strip(line))
+	if w%width != 0 {
+		t.Errorf("changed-line width %d is not a multiple of %d", w, width)
+	}
+	if w < 46 { // marker + 45 runes must still all be present
+		t.Errorf("changed-line width %d dropped content (want >= 46)", w)
+	}
+}
+
+func TestSrcDispRoundTrip(t *testing.T) {
+	// A source line spanning display rows [2,3,4] (3 rows) sits between a
+	// single-row line before it and one after.
+	srcToDisp := []int{0, 1, 2, 5} // src2 folds across rows 2..4, src3 starts at 5
+	if got := dispRowForSrc(srcToDisp, 3); got != 5 {
+		t.Errorf("dispRowForSrc(3) = %d, want 5", got)
+	}
+	// Every display row inside src2's fold resolves back to src2.
+	for _, disp := range []int{2, 3, 4} {
+		if got := srcForDispRow(srcToDisp, disp); got != 2 {
+			t.Errorf("srcForDispRow(%d) = %d, want 2", disp, got)
+		}
+	}
+	if got := srcForDispRow(srcToDisp, 5); got != 3 {
+		t.Errorf("srcForDispRow(5) = %d, want 3", got)
+	}
+	// Out-of-range source falls back to the top rather than panicking.
+	if got := dispRowForSrc(srcToDisp, 99); got != 0 {
+		t.Errorf("dispRowForSrc(99) = %d, want 0", got)
+	}
+}
+
 // rangesText concatenates the runes covered by the given ranges.
 func rangesText(runes []rune, ranges [][2]int) string {
 	var b strings.Builder
